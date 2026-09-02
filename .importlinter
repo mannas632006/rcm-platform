@@ -1,0 +1,54 @@
+# Module boundary enforcement (CLAUDE.md M0.9).
+#
+# "Modules talk through published service interfaces. No cross-module table
+# access." A violation here fails CI -- it is not a style warning.
+#
+# Layer order follows the flow in SRS section 3.3:
+#     INGEST -> CORE -> DECIDE -> WORK
+# with the platform module (config, db, auth, audit, errors, logging) at the
+# bottom, importable by everything and importing nothing above it.
+
+[importlinter]
+root_package = rcm
+include_external_packages = True
+
+[importlinter:contract:layers]
+name = Module layers
+type = layers
+layers =
+    rcm.api | rcm.workers
+    rcm.work
+    rcm.decision
+    rcm.analytics
+    rcm.ingestion
+    rcm.domain
+    rcm.platform
+
+[importlinter:contract:x12-isolation]
+name = X12 parsing is isolated from the domain
+type = forbidden
+source_modules =
+    rcm.ingestion.x12
+forbidden_modules =
+    rcm.domain
+    rcm.decision
+    rcm.work
+    rcm.api
+# SR-12: X12 is untrusted input, parsed in isolation. The parser produces plain
+# structures; a loader in rcm.ingestion maps them onto domain entities. If the
+# parser could reach the domain directly, a malformed file would have a path
+# straight into CORE.
+
+[importlinter:contract:platform-is-a-leaf]
+name = Platform imports no business module
+type = forbidden
+source_modules =
+    rcm.platform
+forbidden_modules =
+    rcm.ingestion
+    rcm.domain
+    rcm.decision
+    rcm.work
+    rcm.api
+    rcm.workers
+    rcm.analytics

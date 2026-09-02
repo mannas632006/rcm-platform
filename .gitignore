@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# Secrets and local config -- PD: no credential ever enters the repo (CLAUDE.md section 2)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Data. Synthetic corpora are regenerated with `make seed`, never committed:
+# they are large, and committing them invites someone to commit real data
+# to the same path later.
+data/
+*.835
+*.837
+*.271
+*.277
+*.999
+
+# Local tooling
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+!.vscode/extensions.json
+mlruns/

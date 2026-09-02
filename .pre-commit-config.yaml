@@ -1,0 +1,59 @@
+# Runs on every commit. The same checks run in CI -- pre-commit is the fast
+# feedback loop, not the authority.
+#
+# Ruff, mypy and import-linter run as `language: system`, from .venv, deliberately.
+# Pinning separate revs here would let the hook and `make lint` disagree about
+# whether the tree is clean, and the one that disagrees quietly is the one that
+# gets trusted. One version of each tool: the one in pyproject.toml.
+default_language_version:
+  python: python3.12
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: ["--branch", "main"]   # CLAUDE.md section 10: no direct pushes to main
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+        # CLAUDE.md section 2: no credential, key, or connection string ever reaches a
+        # commit. Any hit fails the commit.
+
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: .venv/Scripts/ruff.exe check --fix
+        language: system
+        types_or: [python, pyi]
+
+      - id: ruff-format
+        name: ruff format
+        entry: .venv/Scripts/ruff.exe format
+        language: system
+        types_or: [python, pyi]
+
+      - id: mypy
+        name: mypy strict
+        entry: .venv/Scripts/mypy.exe
+        language: system
+        pass_filenames: false
+        files: ^src/
+
+      - id: import-linter
+        name: module boundaries
+        entry: .venv/Scripts/lint-imports.exe --config .importlinter
+        language: system
+        pass_filenames: false
+        files: ^src/

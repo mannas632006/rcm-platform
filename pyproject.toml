@@ -1,0 +1,128 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rcm-platform"
+version = "0.1.0"
+description = "RCM automation platform - claim lifecycle, rules engine, denial management"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy>=2.0.36",
+    "alembic>=1.14",
+    "psycopg[binary]>=3.2",
+    "celery[redis]>=5.4",
+    "redis>=5.2",
+    "structlog>=24.4",
+    "pyjwt[crypto]>=2.10",
+    "httpx>=0.28",
+    "python-multipart>=0.0.20",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6.122",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "import-linter>=2.1",
+    "bandit[toml]>=1.8",
+    "pip-audit>=2.7",
+    "pre-commit>=4.0",
+    "types-python-dateutil",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rcm"]
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",      # pycodestyle
+    "F",           # pyflakes
+    "I",           # isort
+    "N",           # pep8-naming
+    "UP",          # pyupgrade
+    "B",           # bugbear
+    "A",           # builtins shadowing
+    "C4",          # comprehensions
+    "DTZ",         # naive datetimes -- every timestamp here is TIMESTAMPTZ
+    "T20",         # no print(): output goes through structlog so the PHI scrubber sees it
+    "SIM",
+    "PTH",
+    "RUF",
+    "S",           # bandit rules inline
+    "ANN",         # annotations required -- mypy strict needs them anyway
+]
+ignore = [
+    "ANN401",      # Any is occasionally correct (JSONB payloads)
+    "S101",        # assert: allowed, and required in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**"   = ["S", "ANN", "PLR2004"]
+"tools/**"   = ["S311"]              # non-crypto RNG is correct for synthetic data
+"migrations/**" = ["ANN", "E501", "N999"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["rcm"]
+
+# ---------------------------------------------------------------------------
+# mypy -- strict, no exceptions granted without an ADR
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_no_return = true
+disallow_any_generics = true
+no_implicit_reexport = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+packages = ["rcm"]
+
+[[tool.mypy.overrides]]
+module = ["celery.*", "structlog.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# -ra shows the reason for every non-passing test, including skips.
+# A skipped test is a failing test (CLAUDE.md section 7.5) -- it must be visible.
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "integration: requires Postgres and Redis",
+    "security: security control tests (CLAUDE.md section 6.3)",
+    "invariant: named invariant test from CLAUDE.md section 7.2",
+    "edge_case: maps to an EC-nn in docs/02_Domain_and_Functional.md section 13",
+]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/rcm"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
