@@ -1,10 +1,10 @@
 # Runs on every commit. The same checks run in CI -- pre-commit is the fast
 # feedback loop, not the authority.
 #
-# Ruff, mypy and import-linter run as `language: system`, from .venv, deliberately.
-# Pinning separate revs here would let the hook and `make lint` disagree about
-# whether the tree is clean, and the one that disagrees quietly is the one that
-# gets trusted. One version of each tool: the one in pyproject.toml.
+# Ruff, mypy and import-linter are pinned here to the exact versions installed by
+# `make install`. `tests/unit/test_tooling_pins.py` fails the build if the two
+# drift, because a hook and a `make lint` that disagree about whether the tree is
+# clean is worse than either alone -- the quieter one gets trusted.
 default_language_version:
   python: python3.12
 
@@ -21,39 +21,43 @@ repos:
       - id: trailing-whitespace
       - id: detect-private-key
       - id: no-commit-to-branch
-        args: ["--branch", "main"]   # CLAUDE.md section 10: no direct pushes to main
+        args: ["--branch", "main"] # CLAUDE.md section 10: no direct pushes to main
 
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.30.1
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.5
     hooks:
-      - id: gitleaks
-        # CLAUDE.md section 2: no credential, key, or connection string ever reaches a
-        # commit. Any hit fails the commit.
+      - id: ruff-check
+        args: ["--fix"]
+      - id: ruff-format
 
   - repo: local
     hooks:
-      - id: ruff-check
-        name: ruff check
-        entry: .venv/Scripts/ruff.exe check --fix
+      # CLAUDE.md section 2: no credential, key, or connection string ever reaches a
+      # commit. Any hit fails.
+      #
+      # Uses the gitleaks binary on PATH rather than the upstream pre-commit repo:
+      # that hook is `language: golang` and downloads a Go toolchain on first use,
+      # which this network blocks. The installed binary was verified against the
+      # v8.30.1 release checksum. CI installs gitleaks in its own step.
+      - id: gitleaks
+        name: gitleaks (secret scanning)
+        entry: gitleaks git --staged --no-banner --redact
         language: system
-        types_or: [python, pyi]
+        pass_filenames: false
 
-      - id: ruff-format
-        name: ruff format
-        entry: .venv/Scripts/ruff.exe format
-        language: system
-        types_or: [python, pyi]
-
+      # mypy and import-linter both need the `rcm` package importable, so they
+      # cannot run in pre-commit's isolated environments. The shim runs them from
+      # the project venv -- see tools/run_venv_tool.py for why not a plain path.
       - id: mypy
         name: mypy strict
-        entry: .venv/Scripts/mypy.exe
+        entry: python tools/run_venv_tool.py mypy
         language: system
         pass_filenames: false
         files: ^src/
 
       - id: import-linter
         name: module boundaries
-        entry: .venv/Scripts/lint-imports.exe --config .importlinter
+        entry: python tools/run_venv_tool.py lint-imports --config .importlinter
         language: system
         pass_filenames: false
         files: ^src/
