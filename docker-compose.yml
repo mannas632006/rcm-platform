@@ -1,0 +1,95 @@
+# Local stack (M0.2). Versions are pinned to match CI service containers and the
+# eventual managed services -- a Postgres version difference between local and CI
+# is how a constraint that "works on my machine" reaches staging.
+
+services:
+  postgres:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_DB: rcm
+      POSTGRES_USER: postgres
+      # Local development only. Deployed environments take credentials from a
+      # secret manager (S-8); this value never leaves a developer machine.
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Creates rcm_migrator and rcm_app before anything connects, so the
+      # append-only grants in migration 0002 have a role to apply to.
+      - ./infra/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rcm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+    command: ["uvicorn", "rcm.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    environment: &app_env
+      RCM_ENVIRONMENT: local
+      RCM_DATABASE_URL: postgresql+psycopg://rcm_app:rcm_app@postgres:5432/rcm
+      RCM_MIGRATION_DATABASE_URL: postgresql+psycopg://rcm_migrator:rcm_migrator@postgres:5432/rcm
+      RCM_REDIS_URL: redis://redis:6379/0
+      RCM_CELERY_BROKER_URL: redis://redis:6379/1
+      RCM_CELERY_RESULT_BACKEND: redis://redis:6379/2
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+    command: ["celery", "-A", "rcm.workers.app", "worker", "--loglevel=INFO"]
+    environment: *app_env
+    volumes:
+      - ./src:/app/src:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+    command: ["celery", "-A", "rcm.workers.app", "beat", "--loglevel=INFO"]
+    environment: *app_env
+    volumes:
+      - ./src:/app/src:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
