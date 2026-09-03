@@ -20,8 +20,10 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from rcm.api.idempotency_middleware import IdempotencyMiddleware
 from rcm.platform.config import Settings, get_settings
 from rcm.platform.errors import PlatformError
+from rcm.platform.idempotency import IdempotencyStore, RedisIdempotencyStore
 from rcm.platform.logging import configure_logging, get_logger
 
 REQUEST_ID_HEADER: Final = "X-Request-ID"
@@ -52,7 +54,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("app.stopped")
 
 
-def create_app() -> FastAPI:
+def _default_idempotency_store() -> IdempotencyStore:
+    """Redis-backed store, built from settings.
+
+    Imported lazily so that constructing the app does not require a reachable
+    Redis at import time -- the connection is established on first use.
+    """
+    import redis
+
+    settings = get_settings()
+    return RedisIdempotencyStore(redis.Redis.from_url(settings.redis_url.get_secret_value()))
+
+
+def create_app(*, idempotency_store: IdempotencyStore | None = None) -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title="RCM Automation Platform",
@@ -60,6 +74,15 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
         docs_url="/docs" if settings.environment in ("local", "ci") else None,
         redoc_url=None,
+    )
+
+    # PD-14 holds for every mutating route because it is applied here, once,
+    # rather than per-endpoint. A new route cannot forget it.
+    app.add_middleware(
+        IdempotencyMiddleware,
+        store=idempotency_store or _default_idempotency_store(),
+        ttl_seconds=settings.idempotency_key_ttl_seconds,
+        max_body_bytes=settings.max_request_body_bytes,
     )
 
     @app.middleware("http")

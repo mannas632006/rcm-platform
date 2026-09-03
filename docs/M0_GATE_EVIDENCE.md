@@ -51,3 +51,64 @@ structlog -- any third-party library in the process leaks the same way. The
 guard was moved to `logging.setLogRecordFactory`, which every log record in the
 process passes through, and the exception is reduced there to its type and raise
 site.
+
+---
+
+## PD-20 / SR-21 — client scoping at the query layer (`rcm.platform.scoping`)
+
+**Control removed:** the `do_orm_execute` listener short-circuited before applying
+the practice filter.
+
+```
+$ pytest tests/security/test_client_scoping.py -q
+
+FAILED tests/security/test_client_scoping.py::test_cross_client_access_denied
+FAILED tests/security/test_client_scoping.py::test_handler_without_filter_cannot_leak
+FAILED tests/security/test_client_scoping.py::test_query_without_a_principal_is_refused
+FAILED tests/security/test_client_scoping.py::test_assigned_principal_with_no_practices_sees_nothing
+4 failed, 4 passed
+```
+
+**Control restored:** `8 passed`.
+
+The middle two are the ones that matter. `test_handler_without_filter_cannot_leak`
+issues `select(ScopedThing)` with no `WHERE` clause at all -- what a handler
+written by someone who has never heard of client scoping looks like -- and still
+sees only its own practice. That is the property PD-20 states, and it is not
+provable by any test that writes the filter itself.
+
+`test_query_without_a_principal_is_refused` covers the failure-closed half: an
+unbound principal raises rather than returning every tenant's rows.
+
+---
+
+## PD-14 / EC-41 — idempotency (`rcm.api.idempotency_middleware`)
+
+**Control removed:** `dispatch` short-circuited to `call_next` for every method.
+
+```
+$ pytest tests/security/test_idempotency.py -q
+
+FAILED tests/security/test_idempotency.py::test_same_key_twice_has_one_effect
+FAILED tests/security/test_idempotency.py::test_ten_retries_still_one_effect
+FAILED tests/security/test_idempotency.py::test_mutating_request_without_a_key_is_refused
+FAILED tests/security/test_idempotency.py::test_key_reuse_with_a_different_body_conflicts
+FAILED tests/security/test_idempotency.py::test_concurrent_duplicate_is_told_to_wait
+5 failed, 4 passed
+```
+
+**Control restored:** `9 passed`.
+
+`test_ten_retries_still_one_effect` is the realistic shape of the failure: a client
+retrying aggressively against a slow endpoint, which is how EC-41 happens in
+production rather than as a single tidy duplicate.
+
+---
+
+## Still to prove
+
+- **PD-1 / PD-2** — decision and audit records in the same transaction. Needs
+  Postgres.
+- **DR-06 / S-10** — `UPDATE`/`DELETE` on the audit tables refused for `rcm_app`.
+  Needs Postgres: the control is a database grant, so a test on any other backend
+  would prove nothing.
