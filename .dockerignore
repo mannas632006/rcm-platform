@@ -1,0 +1,47 @@
+# What the Docker daemon receives as build context.
+#
+# The Dockerfile copies only pyproject.toml, README.md and src/, but the whole
+# directory is uploaded first. Without this file that includes the git history,
+# the local virtualenv and any generated synthetic corpus -- hundreds of
+# megabytes, re-sent on every build.
+#
+# It is also a safety boundary, not only a speed one: anything in the context
+# can be COPYed into an image by a future edit, and `.env` and `data/` are
+# exactly the two things that must never end up in one.
+
+.git
+.gitattributes
+.github
+
+# Generated corpora and anything else gitignored under data/ (PHI-shaped even
+# when synthetic -- it has no business inside an image).
+data/
+
+# Local environments and caches
+.venv
+venv
+__pycache__
+*.py[cod]
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.coverage
+coverage.xml
+htmlcov
+
+# Secrets: .env is gitignored, so it is only ever local -- which is precisely
+# why it would otherwise be swept into the context from a developer machine.
+.env
+.env.*
+!.env.example
+
+# Node, for when the frontend arrives in M5
+node_modules
+frontend/dist
+
+# Documentation and tests are not needed to run the service
+docs/
+tests/
+tools/synthetic/
+*.md
+!README.md

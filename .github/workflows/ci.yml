@@ -254,7 +254,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: container scan (trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        # Tags on this action are v-prefixed; `0.28.0` does not resolve.
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: rcm-platform:ci
           format: table
