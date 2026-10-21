@@ -1,0 +1,43 @@
+# Secret scanning configuration (CLAUDE.md section 6.2, S-8).
+#
+# Any hit fails the build. The allowlist below is deliberately narrow: it covers
+# the two places where a credential-shaped string is correct -- the local
+# development defaults, which exist so `make up` works on a fresh clone, and the
+# CI environment block, which points at ephemeral service containers.
+#
+# A real credential never appears in this repository. Deployed environments read
+# secrets from a secret manager through the environment (see platform/config.py).
+
+title = "rcm-platform"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "rcm-postgres-url"
+description = "PostgreSQL connection string with an embedded password"
+regex = '''postgresql(\+\w+)?://[^:\s]+:[^@\s]+@'''
+tags = ["database", "credential"]
+
+[[rules]]
+id = "rcm-private-key"
+description = "Private key material"
+regex = '''-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY'''
+tags = ["key"]
+
+[allowlist]
+description = "Local development and CI defaults -- ephemeral, never deployed"
+paths = [
+    '''docker-compose\.yml''',
+    '''\.env\.example''',
+    '''\.github/workflows/ci\.yml''',
+    '''infra/postgres/01-roles\.sql''',
+    '''src/rcm/platform/config\.py''',
+    '''\.gitleaks\.toml''',
+    '''tests/''',
+]
+regexes = [
+    '''rcm_app:rcm_app''',
+    '''rcm_migrator:rcm_migrator''',
+    '''redis://localhost''',
+]

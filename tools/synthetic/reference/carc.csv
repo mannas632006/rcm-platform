@@ -1,0 +1,40 @@
+carc_code,short_meaning,denial_category,preventable,usual_group
+1,Deductible amount,Non-Covered,N,PR
+2,Coinsurance amount,Non-Covered,N,PR
+3,Copayment amount,Non-Covered,N,PR
+4,Procedure code inconsistent with modifier used,Modifier,Y,CO
+11,Diagnosis inconsistent with the procedure,Coding,Y,CO
+15,Authorization number missing or invalid,Authorization,Y,CO
+16,Claim lacks information needed for adjudication,Demographic/Data Error,Y,CO
+18,Exact duplicate claim or service,Duplicate,Y,CO
+22,May be covered by another payer per COB,Coordination of Benefits,Y,OA
+23,Impact of prior payer adjudication,Coordination of Benefits,N,OA
+24,Charges covered under capitation or managed care,Non-Covered,N,CO
+26,Expenses incurred prior to coverage,Eligibility,Y,CO
+27,Expenses incurred after coverage terminated,Eligibility,Y,CO
+29,Time limit for filing has expired,Timely Filing,Y,CO
+31,Patient cannot be identified as our insured,Eligibility,Y,CO
+45,Charge exceeds fee schedule or contracted amount,Contractual,N,CO
+49,Routine exam or screening not covered,Non-Covered,N,CO
+50,Not deemed medically necessary by the payer,Medical Necessity,N,CO
+54,Multiple physicians or assistants not covered,Bundling/Edit,Y,CO
+55,Procedure considered experimental,Medical Necessity,N,CO
+58,Treatment inappropriate for the location billed,Coding,Y,CO
+59,Processed under multiple or concurrent procedure rules,Bundling/Edit,Y,CO
+96,Non-covered charge,Non-Covered,N,CO
+97,Benefit included in another adjudicated service,Bundling/Edit,Y,CO
+109,Claim not covered by this payer or contractor,Eligibility,Y,CO
+119,Benefit maximum for this period reached,Frequency Limitation,Y,CO
+140,Patient identification number and name do not match,Demographic/Data Error,Y,CO
+146,Diagnosis invalid for the dates of service,Coding,Y,CO
+147,Contracted rate expired or not on file,Provider Enrollment,Y,CO
+151,Information does not support this many services,Medical Necessity,N,CO
+167,This diagnosis is not covered,Medical Necessity,N,CO
+170,Denied when performed by this provider type,Provider Enrollment,Y,CO
+181,Procedure code invalid on the date of service,Coding,Y,CO
+182,Procedure modifier invalid on the date of service,Modifier,Y,CO
+183,Referring provider not eligible to refer,Provider Enrollment,Y,CO
+197,Precertification or authorization absent,Authorization,Y,CO
+198,Precertification or authorization exceeded,Authorization,Y,CO
+204,Not covered under the current benefit plan,Non-Covered,N,PR
+252,An attachment or documentation is required,Documentation,Y,CO

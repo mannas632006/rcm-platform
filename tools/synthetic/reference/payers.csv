@@ -1,0 +1,9 @@
+payer_id,canonical_name,plan_type,member_id_pattern,timely_filing_days,appeal_deadline_days,mean_adjudication_days,denial_propensity,allowed_pct_of_charge,share
+60054,Aetna Commercial,Commercial,^W\d{9}$,120,60,21,1.0,0.52,0.18
+87726,UHC Commercial,Commercial,^\d{9}$,90,60,18,1.15,0.5,0.16
+84980,UHC Medicare Advantage,Medicare Advantage,^\d{9}$,365,60,24,1.25,0.44,0.11
+00590,BCBS Texas,Commercial,^[A-Z]{3}\d{9}$,180,180,26,0.95,0.53,0.14
+62308,Cigna PPO,Commercial,^U\d{8}$,90,180,20,1.05,0.51,0.1
+00431,Medicare Part B,Medicare,^\d[A-Z]\d{2}[A-Z]\d{2}[A-Z]{2}\d{2}$,365,120,16,0.7,0.42,0.17
+77032,State Medicaid MCO,MCO,^M\d{10}$,95,30,31,1.45,0.34,0.09
+11315,Workers Comp Carrier,Workers Compensation,^WC\d{8}$,365,90,38,1.2,0.62,0.05

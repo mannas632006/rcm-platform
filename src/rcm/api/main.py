@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 
 from rcm.platform.config import Settings, get_settings
 from rcm.platform.errors import PlatformError
+from rcm.platform.idempotency import IdempotencyMiddleware
 from rcm.platform.logging import configure_logging, get_logger
 
 REQUEST_ID_HEADER: Final = "X-Request-ID"
@@ -61,6 +62,14 @@ def create_app() -> FastAPI:
         docs_url="/docs" if settings.environment in ("local", "ci") else None,
         redoc_url=None,
     )
+
+    # PD-14. Registered as middleware rather than a per-route dependency so a
+    # new mutating endpoint is covered the moment it is added, instead of
+    # depending on its author remembering. Starlette runs middleware in reverse
+    # registration order, so this is added before `request_context` and
+    # therefore runs *after* it -- an idempotency rejection still carries a
+    # request id.
+    app.add_middleware(IdempotencyMiddleware, settings=settings)
 
     @app.middleware("http")
     async def request_context(
@@ -116,6 +125,11 @@ def create_app() -> FastAPI:
             ),
             media_type=PROBLEM_CONTENT_TYPE,
         )
+
+    @app.get("/openapi-version", tags=["platform"], include_in_schema=False)
+    async def openapi_version() -> dict[str, str]:
+        """Schema fingerprint, so CI can detect contract drift cheaply."""
+        return {"version": app.version}
 
     @app.get("/health", tags=["platform"])
     async def health() -> dict[str, str]:

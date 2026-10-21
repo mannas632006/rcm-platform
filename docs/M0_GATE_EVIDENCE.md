@@ -51,3 +51,413 @@ structlog -- any third-party library in the process leaks the same way. The
 guard was moved to `logging.setLogRecordFactory`, which every log record in the
 process passes through, and the exception is reduced there to its type and raise
 site.
+
+---
+
+## PD-20 — client scoping at the query layer (`rcm.platform.auth`)
+
+**Control removed:** `scoped_query` returned its statement unmodified instead of
+applying `WHERE client_id IN (...)`.
+
+```
+$ pytest tests/security/test_client_scoping.py -q
+
+FAILED tests/security/test_client_scoping.py::test_cross_client_access_denied
+FAILED tests/security/test_client_scoping.py::test_scope_filter_survives_additional_where_clauses
+FAILED tests/security/test_client_scoping.py::test_empty_scope_matches_nothing_rather_than_everything
+FAILED tests/security/test_client_scoping.py::test_system_principal_must_name_its_clients
+4 failed, 5 passed
+```
+
+**Control restored:** `9 passed`.
+
+The four that fail are the four that assert on the *compiled SQL* rather than on
+returned rows. That is the distinction PD-20 draws: the five survivors check the
+`Principal` object's own behaviour, which a handler-level check would also
+satisfy, while these four check that the restriction is in the statement itself
+and therefore holds no matter which handler built it or what the database
+contains.
+
+### Why the test asserts on compiled SQL
+
+The first version of `test_cross_client_access_denied` compiled the statement
+with SQLAlchemy's default dialect and asserted the client UUID appeared in the
+output. It failed against a correct implementation: the default dialect renders
+a UUID without hyphens, so the assertion was checking for a string that never
+reaches PostgreSQL. Compiling against `postgresql.dialect()` tests the SQL the
+database actually receives.
+
+---
+
+## PD-14 — idempotency (`rcm.platform.idempotency`)
+
+**Control removed:** the middleware discarded the result of `store.reserve()`, so
+a completed response was never replayed.
+
+```
+$ pytest tests/security/test_idempotency.py -q
+
+AssertionError: the handler ran twice; PD-14 is not enforced
+assert 2 == 1
+
+FAILED tests/security/test_idempotency.py::test_same_key_twice_produces_one_effect
+1 failed, 11 passed
+```
+
+**Control restored:** `12 passed`.
+
+The test counts side effects rather than inspecting the store, because the thing
+being prevented is a duplicate claim submission -- a duplicate bill -- not a
+duplicate cache entry.
+
+### Two bugs this found during development
+
+**Exceptions raised inside middleware never reach the app's error handlers.**
+Starlette installs its exception handlers below user middleware, so
+`IdempotencyKeyRequiredError` escaped as a bare 500 rather than the documented
+400 Problem Details. A client would have been told "internal error" when the
+actual problem was a missing header it could have added. The middleware now
+renders `PlatformError` itself, using the same `to_problem()` call as the app
+handler so the two cannot drift.
+
+**`isinstance(response, StreamingResponse)` is false for the response
+`BaseHTTPMiddleware` returns.** `call_next` hands back a private
+`_StreamingResponse` that subclasses `Response` directly. The isinstance check
+therefore skipped the body-draining branch, the reservation was never completed,
+and every second attempt of a retry returned 409 instead of replaying the
+original 200 -- the precise failure PD-14 exists to prevent, introduced while
+fixing a type error. The body is now drained by duck-typing on `body_iterator`,
+which matches what the object is rather than what the public type hierarchy
+suggests.
+
+---
+
+## M0.10 — synthetic corpus contract (`tools/synthetic`)
+
+Not a safety control, so there is no negative to prove. The equivalent evidence
+is that the corpus contains the cases M1's gate depends on, asserted in
+`tests/unit/test_synthetic_generator.py` and verified by a parser that does not
+share the generator's code:
+
+```
+$ python -m tools.synthetic --config tools/synthetic/config/smoke.yaml
+  claims                       616
+  service_lines                1018
+  adjustment_rows              1297
+  resubmissions                16
+  recouped_claims              6
+  denial rate (all attempts)   0.1326
+  provenance                   synthetic:tools.synthetic
+
+$ python -m tools.synthetic.validate
+  837: 616 claims, 1018 service lines parsed
+  835: 616 claims, 1018 lines, 1297 CAS reasons
+       balanced 210, unbalanced 1 (1 unbalanced is the intentional quarantine fixture)
+       lines carrying >1 CAS reason: 279
+       CAS groups: {'CO': 1045, 'PR': 259}
+  all checks passed
+```
+
+279 multi-CAS lines is the number that matters most: it is the case that
+separates service-line grain from adjustment grain (PD-6), and a parser that
+merges adjustments passes every other test until it meets one.
+
+---
+
+## PD-14 / PD-20 — the replay cache is namespaced per principal
+
+Found during review of the M0 commit, after the gate above was first reported.
+
+**The defect.** `IdempotencyMiddleware` namespaced its Redis keys by reading
+`request.state.principal`. ASGI middleware runs before routing, so the
+`current_principal` dependency had not executed and that attribute was never
+set. Every key therefore landed in a single `"anonymous"` namespace, and two
+tenants choosing the same `Idempotency-Key` replayed each other's responses:
+
+```
+Alice (tenant A) POST -> 200 {"served_to":"alice@tenant-a","claim":"CLM-A-SECRET"}
+Bob   (tenant B) POST -> 200 {"served_to":"alice@tenant-a","claim":"CLM-A-SECRET"}
+
+>>> CROSS-TENANT LEAK: Bob received Alice's response body.
+```
+
+This is the disclosure PD-20 exists to prevent, arriving through a route PD-20
+does not cover: the scoping control guards queries, and nothing queried anything
+-- the response was served from cache. Keys derived from a batch date or a run
+number collide across tenants by construction, so this needed no adversary.
+
+**Why the existing tests missed it.** `test_keys_are_namespaced_per_principal`
+called `record_key()` directly with two different subjects and passed. The
+helper was correct; the middleware was feeding it a constant. A unit test of a
+helper cannot see what its caller passes.
+
+**Fix.** The middleware verifies the bearer token itself and namespaces on the
+resulting subject, caching the `Principal` on `request.state` so the dependency
+does not verify twice. An unverifiable token yields `"anonymous"`, which is safe
+because the request is about to be rejected and a non-2xx response releases the
+reservation rather than storing it.
+
+**Control removed:** `_principal_subject` returning `"anonymous"` unconditionally.
+
+```
+$ pytest tests/security/test_idempotency.py -q
+
+FAILED tests/security/test_idempotency.py::test_one_tenant_cannot_replay_another_tenants_response
+FAILED tests/security/test_idempotency.py::test_the_same_principal_still_replays
+FAILED tests/security/test_idempotency.py::test_a_conflict_cannot_reveal_another_tenants_key
+3 failed, 12 passed
+```
+
+**Control restored:** `15 passed`.
+
+The three replacement tests drive a real application with real tokens rather
+than calling the helper, which is the only framing that could have caught this.
+`test_a_conflict_cannot_reveal_another_tenants_key` covers the quieter half of
+the same defect: under a shared namespace the 409 response is an oracle for
+which keys another tenant has already used.
+
+### A test-only trap worth recording
+
+The first version of those tests returned 422 against a correct implementation.
+This module uses `from __future__ import annotations`, so FastAPI resolves a
+handler's annotations against **module** globals; `Principal`, imported inside
+the fixture, was not among them, and FastAPI fell back to treating the parameter
+as a request body field. Any name used in a route signature must be imported at
+module level in a test file that postpones annotation evaluation.
+
+---
+
+## M0.10 — the generator failed on Windows
+
+Found when the branch was first built on the Windows development machine
+(ADR-0001). Every Linux and CI run had been green.
+
+```
+File "tools\synthetic\emit.py", line 170, in run
+  (x837 / f"837P_...txt").write_text(text)
+File "...\Lib\encodings\cp1252.py", line 19, in encode
+  return codecs.charmap_encode(input, self.errors, encoding_table)[0]
+UnicodeEncodeError: 'charmap' codec can't encode characters in position
+1323-1327: character maps to <undefined>
+```
+
+**Cause.** `Path.write_text()` with no `encoding` uses the platform locale --
+UTF-8 on Linux, cp1252 on Windows. The surname list in `generate.py` contains
+`Варга`, which cp1252 cannot represent, so the whole corpus failed to generate
+and all nine generator tests errored at fixture setup.
+
+**The Cyrillic name stays.** It is not a mistake to clean up. S-12 states X12
+arrives from outside and is untrusted, and M1.1 requires that malformed or
+unexpected input never crash uncaught -- so a non-ASCII character somewhere in
+the corpus is a fixture the parser needs, not a defect. What was wrong was
+writing it through an encoding chosen by whichever machine happened to run the
+generator.
+
+**Fix.** Every `open`, `read_text` and `write_text` in `tools/synthetic`
+declares `encoding="utf-8"`.
+
+**Guard.** `test_every_file_operation_declares_its_encoding` scans the source
+rather than running the generator, because a test that regenerates the corpus
+passes on Linux whether or not the bug is present -- it could never have caught
+this on CI. Control removed (one `encoding=` deleted):
+
+```
+E   build.py:40 read_text(...)
+E   assert not ['build.py:40 read_text(...)']
+1 failed
+```
+
+Restored: `11 passed`.
+
+`test_the_corpus_contains_a_non_ascii_name` asserts the hazard itself stays in
+the corpus, so that "tidying" the surname list back to ASCII cannot silently
+remove the only fixture that exercises this path.
+
+---
+
+## M0.11 — the CI database did not match the local one
+
+First run of the integration job:
+
+```
+psql:infra/postgres/01-roles.sql:11: ERROR:  role "rcm_migrator" already exists
+Error: Process completed with exit code 3.
+```
+
+**Cause.** The workflow named the Postgres service container's superuser
+`rcm_migrator`, so `initdb` created that role before anything else ran, and
+`01-roles.sql` then collided trying to create it. `docker-compose.yml` uses
+`postgres` as the superuser and mounts the same script into
+`/docker-entrypoint-initdb.d`, so the two environments were set up differently
+from the start.
+
+That matters more than a failing step. ADR-0001 says the local stack and CI run
+the same Postgres so the append-only guarantee is tested against what developers
+actually use, and DR-06 is enforced by **grants** -- which depend on which role
+owns what. A CI database assembled differently from the local one is not testing
+the same control.
+
+**Fix.** The service container now mirrors compose exactly: superuser
+`postgres`, same image tags (`postgres:16.10-alpine`, `redis:7.4-alpine`), and
+`01-roles.sql` run as `postgres`, creating both roles as it does locally.
+
+**Verified against a real Postgres 16**, not reasoned about:
+
+```
+$ psql ... -v ON_ERROR_STOP=1 -f infra/postgres/01-roles.sql
+CREATE ROLE / CREATE ROLE / ALTER DATABASE / ALTER SCHEMA / GRANT
+ALTER DEFAULT PRIVILEGES / ALTER DEFAULT PRIVILEGES          exit 0
+
+$ alembic upgrade head
+Running upgrade      -> 0001, Audit and decision records
+Running upgrade 0001 -> 0002, Make the audit tables append-only   exit 0
+
+$ select privileges granted to rcm_app
+audit_event      INSERT,SELECT
+decision_record  INSERT,SELECT
+
+$ UPDATE audit_event SET action='tampered';
+ERROR:  permission denied for table audit_event
+$ DELETE FROM decision_record;
+ERROR:  permission denied for table decision_record
+```
+
+The app role holds no UPDATE or DELETE on either table, and the database refuses
+both. That is the control; the ORM guard in `rcm.platform.audit` is only there
+to make a mistake legible at the call site.
+
+### Noted, not fixed
+
+`rcm_app` is granted `SELECT, INSERT, UPDATE, DELETE` on `alembic_version`,
+inherited from the default privileges in `01-roles.sql`. The application never
+reads it and should not be able to write it. Harmless today, worth narrowing
+when M1 adds its own migrations.
+
+---
+
+## M0.4 — an undisposed engine failed the suite after every test passed
+
+The integration job, once it had a database to talk to:
+
+```
+ResourceWarning: <psycopg.Connection object at 0x...> was deleted while
+still open. Please use 'with' or '.close()' to close the connection properly
+
+pytest.PytestUnraisableExceptionWarning: Exception ignored in:
+  <function BaseConnection.__del__ ...>
+
+..                                                      [100%]
+2 passed in 1.19s
+Error: Process completed with exit code 1.
+```
+
+Two tests passed and the session still failed. `filterwarnings = ["error"]`
+promotes the warning, and pytest raises it during `pytest_unconfigure` -- after
+the summary line is printed, which is why the output reads as a pass.
+
+**Cause.** `session_scope()` obtains its engine through an `lru_cache` in
+`rcm.platform.db`, so the engine belongs to the module and no fixture teardown
+reaches it. Its pooled psycopg connections were still open at interpreter
+shutdown and the garbage collector closed them.
+
+`reset_engines()` made it worse rather than better: it called `cache_clear()`
+without disposing, which drops the only reference to an `Engine` whose pool is
+still live. Every call abandoned a connection pool. That is production code --
+a worker rebuilding its engine after a configuration change would leak the same
+way -- so the fix belongs in `db.py`, not in a fixture.
+
+**Fix.**
+
+- `reset_engines()` disposes each cached engine before clearing the cache,
+  guarded by `cache_info().currsize` so that disposing does not instead
+  *create* the engine it is discarding.
+- `tests/conftest.py` gains a session-scoped autouse fixture calling
+  `reset_engines()` on teardown, so any suite touching the database is covered,
+  including ones not written yet.
+
+**Verified against a real Postgres 16**, reproducing the CI failure first and
+then confirming the fix:
+
+```
+before:  2 passed in 1.19s   EXIT: 1     (PytestUnraisableExceptionWarning)
+after:   2 passed in 0.40s   EXIT: 0
+
+tests/unit      76 passed
+tests/security  42 passed    (incl. test_append_only_audit.py)
+```
+
+### Why the warning is left as an error
+
+Demoting `ResourceWarning` would have made this green in a minute. It would also
+have hidden a connection leak in code that will later run inside Celery workers,
+where an abandoned pool per configuration reload exhausts `max_connections` and
+takes the database down for every tenant at once. The warning did its job.
+
+---
+
+## M0.11 — container scan: 46 vulnerabilities, none of them ours
+
+First run of the `build image` job:
+
+```
+rcm-platform:ci (debian 12.11)
+Total: 42 (HIGH: 38, CRITICAL: 4)
+  libgnutls30   CVE-2026-33845  CRITICAL  3.7.9-2+deb12u4  -> 3.7.9-2+deb12u7
+  libssl3       CVE-2026-31789  CRITICAL  3.0.16-1~deb12u1 -> 3.0.19-1~deb12u2
+  openssl       CVE-2026-31789  CRITICAL
+  libkrb5-3, libpam-modules, libpcre2-8-0, libsqlite3-0, gpgv, libcap2 ...
+
+Python (python-pkg)
+Total: 4 (HIGH: 4)
+  setuptools  CVE-2025-47273   70.3.0 -> 78.1.1
+  urllib3     CVE-2026-97687   2.7.0  -> 2.8.0
+  urllib3     CVE-2026-97689
+  msgpack     GHSA-6v7p-g79w   1.1.2  -> 1.2.1
+```
+
+The useful finding is where they were. **Not one is in this project's
+dependency tree.** The Debian CVEs are base-image packages the Dockerfile never
+updated; `setuptools` is the version the base image ships; and `urllib3` and
+`msgpack` are *vendored inside pip*, which no dependency pin can reach. All 46
+were marked `fixed`, so `ignore-unfixed: true` filtered none of them.
+
+**Three causes, three fixes.**
+
+1. *The pinned base tag freezes its Debian packages.* `apt-get update &&
+   apt-get install` leaves everything already present at the versions baked
+   into the tag. The runtime stage now runs `apt-get upgrade -y`.
+
+2. *`build-essential` shipped to production.* A compiler toolchain in the
+   runtime image is both CVE surface and a convenience for anyone who gets
+   execution inside the container. Split into a builder stage that has it and a
+   runtime stage that does not.
+
+3. *`pip` and `setuptools` were in an image that installs nothing.* Both are
+   deleted from the runtime stage, which removes their own vulnerabilities and
+   pip's vendored ones, and removes the ability to install anything into a
+   running container.
+
+**Verified before adopting**, because deleting `pip`, `setuptools` and
+`pkg_resources` breaks some applications:
+
+```
+$ pip install . && rm -rf .../pip .../setuptools .../pkg_resources ...
+$ python -c "from rcm.api.main import create_app; create_app()"
+app imports OK, routes: ['/docs', '/health', '/openapi-version', '/openapi.json']
+uvicorn importable: 0.54.0
+```
+
+The Dockerfile repeats that assertion as a build step, so an image that cannot
+import its own entrypoint fails to build rather than failing to start.
+
+### The trade that was made, not avoided
+
+`apt-get upgrade` means two builds of the same commit can differ. That was
+accepted deliberately: a byte-identical image is worth less than one without a
+remote-code-execution path in its TLS stack, and the reproducibility that
+matters for an audit comes from the lockfile and the image digest recorded at
+release, not from the base layer never changing.
+
+The severity threshold was **not** lowered. Lowering it was the one-line fix
+available, and it would have left the same libraries in the image with the
+report tuned to stop mentioning them.

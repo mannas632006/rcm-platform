@@ -34,13 +34,22 @@ dev = [
     # the deprecation shim is a hard failure, which is the behaviour we want.
     "httpx2>=2.12",
     "hypothesis>=6.122",
-    "ruff>=0.8",
-    "mypy>=1.13",
+    # Pinned, not floated. `tests/unit/test_tooling_pins.py` asserts this matches
+    # the `rev:` in .pre-commit-config.yaml, and a floating lower bound means the
+    # two drift apart on whatever day the next developer runs `make install`.
+    # Bump both together, in one commit.
+    "ruff==0.16.5",
+    "mypy>=1.13,<2",
     "import-linter>=2.1",
     "bandit[toml]>=1.8",
     "pip-audit>=2.7",
     "pre-commit>=4.0",
     "types-python-dateutil",
+    # tools/synthetic reads its payer mix and volumes from YAML (M0.10).
+    "pyyaml>=6.0",
+    # tools/check_coverage_floor.py parses the coverage report; the stdlib XML
+    # parser is vulnerable to entity-expansion attacks and bandit flags it (B314).
+    "defusedxml>=0.7",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -80,6 +89,26 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**"   = ["S", "ANN", "PLR2004"]
 "tools/**"   = ["S311"]              # non-crypto RNG is correct for synthetic data
+# The synthetic generator (M0.10) is a developer CLI, not production code: it
+# never runs in a deployed environment, never touches PHI, and prints a console
+# report rather than emitting telemetry. Annotating it to mypy-strict standards
+# would be effort spent where a defect costs a regenerated corpus rather than a
+# wrong number in a ledger. See docs/decisions/ADR-0004-synthetic-generator-lint-scope.md.
+# mypy does not cover it at all -- `packages = ["rcm"]` excludes tools/.
+"tools/synthetic/**" = [
+    "ANN",    # annotations: see ADR-0004
+    "T201",   # print(): this is a CLI whose output is a console report
+    "E741",   # `l` as a loop variable over X12 loops, matching the spec's own naming
+    "RUF001", # the X12 reference data contains non-ASCII payer names verbatim
+    "N802",   # function names mirror X12 segment names (ISA, GS, SE)
+    "N806",   # D() and A() name digit and alpha generators, matching payer id specs
+    "SIM",    # readability rewrites not worth re-validating generated output over
+    "RUF005", # list concatenation, likewise
+    "RUF059", # unused unpacked values from a documented multi-return build()
+    "F841",   # locals kept as self-documentation of the adjudication steps
+    "E731",   # short lambdas for per-payer member-id formats read better inline
+    "E702",   # `print(...); return 1` guard clauses
+]
 "migrations/**" = ["ANN", "E501", "N999"]
 
 [tool.ruff.lint.isort]

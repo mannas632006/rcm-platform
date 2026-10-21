@@ -104,6 +104,12 @@ class Settings(BaseSettings):
                 f"{self.environment!r}: the OIDC stub must never sign tokens "
                 "outside local/ci."
             )
+        # RFC 7518 section 3.2: an HMAC key shorter than the hash output
+        # weakens the signature. PyJWT warns; here it is refused, because a
+        # short dev secret makes local token forgery cheap and local is where
+        # people paste tokens into shared scratch files.
+        if self.dev_jwt_secret is not None and len(self.dev_jwt_secret.get_secret_value()) < 32:
+            raise ValueError("dev_jwt_secret must be at least 32 bytes (RFC 7518 section 3.2)")
         if deployed and self.debug:
             raise ValueError(f"debug must be off in {self.environment!r}")
         if deployed and not self.log_json:

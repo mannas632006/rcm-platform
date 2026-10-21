@@ -40,11 +40,13 @@ def upgrade() -> None:
     # audit_event.event_id is a BIGSERIAL; inserting requires the sequence.
     op.execute(f"GRANT USAGE, SELECT ON SEQUENCE audit_event_event_id_seq TO {APP_ROLE}")
 
-    # Future tables in this schema must not silently inherit write access to
-    # anything added here later.
-    op.execute(
-        f"ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE UPDATE, DELETE ON TABLES FROM {APP_ROLE}"
-    )
+    # Deliberately NOT altering schema-wide default privileges here. Append-only
+    # is a property of specific tables, granted per table above. Revoking
+    # UPDATE/DELETE by default would strip them from every table created later
+    # -- including `claim`, whose state transitions are updates -- and surface
+    # months from now as a permission error nowhere near this file. A future
+    # append-only table gets its own explicit REVOKE in its own migration, and
+    # joins APPEND_ONLY_TABLES in rcm.platform.audit so the test covers it.
 
 
 def downgrade() -> None:
@@ -53,6 +55,3 @@ def downgrade() -> None:
     # compliance decision, not an engineering one.
     for table in APPEND_ONLY_TABLES:
         op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {table} TO {APP_ROLE}")
-    op.execute(
-        f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT UPDATE, DELETE ON TABLES TO {APP_ROLE}"
-    )

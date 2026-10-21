@@ -1,0 +1,285 @@
+# CI pipeline (M0.11).
+#
+# Stage order is fixed by CLAUDE.md section 7.4:
+#
+#     lint -> typecheck -> unit -> property -> integration -> contract
+#          -> security -> leakage -> build -> e2e -> a11y -> perf
+#
+# Two rules from that section govern this file:
+#
+#   "Fail fast. No stage may be skipped or marked continue-on-error."
+#
+# So there is no `continue-on-error:` anywhere below, and no `|| true`. Stages
+# whose subject does not exist yet (frontend, Terraform, dbt) are not omitted --
+# they are represented by `scaffold-guard`, which fails the build the moment one
+# of those directories appears without its stage being wired up. A stage that
+# silently passes because its target is missing is the same defect as a skipped
+# test.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  RCM_ENVIRONMENT: ci
+  # CI runs against ephemeral containers; these are not secrets and the
+  # gitleaks allowlist names this file for that reason.
+  RCM_DATABASE_URL: postgresql+psycopg://rcm_app:rcm_app@localhost:5432/rcm
+  RCM_MIGRATION_DATABASE_URL: postgresql+psycopg://rcm_migrator:rcm_migrator@localhost:5432/rcm
+  RCM_REDIS_URL: redis://localhost:6379/0
+  RCM_CELERY_BROKER_URL: redis://localhost:6379/1
+  RCM_CELERY_RESULT_BACKEND: redis://localhost:6379/2
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------- stage 1
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - name: ruff check
+        run: ruff check src tests tools migrations
+      - name: ruff format --check
+        run: ruff format --check src tests tools
+      - name: import boundaries (M0.9)
+        run: lint-imports --config .importlinter
+
+  # ---------------------------------------------------------------- stage 2
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - name: mypy strict
+        run: mypy
+
+  # ------------------------------------------------------------ stages 3-4
+  test-unit:
+    name: unit + property
+    runs-on: ubuntu-latest
+    needs: [typecheck]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - name: unit
+        run: pytest tests/unit -q --cov=src/rcm --cov-report=xml --cov-report=term-missing
+      - name: property (Hypothesis)
+        # Through run_suite because the property tests belong to the X12 parser
+        # (M1.1), which does not exist yet, and pytest exits 5 on an empty
+        # suite. run_suite passes only while the subject is still a stub, and
+        # fails the moment the parser lands without its tests -- so this is a
+        # deferral with a deadline, not a disabled gate.
+        run: python tools/run_suite.py tests/property --subject src/rcm/ingestion/x12 --milestone M1.1 --pytest-args="-q"
+      - name: coverage floor on the high-care packages
+        # CLAUDE.md section 7.1: 90% line coverage on decision, ingestion.x12 and
+        # domain. Enforced only once those packages contain code -- an empty
+        # package trivially reports 100% and the gate would mean nothing.
+        run: python tools/check_coverage_floor.py coverage.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 7
+
+  # ---------------------------------------------------------------- stage 5
+  test-integration:
+    name: integration + security controls
+    runs-on: ubuntu-latest
+    needs: [test-unit]
+    services:
+      # Image tags match docker-compose.yml exactly. ADR-0001 requires the local
+      # stack and CI to run the same Postgres and Redis, because the append-only
+      # guarantee is enforced by database grants -- a version difference here
+      # would mean the control is tested against something other than what
+      # developers run.
+      postgres:
+        image: postgres:16.10-alpine
+        env:
+          # The superuser is `postgres`, as in compose. `rcm_migrator` and
+          # `rcm_app` are created by infra/postgres/01-roles.sql below. Naming
+          # the superuser `rcm_migrator` would make Postgres create that role at
+          # initdb, and the script's CREATE ROLE would then collide with it.
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rcm
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d rcm"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - name: create the migrator and application roles
+        # Runs the same script docker-compose mounts into
+        # /docker-entrypoint-initdb.d, as the same superuser, so CI and a
+        # developer machine end up with identical grants. The append-only
+        # guarantee rests on rcm_app lacking UPDATE and DELETE (DR-06); running
+        # the suite as the owner would make
+        # test_audit_tables_reject_update_and_delete pass for the wrong reason.
+        run: psql "postgresql://postgres:postgres@localhost:5432/rcm" -v ON_ERROR_STOP=1 -f infra/postgres/01-roles.sql
+        env:
+          PGPASSWORD: postgres
+      - name: migrate
+        run: alembic upgrade head
+      - name: integration
+        # Same arrangement as the property suite: the integration tests arrive
+        # with the claim lifecycle in M3.
+        run: python tools/run_suite.py tests/integration --subject src/rcm/domain --milestone M3 --pytest-args="-q -m integration"
+      - name: security controls (CLAUDE.md section 6.3)
+        run: pytest tests/security -q
+
+  # -------------------------------------------------- stages 6-7: contract
+  test-contract:
+    name: contract (OpenAPI drift)
+    runs-on: ubuntu-latest
+    needs: [test-unit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - name: regenerate the OpenAPI schema and assert no drift
+        # A committed schema that disagrees with the code means the generated
+        # frontend client is wrong. M5.1 makes the client itself a CI artifact;
+        # until then this catches the server half.
+        run: |
+          python tools/export_openapi.py openapi.generated.json
+          if [ -f openapi.json ]; then
+            diff -u openapi.json openapi.generated.json
+          else
+            cp openapi.generated.json openapi.json
+            echo "::notice::openapi.json created; commit it to lock the contract"
+          fi
+
+  # ---------------------------------------------------------------- stage 8
+  security:
+    name: security gates
+    runs-on: ubuntu-latest
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks scans history, not just the tip
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+
+      - name: secret scanning (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+      - name: dependency audit (pip-audit)
+        # `--skip-editable` and no `--strict`: the project installs itself
+        # editable for the test run, it is not on PyPI, and `--strict` turns
+        # "could not audit this distribution" into a build failure. Dropping
+        # `--strict` does not weaken the gate that matters -- a real CVE in any
+        # dependency still exits non-zero and fails the job.
+        run: pip-audit --desc --skip-editable
+
+      - name: SAST (bandit)
+        run: bandit -c pyproject.toml -r src tools -ll
+
+      - name: prime directive checks
+        # PD-17 (no coding auto-submit path) and PD-16 (modifiers 25/59 never
+        # auto-applied) are grep-enforceable invariants, so they are enforced by
+        # grep rather than trusted to review.
+        run: python tools/check_prime_directives.py
+
+  # ---------------------------------------------------------------- stage 9
+  build:
+    name: build image
+    runs-on: ubuntu-latest
+    needs: [test-integration, test-contract, security]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile
+          push: false
+          load: true
+          tags: rcm-platform:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: container scan (trivy)
+        # Tags on this action are v-prefixed; `0.28.0` does not resolve.
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: rcm-platform:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+  # --------------------------------------------------------------- guard
+  scaffold-guard:
+    name: later-stage guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: assert no un-wired stage has appeared
+        run: python tools/check_ci_stages.py
+
+  # ---------------------------------------------------------------- gate
+  verify:
+    name: verify (the gate)
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, test-unit, test-integration, test-contract, security, build, scaffold-guard]
+    steps:
+      - name: all gates green
+        run: echo "make verify equivalent passed"
