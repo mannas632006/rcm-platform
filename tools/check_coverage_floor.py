@@ -23,9 +23,20 @@ from typing import Final
 
 import defusedxml.ElementTree
 
+REPO_ROOT: Final = Path(__file__).resolve().parent.parent
+
 FLOOR: Final = 0.90
 
-#: Package path prefixes, as they appear in coverage.xml filenames.
+#: Packages to guard, as import paths under src/.
+#:
+#: Matched against each file's path resolved through coverage.xml's own
+#: `<source>` element rather than against the raw `filename` attribute.
+#: coverage writes filenames *relative to the source root*, so with
+#: `source = ["src/rcm"]` they read `ingestion/x12/tokenizer.py` and a prefix
+#: written as `rcm/ingestion/x12` matches nothing at all. The first version of
+#: this script did exactly that and reported every package as "still a stub"
+#: for as long as it existed -- a gate that passed because it was looking in
+#: the wrong place.
 GUARDED: Final[tuple[str, ...]] = (
     "rcm/decision",
     "rcm/ingestion/x12",
@@ -34,6 +45,21 @@ GUARDED: Final[tuple[str, ...]] = (
 
 #: Below this many statements a package is still a stub and the ratio is noise.
 MIN_STATEMENTS: Final = 20
+
+
+def _has_real_code(package: str) -> bool:
+    """Does `src/<package>` contain anything beyond empty `__init__` files?
+
+    Used to tell "this package is still a stub" apart from "this script failed
+    to find it", which look identical in a coverage report and are opposite
+    conclusions.
+    """
+    directory = REPO_ROOT / "src" / package
+    if not directory.exists():
+        return False
+    return any(
+        path.name != "__init__.py" and path.stat().st_size > 0 for path in directory.rglob("*.py")
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -46,12 +72,17 @@ def main(argv: list[str]) -> int:
         return 1
 
     root = defusedxml.ElementTree.parse(report).getroot()
+    sources = [(s.text or "").replace("\\", "/").rstrip("/") for s in root.iter("source")]
     totals: dict[str, list[int]] = {p: [0, 0] for p in GUARDED}
 
     for cls in root.iter("class"):
         filename = (cls.get("filename") or "").replace("\\", "/")
+        # Resolve against every declared source root, so the match works
+        # whether coverage wrote absolute paths, repo-relative paths, or
+        # paths relative to the package it was pointed at.
+        candidates = [filename] + [f"{source}/{filename}" for source in sources]
         for prefix in GUARDED:
-            if prefix in filename:
+            if any(prefix in candidate for candidate in candidates):
                 for line in cls.iter("line"):
                     totals[prefix][1] += 1
                     if int(line.get("hits") or 0) > 0:
@@ -61,6 +92,19 @@ def main(argv: list[str]) -> int:
     failed = False
     for prefix, (covered, total) in totals.items():
         if total < MIN_STATEMENTS:
+            # A package that has real code on disk but no statements in the
+            # report means the report and this script disagree about paths,
+            # not that the package is empty. Reporting "still a stub" in that
+            # case is how this gate silently stopped being one.
+            if _has_real_code(prefix):
+                print(  # noqa: T201
+                    f"  FAIL  {prefix:<24} has code on disk but {total} statements in "
+                    f"{report.name}.\n"
+                    "        The coverage report and this script disagree about paths; "
+                    "the gate is not running."
+                )
+                failed = True
+                continue
             print(f"  skip  {prefix:<24} {total} statements -- still a stub")  # noqa: T201
             continue
         ratio = covered / total
