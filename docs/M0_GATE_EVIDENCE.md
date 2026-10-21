@@ -224,3 +224,51 @@ handler's annotations against **module** globals; `Principal`, imported inside
 the fixture, was not among them, and FastAPI fell back to treating the parameter
 as a request body field. Any name used in a route signature must be imported at
 module level in a test file that postpones annotation evaluation.
+
+---
+
+## M0.10 — the generator failed on Windows
+
+Found when the branch was first built on the Windows development machine
+(ADR-0001). Every Linux and CI run had been green.
+
+```
+File "tools\synthetic\emit.py", line 170, in run
+  (x837 / f"837P_...txt").write_text(text)
+File "...\Lib\encodings\cp1252.py", line 19, in encode
+  return codecs.charmap_encode(input, self.errors, encoding_table)[0]
+UnicodeEncodeError: 'charmap' codec can't encode characters in position
+1323-1327: character maps to <undefined>
+```
+
+**Cause.** `Path.write_text()` with no `encoding` uses the platform locale --
+UTF-8 on Linux, cp1252 on Windows. The surname list in `generate.py` contains
+`Варга`, which cp1252 cannot represent, so the whole corpus failed to generate
+and all nine generator tests errored at fixture setup.
+
+**The Cyrillic name stays.** It is not a mistake to clean up. S-12 states X12
+arrives from outside and is untrusted, and M1.1 requires that malformed or
+unexpected input never crash uncaught -- so a non-ASCII character somewhere in
+the corpus is a fixture the parser needs, not a defect. What was wrong was
+writing it through an encoding chosen by whichever machine happened to run the
+generator.
+
+**Fix.** Every `open`, `read_text` and `write_text` in `tools/synthetic`
+declares `encoding="utf-8"`.
+
+**Guard.** `test_every_file_operation_declares_its_encoding` scans the source
+rather than running the generator, because a test that regenerates the corpus
+passes on Linux whether or not the bug is present -- it could never have caught
+this on CI. Control removed (one `encoding=` deleted):
+
+```
+E   build.py:40 read_text(...)
+E   assert not ['build.py:40 read_text(...)']
+1 failed
+```
+
+Restored: `11 passed`.
+
+`test_the_corpus_contains_a_non_ascii_name` asserts the hazard itself stays in
+the corpus, so that "tidying" the surname list back to ASCII cannot silently
+remove the only fixture that exercises this path.

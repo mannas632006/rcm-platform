@@ -45,7 +45,7 @@ def money(x) -> Decimal:
 
 
 def load(name):
-    with (REF / name).open() as f:
+    with (REF / name).open(encoding="utf-8") as f:
         return list(csv.DictReader(f))
 
 

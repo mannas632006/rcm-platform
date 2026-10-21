@@ -37,7 +37,7 @@ def weighted(rng, mapping):
 
 
 def build(cfg_path: pathlib.Path):
-    cfg = yaml.safe_load(cfg_path.read_text())
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
     rng = random.Random(cfg["seed"])
     ref = Reference()
 

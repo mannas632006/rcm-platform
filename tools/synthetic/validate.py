@@ -208,7 +208,7 @@ def main():
 
     tot_claims = tot_lines = 0
     for p in d837:
-        r = parse_837(p.read_text())
+        r = parse_837(p.read_text(encoding="utf-8"))
         tot_claims += len(r["claims"])
         tot_lines += sum(len(c["lines"]) for c in r["claims"])
     print(f"  837: {tot_claims} claims, {tot_lines} service lines parsed")
@@ -219,7 +219,7 @@ def main():
     multi_cas_lines = 0
     r835_claims = r835_lines = r835_adj = 0
     for p in d835:
-        r = parse_835(p.read_text())
+        r = parse_835(p.read_text(encoding="utf-8"))
         is_test = "UNBALANCED" in p.name
         if r["balances"]:
             balanced += 1
@@ -264,8 +264,8 @@ def main():
     check(unbalanced == 1, f"expected exactly 1 unbalanced file, got {unbalanced}")
 
     # ---- CSV mart cross-checks ---------------------------------------
-    lines = list(csv.DictReader((OUT / "csv" / "claim_lines.csv").open()))
-    adjr = list(csv.DictReader((OUT / "csv" / "adjustments.csv").open()))
+    lines = list(csv.DictReader((OUT / "csv" / "claim_lines.csv").open(encoding="utf-8")))
+    adjr = list(csv.DictReader((OUT / "csv" / "adjustments.csv").open(encoding="utf-8")))
     check(len(lines) == r835_lines, f"CSV lines {len(lines)} != 835 lines {r835_lines}")
     check(len(adjr) == r835_adj, f"CSV adjustment rows {len(adjr)} != 835 CAS reasons {r835_adj}")
 

@@ -170,3 +170,61 @@ def test_the_independent_validator_passes(corpus: dict[str, object]) -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "all checks passed" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Encoding
+# ---------------------------------------------------------------------------
+
+
+def test_every_file_operation_declares_its_encoding() -> None:
+    """No `open`, `read_text` or `write_text` in the generator may rely on the locale.
+
+    Python's default encoding for text IO is the platform locale: UTF-8 on
+    Linux and CI, cp1252 on a Windows machine. The generator emits a Cyrillic
+    surname -- deliberately, because M1's parser must not crash on input it did
+    not expect, and S-12 states X12 arrives from outside and is untrusted. On
+    Windows that surname raised `UnicodeEncodeError` and the whole corpus
+    failed to generate, while every Linux run was green.
+
+    A test that merely regenerates the corpus cannot catch this: on CI it
+    passes either way. So the guard is on the source text, which is the same on
+    every platform.
+    """
+    import re
+
+    pattern = re.compile(r"(write_text|read_text|\.open)\s*\(")
+    offenders: list[str] = []
+
+    for path in sorted((REPO_ROOT / "tools" / "synthetic").glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        for match in pattern.finditer(source):
+            # Walk to the matching close paren so multi-line calls are covered.
+            index, depth = match.end(), 1
+            while depth and index < len(source):
+                if source[index] == "(":
+                    depth += 1
+                elif source[index] == ")":
+                    depth -= 1
+                index += 1
+            if "encoding=" not in source[match.end() : index]:
+                line = source[: match.start()].count("\n") + 1
+                offenders.append(f"{path.name}:{line} {match.group(1)}(...)")
+
+    assert not offenders, (
+        "file IO without an explicit encoding, which uses the platform locale "
+        "and fails on Windows:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_the_corpus_contains_a_non_ascii_name(corpus: dict[str, object]) -> None:
+    """The awkward case is present on purpose, not by accident.
+
+    If someone later 'cleans up' the surname list to ASCII, the encoding bug
+    above becomes invisible again and the parser loses its only non-ASCII
+    fixture. This asserts the hazard stays in the corpus.
+    """
+    found = any(
+        any(ord(ch) > 127 for ch in path.read_text(encoding="utf-8")) for path in _x837(corpus)
+    )
+    assert found, "no non-ASCII character anywhere in the 837 corpus"

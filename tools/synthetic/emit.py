@@ -167,10 +167,13 @@ def run(config_path: pathlib.Path):
             datetime.combine(date.fromisoformat(sub_iso), datetime.min.time()),
             newlines=nl,
         )
-        (x837 / f"837P_{sub_iso}_{prac_id}_{payer_id}_{ctrl}.txt").write_text(text)
+        (x837 / f"837P_{sub_iso}_{prac_id}_{payer_id}_{ctrl}.txt").write_text(
+            text, encoding="utf-8"
+        )
         n837 += 1
         (x999 / f"999_{ctrl}.txt").write_text(
-            write_999(receiver["etin"], submitter["etin"], ctrl, True, ctrl)
+            write_999(receiver["etin"], submitter["etin"], ctrl, True, ctrl),
+            encoding="utf-8",
         )
 
     # ---------------- 835 files, batched by payer + check date -----------
@@ -281,7 +284,7 @@ def run(config_path: pathlib.Path):
             now=datetime.combine(date.fromisoformat(adj_iso), datetime.min.time()),
             provider_adjustments=plbs,
         )
-        (x835 / f"835_{adj_iso}_{payer_id}_{ctrl}.txt").write_text(text)
+        (x835 / f"835_{adj_iso}_{payer_id}_{ctrl}.txt").write_text(text, encoding="utf-8")
         n835 += 1
 
     # ---------------- deliberately unbalanced file for quarantine tests ---
@@ -355,7 +358,7 @@ def run(config_path: pathlib.Path):
             check_date=date.fromisoformat(key[1]),
             trace="TRNBAD" + str(ctrl),
         )
-        (x835 / f"835_UNBALANCED_quarantine_test_{ctrl}.txt").write_text(text)
+        (x835 / f"835_UNBALANCED_quarantine_test_{ctrl}.txt").write_text(text, encoding="utf-8")
 
     # ---------------- CSV marts ------------------------------------------
     for c in adjudicated:
@@ -466,7 +469,7 @@ def run(config_path: pathlib.Path):
     def dump(name, rows):
         if not rows:
             return
-        with (csvd / name).open("w", newline="") as f:
+        with (csvd / name).open("w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
             w.writeheader()
             w.writerows(rows)
@@ -508,7 +511,9 @@ def run(config_path: pathlib.Path):
             "Adjudicator.adjudicate(). Do not train a production model on this."
         ),
     }
-    (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
+    (OUT / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, default=str), encoding="utf-8"
+    )
     return manifest
 
 
@@ -529,7 +534,9 @@ def main(argv: list[str] | None = None) -> int:
 
     manifest = run(pathlib.Path(args.config))
     manifest["provenance"] = PROVENANCE
-    (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
+    (OUT / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, default=str), encoding="utf-8"
+    )
 
     print(f"corpus written to {OUT}")
     for name, value in manifest["counts"].items():
