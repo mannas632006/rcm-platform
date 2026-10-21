@@ -1,0 +1,32 @@
+code,code_system,internal_label,specialty,typical_charge,typical_pos,is_em,global_days,requires_auth_commonly
+99213,CPT,office visit est low,Family Medicine,145.0,11,Y,0,N
+99214,CPT,office visit est mid,Family Medicine,210.0,11,Y,0,N
+99215,CPT,office visit est high,Family Medicine,295.0,11,Y,0,N
+99203,CPT,office visit new low,Family Medicine,180.0,11,Y,0,N
+99204,CPT,office visit new mid,Family Medicine,275.0,11,Y,0,N
+99283,CPT,ED visit mid,Emergency,410.0,23,Y,0,N
+99284,CPT,ED visit high,Emergency,620.0,23,Y,0,N
+45378,CPT,colonoscopy dx,Gastroenterology,1250.0,24,N,0,Y
+45380,CPT,colonoscopy biopsy,Gastroenterology,1480.0,24,N,0,Y
+45385,CPT,colonoscopy polypectomy,Gastroenterology,1690.0,24,N,0,Y
+43239,CPT,upper endoscopy biopsy,Gastroenterology,1120.0,24,N,0,Y
+93000,CPT,ecg complete,Cardiology,85.0,11,N,0,N
+93306,CPT,echo complete,Cardiology,720.0,11,N,0,Y
+71046,CPT,chest xray 2 view,Radiology,120.0,11,N,0,N
+72148,CPT,mri lumbar no contrast,Radiology,1450.0,22,N,0,Y
+70450,CPT,ct head no contrast,Radiology,980.0,22,N,0,Y
+80053,CPT,comprehensive metabolic,Laboratory,48.0,11,N,0,N
+85025,CPT,cbc with differential,Laboratory,36.0,11,N,0,N
+83036,CPT,hemoglobin a1c,Laboratory,42.0,11,N,0,N
+36415,CPT,venipuncture,Laboratory,18.0,11,N,0,N
+20610,CPT,joint injection major,Orthopedics,215.0,11,N,0,N
+29881,CPT,knee arthroscopy,Orthopedics,3200.0,24,N,90,Y
+27447,CPT,total knee arthroplasty,Orthopedics,8900.0,21,N,90,Y
+11042,CPT,debridement subcutaneous,Wound Care,310.0,11,N,0,N
+97110,CPT,therapeutic exercise,Physical Therapy,95.0,11,N,0,N
+97140,CPT,manual therapy,Physical Therapy,88.0,11,N,0,N
+90837,CPT,psychotherapy 60 min,Behavioral Health,190.0,11,N,0,Y
+90834,CPT,psychotherapy 45 min,Behavioral Health,155.0,11,N,0,N
+J1885,HCPCS,ketorolac injection,Family Medicine,22.0,11,N,0,N
+J3301,HCPCS,triamcinolone injection,Orthopedics,35.0,11,N,0,N
+A4550,HCPCS,surgical trays,Family Medicine,15.0,11,N,0,N

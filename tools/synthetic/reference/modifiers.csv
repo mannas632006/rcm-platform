@@ -1,0 +1,17 @@
+modifier,kind,meaning,bypasses_ncci,never_auto_apply
+25,pricing,significant separate E/M same day,Y,Y
+59,pricing,distinct procedural service,Y,Y
+XE,pricing,separate encounter,Y,Y
+XS,pricing,separate structure,Y,Y
+XP,pricing,separate practitioner,Y,Y
+XU,pricing,unusual non-overlapping service,Y,Y
+50,pricing,bilateral procedure,N,N
+51,pricing,multiple procedures,N,N
+52,pricing,reduced services,N,N
+76,informational,repeat procedure same physician,N,N
+77,informational,repeat procedure other physician,N,N
+26,pricing,professional component,N,N
+TC,pricing,technical component,N,N
+RT,informational,right side,N,N
+LT,informational,left side,N,N
+GA,informational,waiver of liability on file,N,N

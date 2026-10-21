@@ -1,0 +1,26 @@
+icd10_code,short_label,specialty,sex_restriction,min_age,max_age
+E11.9,type 2 diabetes without complications,Family Medicine,,18,120
+E11.65,type 2 diabetes with hyperglycaemia,Family Medicine,,18,120
+I10,essential hypertension,Family Medicine,,18,120
+E78.5,hyperlipidaemia unspecified,Family Medicine,,18,120
+J06.9,acute upper respiratory infection,Family Medicine,,0,120
+J45.909,asthma uncomplicated,Family Medicine,,0,120
+K21.9,gastro-oesophageal reflux,Gastroenterology,,0,120
+K62.5,haemorrhage of anus and rectum,Gastroenterology,,18,120
+R10.13,epigastric pain,Gastroenterology,,0,120
+Z12.11,screening for colon neoplasm,Gastroenterology,,45,120
+D12.6,benign neoplasm of colon,Gastroenterology,,18,120
+I25.10,coronary artery disease,Cardiology,,30,120
+I48.91,atrial fibrillation unspecified,Cardiology,,30,120
+R07.9,chest pain unspecified,Cardiology,,0,120
+M17.11,unilateral primary osteoarthritis knee,Orthopedics,,30,120
+M54.5,low back pain,Orthopedics,,12,120
+S83.241,tear of medial meniscus right knee,Orthopedics,,12,120
+F32.1,major depressive disorder moderate,Behavioral Health,,12,120
+F41.1,generalised anxiety disorder,Behavioral Health,,12,120
+R51.9,headache unspecified,Emergency,,0,120
+R05.9,cough unspecified,Emergency,,0,120
+L03.115,cellulitis of right lower limb,Wound Care,,0,120
+Z00.00,general adult medical examination,Family Medicine,,18,120
+O09.90,supervision of high risk pregnancy,Family Medicine,F,12,55
+N39.0,urinary tract infection,Family Medicine,,0,120

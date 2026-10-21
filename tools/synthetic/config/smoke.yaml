@@ -1,0 +1,34 @@
+seed: 20260901
+practices: 2
+providers_per_practice: 3
+patients: 200
+encounters: 600
+months: 6
+start_date: '2024-01-01'
+coders: 12
+eligibility_check_rate: 0.82
+auth_obtained_rate: 0.93
+modifier25_correct_rate: 0.89
+late_submission_rate: 0.012
+member_id_error_rate: 0.02
+coverage_termination_rate: 0.06
+secondary_coverage_rate: 0.14
+copy_forward_rate: 0.22
+audit_rate: 0.06
+front_desk_correction_rate: 0.88
+ncci_bypass_correct_rate: 0.86
+base_denial_rate: 0.032
+random_denial_carc_weights:
+  '50': 18
+  '96': 14
+  '16': 22
+  '109': 8
+  '11': 10
+  '119': 6
+  '151': 7
+  '204': 9
+  '252': 6
+resubmission_rate: 0.42
+recoupment_rate: 0.012
+no_newline_file_rate: 0.15
+emit_unbalanced_file: true

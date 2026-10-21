@@ -1,0 +1,16 @@
+rarc_code,short_meaning,pairs_with_carc
+M15,Bundled services not paid separately,97
+M76,Missing or invalid diagnosis,16
+M80,Not covered when performed in the same session,97
+MA04,Secondary cannot be considered without primary info,22
+MA27,Missing or invalid entitlement number or name,140
+MA61,Missing or invalid identification number,16
+MA130,Claim contains incomplete or invalid information,16
+N19,Procedure incidental to the primary procedure,97
+N30,Patient ineligible for this service,27
+N54,Claim inconsistent with pre-certified information,198
+N130,Consult plan benefit documents for restrictions,204
+N290,Missing or invalid rendering provider identifier,16
+N362,Number of days or units exceeds maximum,151
+N522,Duplicate of a claim already processed,18
+N657,Should be billed with the appropriate code,11

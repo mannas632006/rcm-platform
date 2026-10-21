@@ -1,0 +1,53 @@
+# RCM seed data generator configuration.
+#
+# Every rate here is a knob you should tune. The defaults produce a denial mix
+# that is plausible in shape, but the values are NOT measured from real data —
+# calibrate them against published aggregates or, better, your own 835s.
+
+seed: 20260901
+
+# ---- volume -----------------------------------------------------------------
+# Defaults give roughly 60k service lines over 24 months, which clears the
+# 50k floor in DOC-01. Drop encounters to 2000 for a fast smoke run.
+practices: 4
+providers_per_practice: 6
+patients: 4000
+encounters: 34000
+months: 24
+start_date: "2024-01-01"
+coders: 12
+
+# ---- process behaviour ------------------------------------------------------
+eligibility_check_rate: 0.82      # how often eligibility is verified pre-service
+auth_obtained_rate: 0.93          # when auth is required, how often it is obtained
+modifier25_correct_rate: 0.89     # coder applies modifier 25 correctly this often
+late_submission_rate: 0.012       # claims submitted very late -> CARC 29
+member_id_error_rate: 0.020       # corrupted member id -> CARC 140 / 31
+coverage_termination_rate: 0.06   # patients whose coverage ends mid-window
+secondary_coverage_rate: 0.14
+copy_forward_rate: 0.22           # templated notes -> EC-30, feeds Dataset 2
+audit_rate: 0.06
+front_desk_correction_rate: 0.88   # checked eligibility failures fixed pre-billing
+ncci_bypass_correct_rate: 0.86     # coder applies a valid bypass modifier when codes collide                  # charts pulled for coding audit
+
+# ---- adjudication -----------------------------------------------------------
+# Applied AFTER deterministic causes. Keeps the data from being perfectly
+# separable. If a model scores near 1.00 on this dataset, that means the
+# generator is too clean, not that the model is good.
+base_denial_rate: 0.032
+random_denial_carc_weights:
+  "50": 18     # medical necessity
+  "96": 14     # non-covered
+  "16": 22     # missing information (often with no explanatory RARC — EC-59)
+  "109": 8     # not covered by this payer
+  "11": 10     # dx/procedure mismatch
+  "119": 6     # frequency limit
+  "151": 7     # units not supported
+  "204": 9     # not covered under plan
+  "252": 6     # documentation required
+
+# ---- edge case injection (DOC-02 section 13) --------------------------------
+resubmission_rate: 0.42           # EC-65: denied claims corrected and resent
+recoupment_rate: 0.012            # EC-47: paid claims clawed back via PLB
+no_newline_file_rate: 0.15        # X12 files with no line breaks — parsers must cope
+emit_unbalanced_file: true        # one file that will not balance, for quarantine tests

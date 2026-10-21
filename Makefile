@@ -60,7 +60,12 @@ migrate: ## Run Alembic migrations to head
 	$(BIN)/alembic upgrade head
 
 seed: ## Generate and load the synthetic corpus
-	$(PYTHON) -m tools.synthetic.generate --out data/synthetic
+	$(PYTHON) -m tools.synthetic --config tools/synthetic/config/config.yaml
+	$(PYTHON) -m tools.synthetic.validate
+
+seed-smoke: ## Generate the small corpus the tests use
+	$(PYTHON) -m tools.synthetic --config tools/synthetic/config/smoke.yaml
+	$(PYTHON) -m tools.synthetic.validate
 
 openapi: ## Regenerate the OpenAPI schema and the frontend client
 	$(PYTHON) -m rcm.api.export_openapi > frontend/src/api/openapi.json
@@ -84,6 +89,9 @@ test-property: ## Hypothesis property tests
 
 test-integration: ## Integration tests (needs `make up`)
 	$(BIN)/pytest tests/integration -m integration
+
+test-synthetic: ## Generator contract: the corpus contains every edge case M1 needs
+	$(PYTHON) -m pytest tests/unit/test_synthetic_generator.py -q
 
 test-security: ## Security control tests (CLAUDE.md section 6.3)
 	$(BIN)/pytest tests/security -m security

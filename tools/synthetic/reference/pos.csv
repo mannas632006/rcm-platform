@@ -1,0 +1,10 @@
+pos_code,label,facility
+11,Office,N
+12,Home,N
+19,Off campus outpatient hospital,Y
+21,Inpatient hospital,Y
+22,On campus outpatient hospital,Y
+23,Emergency room hospital,Y
+24,Ambulatory surgical centre,Y
+31,Skilled nursing facility,Y
+81,Independent laboratory,N

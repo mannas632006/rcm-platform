@@ -1,0 +1,6 @@
+cas_group_code,meaning,billable_to_patient,usual_action
+CO,"Contractual obligation, provider absorbs",N,"Write off, or appeal if wrongly applied"
+PR,Patient responsibility,Y,Bill the patient
+OA,"Other adjustment, often coordination of benefits",N,Route to secondary or review
+PI,Payer initiated reduction,N,Usually appealable
+CR,Correction and reversal,N,Reverses a prior adjudication

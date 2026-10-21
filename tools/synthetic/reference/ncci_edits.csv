@@ -1,0 +1,11 @@
+column1_code,column2_code,modifier_bypass_allowed,note
+45385,45380,1,polypectomy includes biopsy same lesion
+45385,45378,1,polypectomy includes diagnostic scope
+45380,45378,1,biopsy includes diagnostic scope
+43239,45378,1,"separate scopes, needs distinct site"
+29881,20610,1,injection bundled into arthroscopy
+99214,45385,1,E/M with same-day procedure needs modifier 25
+99213,20610,1,E/M with same-day injection needs modifier 25
+93306,93000,0,"echo includes ecg, no bypass"
+80053,85025,0,"panel components, no bypass"
+27447,29881,0,arthroplasty includes arthroscopy
