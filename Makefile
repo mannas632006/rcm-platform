@@ -84,11 +84,11 @@ typecheck: ## mypy strict
 test-unit: ## Unit tests
 	$(BIN)/pytest tests/unit --cov --cov-report=term-missing
 
-test-property: ## Hypothesis property tests
-	$(BIN)/pytest tests/property
+test-property: ## Hypothesis property tests (empty until M1.1 -- see tools/run_suite.py)
+	$(PYTHON) tools/run_suite.py tests/property --subject src/rcm/ingestion/x12 --milestone M1.1 --pytest-args="-q"
 
-test-integration: ## Integration tests (needs `make up`)
-	$(BIN)/pytest tests/integration -m integration
+test-integration: ## Integration tests (needs `make up`; empty until M3)
+	$(PYTHON) tools/run_suite.py tests/integration --subject src/rcm/domain --milestone M3 --pytest-args="-q -m integration"
 
 test-synthetic: ## Generator contract: the corpus contains every edge case M1 needs
 	$(PYTHON) -m pytest tests/unit/test_synthetic_generator.py -q
