@@ -392,3 +392,72 @@ Demoting `ResourceWarning` would have made this green in a minute. It would also
 have hidden a connection leak in code that will later run inside Celery workers,
 where an abandoned pool per configuration reload exhausts `max_connections` and
 takes the database down for every tenant at once. The warning did its job.
+
+---
+
+## M0.11 — container scan: 46 vulnerabilities, none of them ours
+
+First run of the `build image` job:
+
+```
+rcm-platform:ci (debian 12.11)
+Total: 42 (HIGH: 38, CRITICAL: 4)
+  libgnutls30   CVE-2026-33845  CRITICAL  3.7.9-2+deb12u4  -> 3.7.9-2+deb12u7
+  libssl3       CVE-2026-31789  CRITICAL  3.0.16-1~deb12u1 -> 3.0.19-1~deb12u2
+  openssl       CVE-2026-31789  CRITICAL
+  libkrb5-3, libpam-modules, libpcre2-8-0, libsqlite3-0, gpgv, libcap2 ...
+
+Python (python-pkg)
+Total: 4 (HIGH: 4)
+  setuptools  CVE-2025-47273   70.3.0 -> 78.1.1
+  urllib3     CVE-2026-97687   2.7.0  -> 2.8.0
+  urllib3     CVE-2026-97689
+  msgpack     GHSA-6v7p-g79w   1.1.2  -> 1.2.1
+```
+
+The useful finding is where they were. **Not one is in this project's
+dependency tree.** The Debian CVEs are base-image packages the Dockerfile never
+updated; `setuptools` is the version the base image ships; and `urllib3` and
+`msgpack` are *vendored inside pip*, which no dependency pin can reach. All 46
+were marked `fixed`, so `ignore-unfixed: true` filtered none of them.
+
+**Three causes, three fixes.**
+
+1. *The pinned base tag freezes its Debian packages.* `apt-get update &&
+   apt-get install` leaves everything already present at the versions baked
+   into the tag. The runtime stage now runs `apt-get upgrade -y`.
+
+2. *`build-essential` shipped to production.* A compiler toolchain in the
+   runtime image is both CVE surface and a convenience for anyone who gets
+   execution inside the container. Split into a builder stage that has it and a
+   runtime stage that does not.
+
+3. *`pip` and `setuptools` were in an image that installs nothing.* Both are
+   deleted from the runtime stage, which removes their own vulnerabilities and
+   pip's vendored ones, and removes the ability to install anything into a
+   running container.
+
+**Verified before adopting**, because deleting `pip`, `setuptools` and
+`pkg_resources` breaks some applications:
+
+```
+$ pip install . && rm -rf .../pip .../setuptools .../pkg_resources ...
+$ python -c "from rcm.api.main import create_app; create_app()"
+app imports OK, routes: ['/docs', '/health', '/openapi-version', '/openapi.json']
+uvicorn importable: 0.54.0
+```
+
+The Dockerfile repeats that assertion as a build step, so an image that cannot
+import its own entrypoint fails to build rather than failing to start.
+
+### The trade that was made, not avoided
+
+`apt-get upgrade` means two builds of the same commit can differ. That was
+accepted deliberately: a byte-identical image is worth less than one without a
+remote-code-execution path in its TLS stack, and the reproducibility that
+matters for an audit comes from the lockfile and the image digest recorded at
+release, not from the base layer never changing.
+
+The severity threshold was **not** lowered. Lowering it was the one-line fix
+available, and it would have left the same libraries in the image with the
+report tuned to stop mentioning them.
