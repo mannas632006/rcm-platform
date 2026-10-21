@@ -119,6 +119,28 @@ def get_session() -> Iterator[Session]:
 
 
 def reset_engines() -> None:
-    """Drop cached engines. Tests use this after changing settings."""
+    """Dispose the cached engines and drop them from the cache.
+
+    Disposal has to happen before `cache_clear()`, not instead of it. Clearing
+    the cache alone drops the only reference to an `Engine` whose pool still
+    holds open psycopg connections; nothing then closes them, so the garbage
+    collector does it at interpreter shutdown and psycopg emits
+
+        ResourceWarning: <psycopg.Connection ...> was deleted while still open
+
+    which `filterwarnings = ["error"]` turns into a failed test session after
+    every test has already passed. That is how this surfaced: the integration
+    suite reported "2 passed" and exited 1.
+
+    The leak is not confined to tests. Any process that calls this -- a worker
+    rebuilding its engine after a configuration change, say -- would abandon a
+    live connection pool each time.
+
+    `cache_info().currsize` guards the call: invoking a cached factory to
+    dispose it would otherwise *create* the very engine being discarded.
+    """
+    for engine_factory in (engine, migration_engine):
+        if engine_factory.cache_info().currsize:
+            engine_factory().dispose()
     for cached in (engine, migration_engine, session_factory):
         cached.cache_clear()

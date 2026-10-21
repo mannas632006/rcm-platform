@@ -332,3 +332,63 @@ to make a mistake legible at the call site.
 inherited from the default privileges in `01-roles.sql`. The application never
 reads it and should not be able to write it. Harmless today, worth narrowing
 when M1 adds its own migrations.
+
+---
+
+## M0.4 — an undisposed engine failed the suite after every test passed
+
+The integration job, once it had a database to talk to:
+
+```
+ResourceWarning: <psycopg.Connection object at 0x...> was deleted while
+still open. Please use 'with' or '.close()' to close the connection properly
+
+pytest.PytestUnraisableExceptionWarning: Exception ignored in:
+  <function BaseConnection.__del__ ...>
+
+..                                                      [100%]
+2 passed in 1.19s
+Error: Process completed with exit code 1.
+```
+
+Two tests passed and the session still failed. `filterwarnings = ["error"]`
+promotes the warning, and pytest raises it during `pytest_unconfigure` -- after
+the summary line is printed, which is why the output reads as a pass.
+
+**Cause.** `session_scope()` obtains its engine through an `lru_cache` in
+`rcm.platform.db`, so the engine belongs to the module and no fixture teardown
+reaches it. Its pooled psycopg connections were still open at interpreter
+shutdown and the garbage collector closed them.
+
+`reset_engines()` made it worse rather than better: it called `cache_clear()`
+without disposing, which drops the only reference to an `Engine` whose pool is
+still live. Every call abandoned a connection pool. That is production code --
+a worker rebuilding its engine after a configuration change would leak the same
+way -- so the fix belongs in `db.py`, not in a fixture.
+
+**Fix.**
+
+- `reset_engines()` disposes each cached engine before clearing the cache,
+  guarded by `cache_info().currsize` so that disposing does not instead
+  *create* the engine it is discarding.
+- `tests/conftest.py` gains a session-scoped autouse fixture calling
+  `reset_engines()` on teardown, so any suite touching the database is covered,
+  including ones not written yet.
+
+**Verified against a real Postgres 16**, reproducing the CI failure first and
+then confirming the fix:
+
+```
+before:  2 passed in 1.19s   EXIT: 1     (PytestUnraisableExceptionWarning)
+after:   2 passed in 0.40s   EXIT: 0
+
+tests/unit      76 passed
+tests/security  42 passed    (incl. test_append_only_audit.py)
+```
+
+### Why the warning is left as an error
+
+Demoting `ResourceWarning` would have made this green in a minute. It would also
+have hidden a connection leak in code that will later run inside Celery workers,
+where an abandoned pool per configuration reload exhausts `max_connections` and
+takes the database down for every tenant at once. The warning did its job.

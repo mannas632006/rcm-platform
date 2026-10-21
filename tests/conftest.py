@@ -19,6 +19,25 @@ from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import OperationalError
 
 from rcm.platform.config import get_settings
+from rcm.platform.db import reset_engines
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _dispose_cached_engines() -> Iterator[None]:
+    """Close the engines `rcm.platform.db` caches, at the end of the session.
+
+    `session_scope()` builds its engine through an `lru_cache`, so it belongs to
+    the module rather than to any fixture and no fixture teardown reaches it.
+    Left alone, its pooled connections are closed by the garbage collector at
+    interpreter shutdown, psycopg warns that a connection was deleted while
+    still open, and `filterwarnings = ["error"]` turns that into a failed
+    session after every test has passed.
+
+    Autouse and session-scoped so it applies to any suite that touches the
+    database, including ones not written yet.
+    """
+    yield
+    reset_engines()
 
 
 def _engine(url: str) -> Engine:
