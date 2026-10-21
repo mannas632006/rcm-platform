@@ -261,6 +261,18 @@ class Remittance:
     #: deposit that appears on the bank statement.
     trace_number: str
     payer_name: str
+    #: PD-8: the payer's *identifier*, which is what identity keys on. A name
+    #: is not an identifier -- the same payer arrives as "BCBS TX", "Blue Cross
+    #: Texas" and "BCBSTX", and keying on the text produces three payers with
+    #: three denial rates, each internally consistent and all wrong.
+    #:
+    #: Taken in order of authority: REF*2U in the payer loop is the payer
+    #: identification number proper; REF*EV in the header is the identifier the
+    #: sender used for reassociation; TRN03 is the originating company
+    #: identifier, which every 835 carries. Empty only if a file has none of
+    #: the three, in which case the caller falls back to the interchange
+    #: sender.
+    payer_identifier: str
     payee_name: str
     payee_npi: str
     claims: tuple[ClaimPayment, ...]
@@ -481,6 +493,11 @@ def parse_835(transaction: TransactionSet, separators: Separators) -> Remittance
     payer_name = ""
     payee_name = ""
     payee_npi = ""
+    #: Collected separately and resolved by precedence at the end, because the
+    #: segments arrive in whatever order the sender chose.
+    payer_reference_2u = ""
+    payer_reference_ev = ""
+    originating_company_id = ""
 
     claims: list[_ClaimBuilder] = []
     claim: _ClaimBuilder | None = None
@@ -499,6 +516,14 @@ def parse_835(transaction: TransactionSet, separators: Separators) -> Remittance
 
         elif tag == "TRN":
             trace_number = segment.get(2).strip()
+            originating_company_id = segment.get(3).strip()
+
+        elif tag == "REF" and claim is None:
+            qualifier = segment.get(1).strip()
+            if qualifier == "2U" and party == "PR":
+                payer_reference_2u = segment.get(2).strip()
+            elif qualifier == "EV" and not payer_reference_ev:
+                payer_reference_ev = segment.get(2).strip()
 
         elif tag == "DTM" and claim is None and line is None:
             # DTM*405 in the header is the production date of the payment, and
@@ -615,6 +640,7 @@ def parse_835(transaction: TransactionSet, separators: Separators) -> Remittance
         payment_date=payment_date,
         trace_number=trace_number,
         payer_name=payer_name,
+        payer_identifier=(payer_reference_2u or payer_reference_ev or originating_company_id),
         payee_name=payee_name,
         payee_npi=payee_npi,
         claims=tuple(c.build() for c in claims),

@@ -92,24 +92,29 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -e ".[dev]"
       - name: unit
-        run: pytest tests/unit -q --cov=src/rcm --cov-report=xml --cov-report=term-missing
+        run: pytest tests/unit -q --cov --cov-report=term-missing
+        env:
+          COVERAGE_FILE: .coverage.unit
       - name: property (Hypothesis)
         # Through run_suite because the property tests belong to the X12 parser
         # (M1.1), which does not exist yet, and pytest exits 5 on an empty
         # suite. run_suite passes only while the subject is still a stub, and
         # fails the moment the parser lands without its tests -- so this is a
         # deferral with a deadline, not a disabled gate.
-        run: python tools/run_suite.py tests/property --subject src/rcm/ingestion/x12 --milestone M1.1 --pytest-args="-q"
-      - name: coverage floor on the high-care packages
-        # CLAUDE.md section 7.1: 90% line coverage on decision, ingestion.x12 and
-        # domain. Enforced only once those packages contain code -- an empty
-        # package trivially reports 100% and the gate would mean nothing.
-        run: python tools/check_coverage_floor.py coverage.xml
+        run: python tools/run_suite.py tests/property --subject src/rcm/ingestion/x12 --milestone M1.1 --pytest-args="-q --cov --cov-report="
+        env:
+          COVERAGE_FILE: .coverage.property
+      # The floor itself is checked in the `coverage-floor` job, once every
+      # suite's data has been combined. See that job for why.
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: coverage-xml
-          path: coverage.xml
+          name: coverage-data-unit
+          path: .coverage.*
+          # The data files are dotfiles and upload-artifact skips those by
+          # default; without this the combine job would silently receive
+          # nothing and the floor would be computed from the integration
+          # suite alone.
+          include-hidden-files: true
           retention-days: 7
 
   # ---------------------------------------------------------------- stage 5
@@ -166,9 +171,19 @@ jobs:
       - name: integration
         # Same arrangement as the property suite: the integration tests arrive
         # with the claim lifecycle in M3.
-        run: python tools/run_suite.py tests/integration --subject src/rcm/domain --milestone M3 --pytest-args="-q -m integration"
+        run: python tools/run_suite.py tests/integration --subject src/rcm/domain --milestone M3 --pytest-args="-q -m integration --cov --cov-report="
+        env:
+          COVERAGE_FILE: .coverage.integration
       - name: security controls (CLAUDE.md section 6.3)
-        run: pytest tests/security -q
+        run: pytest tests/security -q --cov --cov-report=
+        env:
+          COVERAGE_FILE: .coverage.security
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data-integration
+          path: .coverage.*
+          include-hidden-files: true
+          retention-days: 7
 
   # -------------------------------------------------- stages 6-7: contract
   test-contract:
@@ -195,6 +210,63 @@ jobs:
             cp openapi.generated.json openapi.json
             echo "::notice::openapi.json created; commit it to lock the contract"
           fi
+
+  # ------------------------------------------------- stage 5b: coverage floor
+  coverage-floor:
+    name: coverage floor (all suites combined)
+    runs-on: ubuntu-latest
+    needs: [test-integration]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-data-*
+          merge-multiple: true
+      - name: assert every suite's data arrived
+        # Without this, a renamed artifact or a dotfile skipped by
+        # upload-artifact would leave the floor measuring a subset of the
+        # suites and quietly passing. CLAUDE.md section 7.5: prove the negative --
+        # a gate that cannot tell "covered" from "not measured" is not a gate.
+        run: |
+          missing=""
+          for suite in unit property integration security; do
+            if [ ! -f ".coverage.$suite" ]; then missing="$missing $suite"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::coverage data missing for:$missing"
+            ls -la .coverage.* || true
+            exit 1
+          fi
+          ls -la .coverage.*
+      - name: combine
+        run: coverage combine --keep .coverage.unit .coverage.property .coverage.integration .coverage.security
+      - name: coverage floor on the high-care packages
+        # CLAUDE.md section 7.1: 90% line coverage on decision, ingestion.x12 and
+        # domain. Enforced only once those packages contain code -- an empty
+        # package trivially reports 100% and the gate would mean nothing.
+        #
+        # Combined rather than per-suite because the guarded packages are not
+        # all reachable from one suite. rcm.domain is table definitions and
+        # constraints, exercised by the integration and security suites against
+        # a real Postgres; the unit job has no database, so measuring it alone
+        # reported rcm.domain at 0% while all 138 of its statements were in
+        # fact covered. The threshold and the guarded list are unchanged.
+        run: |
+          coverage xml -o coverage.xml
+          coverage report --show-missing --skip-covered
+          python tools/check_coverage_floor.py coverage.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 7
 
   # ---------------------------------------------------------------- stage 8
   security:
@@ -279,7 +351,8 @@ jobs:
   verify:
     name: verify (the gate)
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test-unit, test-integration, test-contract, security, build, scaffold-guard]
+    needs: [lint, typecheck, test-unit, test-integration, coverage-floor,
+            test-contract, security, build, scaffold-guard]
     steps:
       - name: all gates green
         run: echo "make verify equivalent passed"

@@ -11,6 +11,18 @@ from logging.config import fileConfig
 
 from alembic import context
 
+# Importing a model module is what registers its tables on Base.metadata.
+# Autogenerate compares the database against whatever is registered here, so a
+# model not imported is a model Alembic will cheerfully propose dropping.
+from rcm.domain.payer import Payer, PayerAlias  # noqa: F401 - registers metadata
+from rcm.domain.remittance import (  # noqa: F401 - registers metadata
+    ClaimPayment,
+    ProviderAdjustment,
+    RawFile,
+    Remittance,
+    RemittanceAdjustment,
+    RemittanceServiceLine,
+)
 from rcm.platform.audit import AuditEvent, DecisionRecord  # noqa: F401 - registers metadata
 from rcm.platform.db import Base, migration_engine
 

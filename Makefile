@@ -26,7 +26,7 @@ COMPOSE := docker compose
 .DEFAULT_GOAL := help
 .PHONY: help venv install up down migrate seed openapi \
         lint typecheck test test-unit test-property test-integration \
-        test-security test-contract verify clean frontend-install frontend-lint
+        test-security test-contract coverage verify clean frontend-install frontend-lint
 
 help: ## List targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -81,28 +81,46 @@ lint: ## Ruff, import boundaries, frontend lint
 typecheck: ## mypy strict
 	$(BIN)/mypy
 
+# Every suite records coverage to its own data file. `make coverage` combines
+# them before the floor is checked: rcm.domain is almost entirely ORM table
+# definitions, exercised by the integration and security suites against a real
+# database, so measuring the unit suite alone reported it at 0% while every one
+# of its statements was in fact covered. Per-suite files also keep each run
+# honest -- pytest-cov erases its own file at the start, so a deleted test stops
+# counting instead of lingering in an appended total.
 test-unit: ## Unit tests
-	$(BIN)/pytest tests/unit --cov --cov-report=term-missing
+	COVERAGE_FILE=.coverage.unit $(BIN)/pytest tests/unit --cov --cov-report=term-missing
 
 test-property: ## Hypothesis property tests (empty until M1.1 -- see tools/run_suite.py)
-	$(PYTHON) tools/run_suite.py tests/property --subject src/rcm/ingestion/x12 --milestone M1.1 --pytest-args="-q"
+	COVERAGE_FILE=.coverage.property $(PYTHON) tools/run_suite.py tests/property --subject src/rcm/ingestion/x12 --milestone M1.1 --pytest-args="-q --cov --cov-report="
 
 test-integration: ## Integration tests (needs `make up`; empty until M3)
-	$(PYTHON) tools/run_suite.py tests/integration --subject src/rcm/domain --milestone M3 --pytest-args="-q -m integration"
+	COVERAGE_FILE=.coverage.integration $(PYTHON) tools/run_suite.py tests/integration --subject src/rcm/domain --milestone M3 --pytest-args="-q -m integration --cov --cov-report="
 
 test-synthetic: ## Generator contract: the corpus contains every edge case M1 needs
 	$(PYTHON) -m pytest tests/unit/test_synthetic_generator.py -q
 
 test-security: ## Security control tests (CLAUDE.md section 6.3)
-	$(BIN)/pytest tests/security -m security
+	COVERAGE_FILE=.coverage.security $(BIN)/pytest tests/security -m security --cov --cov-report=
 
 test: test-unit test-property test-integration test-security ## All Python suites
 
+coverage: ## Combine every suite's coverage and enforce the floor (CLAUDE.md section 7.1)
+	@rm -f .coverage
+	@data=$$(ls .coverage.* 2>/dev/null || true); \
+	 if [ -z "$$data" ]; then \
+	   echo "no per-suite coverage data -- run 'make test' first"; exit 1; \
+	 fi; \
+	 echo "combining: $$data"; \
+	 $(BIN)/coverage combine --keep $$data
+	$(BIN)/coverage xml -o coverage.xml
+	$(PYTHON) tools/check_coverage_floor.py coverage.xml
+
 # The order mirrors CI (CLAUDE.md section 7.4). Fail fast: .SHELLFLAGS sets -e, and each
 # recipe line is a separate shell, so the first failure stops the target.
-verify: lint typecheck test ## THE GATE: lint + types + every suite
+verify: lint typecheck test coverage ## THE GATE: lint + types + every suite + the coverage floor
 	@echo ""
 	@echo "verify: PASS"
 
 clean:
-	rm -rf .pytest_cache .mypy_cache .ruff_cache htmlcov .coverage
+	rm -rf .pytest_cache .mypy_cache .ruff_cache htmlcov .coverage .coverage.* coverage.xml

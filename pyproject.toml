@@ -152,6 +152,14 @@ filterwarnings = ["error"]
 [tool.coverage.run]
 branch = true
 source = ["src/rcm"]
+# Each suite writes its own data file (COVERAGE_FILE=.coverage.<suite>) and
+# `coverage combine` merges them before the floor is checked, because the three
+# guarded packages are not all exercised by one suite -- the ORM models in
+# rcm.domain are driven by the integration and security suites, which run
+# against a database the unit job does not have. Recording paths relative to the
+# repository root lets those files combine even when they were produced in
+# different CI jobs or checkouts.
+relative_files = true
 
 [tool.coverage.report]
 exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]
