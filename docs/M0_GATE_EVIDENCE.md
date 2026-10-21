@@ -272,3 +272,63 @@ Restored: `11 passed`.
 `test_the_corpus_contains_a_non_ascii_name` asserts the hazard itself stays in
 the corpus, so that "tidying" the surname list back to ASCII cannot silently
 remove the only fixture that exercises this path.
+
+---
+
+## M0.11 — the CI database did not match the local one
+
+First run of the integration job:
+
+```
+psql:infra/postgres/01-roles.sql:11: ERROR:  role "rcm_migrator" already exists
+Error: Process completed with exit code 3.
+```
+
+**Cause.** The workflow named the Postgres service container's superuser
+`rcm_migrator`, so `initdb` created that role before anything else ran, and
+`01-roles.sql` then collided trying to create it. `docker-compose.yml` uses
+`postgres` as the superuser and mounts the same script into
+`/docker-entrypoint-initdb.d`, so the two environments were set up differently
+from the start.
+
+That matters more than a failing step. ADR-0001 says the local stack and CI run
+the same Postgres so the append-only guarantee is tested against what developers
+actually use, and DR-06 is enforced by **grants** -- which depend on which role
+owns what. A CI database assembled differently from the local one is not testing
+the same control.
+
+**Fix.** The service container now mirrors compose exactly: superuser
+`postgres`, same image tags (`postgres:16.10-alpine`, `redis:7.4-alpine`), and
+`01-roles.sql` run as `postgres`, creating both roles as it does locally.
+
+**Verified against a real Postgres 16**, not reasoned about:
+
+```
+$ psql ... -v ON_ERROR_STOP=1 -f infra/postgres/01-roles.sql
+CREATE ROLE / CREATE ROLE / ALTER DATABASE / ALTER SCHEMA / GRANT
+ALTER DEFAULT PRIVILEGES / ALTER DEFAULT PRIVILEGES          exit 0
+
+$ alembic upgrade head
+Running upgrade      -> 0001, Audit and decision records
+Running upgrade 0001 -> 0002, Make the audit tables append-only   exit 0
+
+$ select privileges granted to rcm_app
+audit_event      INSERT,SELECT
+decision_record  INSERT,SELECT
+
+$ UPDATE audit_event SET action='tampered';
+ERROR:  permission denied for table audit_event
+$ DELETE FROM decision_record;
+ERROR:  permission denied for table decision_record
+```
+
+The app role holds no UPDATE or DELETE on either table, and the database refuses
+both. That is the control; the ORM guard in `rcm.platform.audit` is only there
+to make a mistake legible at the call site.
+
+### Noted, not fixed
+
+`rcm_app` is granted `SELECT, INSERT, UPDATE, DELETE` on `alembic_version`,
+inherited from the default privileges in `01-roles.sql`. The application never
+reads it and should not be able to write it. Harmless today, worth narrowing
+when M1 adds its own migrations.
