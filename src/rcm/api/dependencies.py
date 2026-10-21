@@ -39,6 +39,15 @@ def current_principal(
     """
     if credentials is None or not credentials.credentials:
         raise AuthenticationFailedError()
+
+    # The idempotency middleware verifies the same token before routing, to
+    # namespace its keys per principal. Reuse that result rather than verifying
+    # twice -- on the JWKS path a second verification is a second cache lookup
+    # and, on a cold key, a second network round trip.
+    cached = getattr(request.state, "principal", None)
+    if isinstance(cached, Principal):
+        return cached
+
     principal = principal_from_token(credentials.credentials)
     request.state.principal = principal
     return principal

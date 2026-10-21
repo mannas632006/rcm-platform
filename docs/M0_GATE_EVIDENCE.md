@@ -161,3 +161,66 @@ $ python -m tools.synthetic.validate
 279 multi-CAS lines is the number that matters most: it is the case that
 separates service-line grain from adjustment grain (PD-6), and a parser that
 merges adjustments passes every other test until it meets one.
+
+---
+
+## PD-14 / PD-20 — the replay cache is namespaced per principal
+
+Found during review of the M0 commit, after the gate above was first reported.
+
+**The defect.** `IdempotencyMiddleware` namespaced its Redis keys by reading
+`request.state.principal`. ASGI middleware runs before routing, so the
+`current_principal` dependency had not executed and that attribute was never
+set. Every key therefore landed in a single `"anonymous"` namespace, and two
+tenants choosing the same `Idempotency-Key` replayed each other's responses:
+
+```
+Alice (tenant A) POST -> 200 {"served_to":"alice@tenant-a","claim":"CLM-A-SECRET"}
+Bob   (tenant B) POST -> 200 {"served_to":"alice@tenant-a","claim":"CLM-A-SECRET"}
+
+>>> CROSS-TENANT LEAK: Bob received Alice's response body.
+```
+
+This is the disclosure PD-20 exists to prevent, arriving through a route PD-20
+does not cover: the scoping control guards queries, and nothing queried anything
+-- the response was served from cache. Keys derived from a batch date or a run
+number collide across tenants by construction, so this needed no adversary.
+
+**Why the existing tests missed it.** `test_keys_are_namespaced_per_principal`
+called `record_key()` directly with two different subjects and passed. The
+helper was correct; the middleware was feeding it a constant. A unit test of a
+helper cannot see what its caller passes.
+
+**Fix.** The middleware verifies the bearer token itself and namespaces on the
+resulting subject, caching the `Principal` on `request.state` so the dependency
+does not verify twice. An unverifiable token yields `"anonymous"`, which is safe
+because the request is about to be rejected and a non-2xx response releases the
+reservation rather than storing it.
+
+**Control removed:** `_principal_subject` returning `"anonymous"` unconditionally.
+
+```
+$ pytest tests/security/test_idempotency.py -q
+
+FAILED tests/security/test_idempotency.py::test_one_tenant_cannot_replay_another_tenants_response
+FAILED tests/security/test_idempotency.py::test_the_same_principal_still_replays
+FAILED tests/security/test_idempotency.py::test_a_conflict_cannot_reveal_another_tenants_key
+3 failed, 12 passed
+```
+
+**Control restored:** `15 passed`.
+
+The three replacement tests drive a real application with real tokens rather
+than calling the helper, which is the only framing that could have caught this.
+`test_a_conflict_cannot_reveal_another_tenants_key` covers the quieter half of
+the same defect: under a shared namespace the 409 response is an oracle for
+which keys another tenant has already used.
+
+### A test-only trap worth recording
+
+The first version of those tests returned 422 against a correct implementation.
+This module uses `from __future__ import annotations`, so FastAPI resolves a
+handler's annotations against **module** globals; `Principal`, imported inside
+the fixture, was not among them, and FastAPI fell back to treating the parameter
+as a request body field. Any name used in a route signature must be imported at
+module level in a test file that postpones annotation evaluation.

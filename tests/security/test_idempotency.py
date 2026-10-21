@@ -16,12 +16,20 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
+# Imported at module level, not inside the fixtures that use them: this module
+# has `from __future__ import annotations`, so FastAPI resolves a handler's
+# annotations against module globals. A name imported inside a fixture is not
+# there, and FastAPI then treats the unresolved parameter as a request body
+# field -- the route answers 422 instead of running.
+from rcm.api.dependencies import current_principal
+from rcm.platform.auth import Principal, Role, issue_dev_token
 from rcm.platform.config import Settings
 from rcm.platform.errors import PlatformError
 from rcm.platform.idempotency import (
@@ -255,3 +263,136 @@ def test_stored_response_round_trips() -> None:
         status_code=201, body=json.dumps({"id": 1}).encode(), media_type="application/json"
     )
     assert StoredResponse.from_json(original.to_json()) == original
+
+
+# ---------------------------------------------------------------------------
+# Cross-tenant isolation of the replay cache
+# ---------------------------------------------------------------------------
+#
+# These exercise the middleware through a real app with real tokens. The
+# `record_key` unit test above cannot catch what they catch: it calls the
+# namespacing helper directly, so it passed while the middleware was feeding
+# that helper the same constant for every caller.
+
+
+@pytest.fixture
+def auth_settings() -> Settings:
+    return Settings(
+        environment="ci",
+        dev_jwt_secret=SecretStr("ci-only-test-signing-key-32bytes"),
+        idempotency_key_ttl_seconds=3600,
+    )
+
+
+@pytest.fixture
+def tenant_client(auth_settings: Settings) -> TestClient:
+    """An app whose handler echoes which principal it served."""
+    app = FastAPI()
+    store = IdempotencyStore(FakeRedis(), ttl_seconds=3600)  # type: ignore[arg-type]
+    app.add_middleware(IdempotencyMiddleware, store=store, settings=auth_settings)
+
+    @app.exception_handler(PlatformError)
+    async def _problem(_request: Any, exc: PlatformError) -> Any:
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=exc.status, content=exc.to_problem())
+
+    @app.post("/claims")
+    async def submit(
+        payload: dict[str, Any],
+        principal: Annotated[Principal, Depends(current_principal)],
+    ) -> dict[str, Any]:
+        return {"served_to": principal.subject, "claim": payload.get("claim")}
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _token(settings: Settings, subject: str) -> str:
+    return issue_dev_token(
+        subject=subject,
+        roles=[Role.AR_SPECIALIST],
+        client_ids=[uuid.uuid4()],
+        settings=settings,
+    )
+
+
+@pytest.mark.invariant
+def test_one_tenant_cannot_replay_another_tenants_response(
+    tenant_client: TestClient, auth_settings: Settings
+) -> None:
+    """The regression test for a cross-tenant disclosure via the replay cache.
+
+    Two tenants independently choosing the same `Idempotency-Key` -- which is
+    likely, because keys are often derived from a batch date or a run number --
+    must not see each other's responses. Before the middleware authenticated
+    the caller itself, the second tenant received the first tenant's stored
+    response body verbatim.
+    """
+    shared_key = "batch-2026-10-21-001"
+    body = {"claim": "CLM-A-CONFIDENTIAL"}
+
+    alice = tenant_client.post(
+        "/claims",
+        json=body,
+        headers={
+            IDEMPOTENCY_HEADER: shared_key,
+            "Authorization": f"Bearer {_token(auth_settings, 'alice@tenant-a')}",
+        },
+    )
+    bob = tenant_client.post(
+        "/claims",
+        json=body,
+        headers={
+            IDEMPOTENCY_HEADER: shared_key,
+            "Authorization": f"Bearer {_token(auth_settings, 'bob@tenant-b')}",
+        },
+    )
+
+    assert alice.json()["served_to"] == "alice@tenant-a"
+    assert bob.json()["served_to"] == "bob@tenant-b", (
+        "tenant B was served tenant A's stored response: the replay cache is "
+        "not namespaced per principal"
+    )
+    assert bob.headers.get(REPLAYED_HEADER) is None, "tenant B's request was answered from cache"
+
+
+def test_the_same_principal_still_replays(
+    tenant_client: TestClient, auth_settings: Settings
+) -> None:
+    """Namespacing must not break idempotency for the caller it is meant to serve."""
+    token = _token(auth_settings, "alice@tenant-a")
+    headers = {IDEMPOTENCY_HEADER: "same-key", "Authorization": f"Bearer {token}"}
+
+    first = tenant_client.post("/claims", json={"claim": "CLM-1"}, headers=headers)
+    second = tenant_client.post("/claims", json={"claim": "CLM-1"}, headers=headers)
+
+    assert first.json() == second.json()
+    assert second.headers.get(REPLAYED_HEADER) == "true"
+
+
+def test_a_conflict_cannot_reveal_another_tenants_key(
+    tenant_client: TestClient, auth_settings: Settings
+) -> None:
+    """Reusing a key with a different body is a 409 only within one principal.
+
+    Shared namespacing would turn that 409 into an oracle: a caller could
+    discover which keys another tenant had already used.
+    """
+    key = "batch-2026-10-21-002"
+    alice_headers = {
+        IDEMPOTENCY_HEADER: key,
+        "Authorization": f"Bearer {_token(auth_settings, 'alice@tenant-a')}",
+    }
+    bob_headers = {
+        IDEMPOTENCY_HEADER: key,
+        "Authorization": f"Bearer {_token(auth_settings, 'bob@tenant-b')}",
+    }
+
+    tenant_client.post("/claims", json={"claim": "CLM-A"}, headers=alice_headers)
+
+    def post(body: str, headers: dict[str, str]) -> int:
+        return tenant_client.post("/claims", json={"claim": body}, headers=headers).status_code
+
+    assert post("CLM-A", alice_headers) == 200, "Alice replays her own call"
+    assert post("CLM-OTHER", alice_headers) == 409, "a different body under her key conflicts"
+    assert post("CLM-B", bob_headers) == 200, "Bob's identical key is a separate namespace"

@@ -36,7 +36,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Any, Final
+from typing import Final
 
 import redis.asyncio as aioredis
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -213,15 +213,40 @@ async def _read_body(response: Response) -> bytes:
     return b"".join(sections)
 
 
-def _principal_subject(request: Any) -> str:
-    """The principal's subject, or a safe placeholder before authentication.
+def _principal_subject(request: Request, settings: Settings) -> str:
+    """Identify the caller, for key namespacing.
 
-    Unauthenticated mutating requests are rejected by the auth dependency a
-    moment later; scoping their keys under a shared namespace for those few
-    milliseconds is harmless and avoids a second failure mode here.
+    This middleware has to authenticate the request *itself*. Reading
+    `request.state.principal` does not work: ASGI middleware runs before
+    routing, so the `current_principal` dependency has not executed yet and the
+    attribute is always absent. An earlier version did exactly that, every key
+    landed in a shared "anonymous" namespace, and two tenants using the same
+    key value replayed each other's responses -- a cross-tenant disclosure
+    through the idempotency cache, which is the leak PD-20 exists to prevent
+    arriving by a route PD-20 does not cover.
+
+    The verified principal is cached on `request.state` so the dependency does
+    not verify the same token a second time.
+
+    An unverifiable token yields `"anonymous"`, which is safe: the request is
+    about to be rejected by the auth dependency, the response will not be 2xx,
+    and a non-2xx response releases the reservation rather than storing it.
     """
-    principal = getattr(request.state, "principal", None)
-    return str(getattr(principal, "subject", "anonymous"))
+    from rcm.platform.auth import principal_from_token
+    from rcm.platform.errors import AuthenticationFailedError
+
+    header = request.headers.get("authorization", "")
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return "anonymous"
+
+    try:
+        principal = principal_from_token(token, settings)
+    except AuthenticationFailedError:
+        return "anonymous"
+
+    request.state.principal = principal
+    return principal.subject
 
 
 class IdempotencyMiddleware(BaseHTTPMiddleware):
@@ -296,7 +321,11 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
 
         body = await request.body()
         request_fingerprint = fingerprint(request.method, request.url.path, body)
-        key = record_key(principal_subject=_principal_subject(request), idempotency_key=key_header)
+        settings = self._settings_or_default()
+        key = record_key(
+            principal_subject=_principal_subject(request, settings),
+            idempotency_key=key_header,
+        )
         store = await self._store_or_default()
 
         stored = await store.reserve(key, request_fingerprint)
