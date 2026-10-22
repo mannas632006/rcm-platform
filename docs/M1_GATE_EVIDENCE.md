@@ -5,8 +5,8 @@ permanently. Slow down here."*
 
 This file covers M1.1 (tokenizer and envelope), M1.2 (835 parser with CAS
 unrolling), M1.3 (balance assertion and quarantine), M1.4 (RAW archive before
-parse) and M1.8 (CORE schema and loaders). M1.5–M1.7, M1.9 and M1.10 are not in
-this change.
+parse), M1.5 (837 generator and parser) and M1.8 (CORE schema and loaders).
+M1.6, M1.7, M1.9 and M1.10 are not in this change.
 
 ---
 
@@ -436,24 +436,183 @@ asked to do, and that is a decision rather than something to slip in.
 
 ---
 
+## M1.5 — the round trip, and what a round trip does not prove
+
+The acceptance condition is *"generate → parse → equals source claim"*. Stated
+as a property rather than a fixture, over arbitrary claims:
+
+```
+test_generate_parse_equals_source_claim            300 examples
+test_the_round_trip_is_stable                      300 examples
+test_the_resubmission_chain_survives_the_round_trip 300 examples
+test_no_modifier_is_ever_added                     300 examples
+```
+
+`test_the_round_trip_is_stable` is the one that earns its place. A round trip
+that converges only on the second pass is a round trip with a defect that
+happens to cancel; asserting `build(parse(build(x))) == build(x)` catches an
+element the generator writes and the parser ignores, which plain equality of
+claims does not.
+
+But a round trip is self-agreement, and both halves of one module can share a
+misreading of the format and reproduce it perfectly. So the parser is also
+checked against 325 files written by `tools/synthetic/x12.py` — written first,
+sharing no code — against the CSVs that generator wrote from the claim objects
+*before* serialising them:
+
+```
+claim object ---> X12 text ---> parsed claim
+         \----> CSV row ----------^
+```
+
+```
+files                   325      transactions          325
+claims                  616      service lines        1018
+diagnoses               972      modifiers             222
+resubmissions            16      parse failures          0
+round-trip failures       0      header mismatches       0
+                                 line mismatches         0
+```
+
+Compared claim by claim and line by line, never in totals. Two offsetting
+errors cancel in a sum, which the 835 corpus test learned the expensive way.
+Every count equals the generator's manifest: 616 claims, 1018 lines, 16
+resubmissions.
+
+### No uncaught exception on any input
+
+The same contract the 835 parser is held to (CLAUDE.md section 7.1), because an
+unnamed exception cannot be quarantined — DR-10 requires a quarantined file to
+name the assertion it failed.
+
+```
+EDI-shaped text, 3000 examples          named_refusal 3000   UNNAMED 0
+slices of a valid generated 837, 3000   named_refusal 3000   UNNAMED 0
+```
+
+Zero accidental successes in either probe, which is what makes the numbers
+worth printing: a fuzz suite that quietly parses a third of its inputs is
+measuring something other than refusal.
+
+### Nine controls, each removed once
+
+```
+PD-7   generator drops REF*F8                      CAUGHT
+PD-7   parser ignores REF*F8                       CAUGHT
+       diagnoses sorted instead of kept in order   CAUGHT
+       delimiter in data no longer refused         CAUGHT
+PD-18  dependent loop silently read as subscriber  CAUGHT
+       N3/N4 dispatched on tag alone               CAUGHT
+       modifiers sorted instead of transcribed     CAUGHT
+       generator tidies modifier order             CAUGHT
+       SE segment count off by one                 CAUGHT
+```
+
+The source was restored from a copy afterwards and `git diff` on it is empty.
+
+### A test that could not fail
+
+The modifier mutation did **not** fail on the first run:
+
+```
+       modifiers sorted instead of transcribed     NOT CAUGHT -- test is vacuous
+```
+
+Two reasons, both worth recording. The fixture asserting modifier order used
+`HC:99213:25:59`, and `("25", "59")` sorts to itself, so a parser that sorted
+its modifiers passed it. And the corpus could not cover the gap either:
+
+```
+corpus lines with >= 2 modifiers : 0
+```
+
+All 222 modifiers in the corpus sit alone on their line, so modifier *order* is
+not exercised by the corpus at any volume. The fixture now uses `59:25:76`,
+which does not sort to itself, and a second test carries that order through the
+generator as well. Both mutations are caught.
+
+This is the argument for prove-the-negative in one example. The test existed,
+named the right invariant, passed, and verified nothing.
+
+### Two findings from reading rather than running
+
+**`PRV*BI` is not the rendering provider.** The first corpus comparison
+reported 19 taxonomy mismatches, which looked like a parser defect. It was the
+comparison that was wrong: `PRV*BI*PXC` sits in loop 2000A and carries the
+*billing* provider's taxonomy, written once per file, while
+`claim_headers.csv` records a per-claim `taxonomy_code` — the *rendering*
+provider's specialty, which belongs in loop 2310B (`PRV*PE`) and which the
+synthetic generator does not emit. Rendering-provider specialty is therefore
+not recoverable from these files at all, and anything needing it must read the
+CSV. `test_taxonomy_is_the_billing_providers_not_the_rendering_providers`
+asserts both halves of that, including that the CSV genuinely disagrees, so
+that if the corpus ever gains loop 2310B the test fails and the comparison can
+be tightened.
+
+**X12 has no escape mechanism.** A `*` inside a surname ends the element, and
+every element after it shifts by one. The file stays syntactically valid and
+describes a different claim, so nothing downstream raises. The only two options
+are to strip the character or to refuse; the generator refuses, because
+silently rewriting a patient's name to make a file well formed is a worse
+outcome than a submission that stops and says why.
+
+```
+test_a_delimiter_in_data_is_refused_not_silently_corrupted   300 examples
+```
+
+### Refused rather than guessed
+
+An `HL*23` dependent loop — the patient is someone other than the subscriber —
+raises the new `UnsupportedX12Error` rather than being read with the
+subscriber's demographics. The result of guessing would be a well-formed claim
+about the wrong patient, which no later stage could detect because nothing
+about it looks wrong.
+
+The error is deliberately distinct from `MalformedX12Error`: the two mean
+opposite things to whoever receives the alert. A malformed file is the sender's
+defect and the fix is to ask them to resend; an unsupported one is our gap.
+
+Adding it immediately failed a gate built in M0:
+
+```
+AssertionError: undocumented error codes: ['unsupported-x12']
+AssertionError: docs/errors.md is stale. Regenerate:
+      python -m tools.gen_error_docs > docs/errors.md
+```
+
+Which is the error taxonomy requirement (M0.6) doing exactly its job on the
+first new error class added since.
+
+### Shared element parsers
+
+`parse_amount`, `parse_date` and the optional forms moved out of the 835 parser
+into `rcm/ingestion/x12/fields.py`. The 837 parser needs the identical reading
+of money and dates, and a second implementation that rounded or defaulted
+differently would produce a reconciliation failure that looks like a payer
+problem. `parse_quantity` is new and returns `Decimal` rather than `int`,
+because SV104 is legitimately fractional — anaesthesia minutes and drug units —
+and reading it as an integer bills 1.5 units of a drug as 1.
+
+---
+
 ## Full gate at this commit
 
 ```
 lint                 OK
-format               71 files already formatted
-mypy strict          no issues found in 30 source files
+format               76 files already formatted
+mypy strict          no issues found in 32 source files
 module boundaries    3 contracts kept, 0 broken
-unit                 138 passed
-property               9 passed
+unit                 180 passed
+property              17 passed
 integration           22 passed   (against a real Postgres 16)
 security              54 passed   (against a real Postgres 16, as rcm_app)
-coverage floor       rcm/ingestion/x12  97.6%    rcm/domain  100.0%
+coverage floor       rcm/ingestion/x12  97.9%  (900/919)    rcm/domain  100.0%
 prime directives     PD-16, PD-17, S-11, T20 all OK
 later-stage guard    no un-wired stage
 bandit               no medium or high findings
 ```
 
-Invariant tests from CLAUDE.md section 7.2 satisfied by this change:
+Invariant tests from CLAUDE.md section 7.2 satisfied across M1 so far:
 
 ```
 test_cas_group_code_required                tests/security/test_core_constraints.py
@@ -462,7 +621,14 @@ test_service_line_grain_not_collapsed       tests/integration/test_remittance_lo
 test_835_must_balance_or_quarantine         tests/integration/test_remittance_loading.py
 test_raw_archived_before_parse              tests/integration/test_remittance_loading.py
 test_reprocessing_835_is_idempotent         tests/integration/test_remittance_loading.py
+test_resubmission_chains_to_original        tests/unit/test_x12_claim.py
+test_modifier_25_never_auto_applied         tests/unit/test_x12_claim.py
+test_modifier_59_never_auto_applied         tests/unit/test_x12_claim.py
 ```
+
+`test_denial_rate_excludes_resubmissions` is the remaining PD-7 invariant. It
+needs a denial rate to exclude them from, so it lands with M1.9 where the chain
+reaches CORE.
 
 ### Still open
 
@@ -472,14 +638,19 @@ test_reprocessing_835_is_idempotent         tests/integration/test_remittance_lo
   informative than it could be.
 - `transaction_control_number` is `NOT NULL` with a `''` server default, which
   exists only so hand-written SQL in tests need not supply it. The collision it
-  used to invite is now caught by IR-04 before the database sees it — two sets
-  both defaulting to `''` read as a repeated control number — and ST02 is
-  mandatory in X12 with `SE02 == ST02` already asserted by the envelope parser.
-  The default is therefore unreachable from a parseable file, but it is still a
-  default standing in for a value the loader always supplies, and dropping it
-  would be the stricter shape.
-- Claim-level CAS is now stored and distinguishable from line-level
-  (`claim_level` plus the CHECK that keeps the two shapes from mixing), but
-  nothing reads it yet. The denial classifier in M4.8 is the first consumer.
+  used to invite is now caught by IR-04 before the database sees it, and ST02
+  is mandatory in X12 with `SE02 == ST02` already asserted, so the default is
+  unreachable from a parseable file — but it is still a default standing in for
+  a value the loader always supplies.
+- 837 dependent loops (`HL*23`) are refused rather than read. Loop 2010CA and
+  the 2310 rendering-provider loops are both unparsed, so rendering provider,
+  referring provider and service facility are not available from an 837 yet.
+  None of the corpus needs them; a real payer's files will.
+- Parsed claims do not reach CORE. There is no claim table yet — M1.9
+  (resubmission chaining) and M3 (claim lifecycle) are where `original_claim_id`
+  stops being a field on a parsed object and becomes a foreign key.
+- Modifier order is unexercised by the corpus, which contains no line with two
+  modifiers. Fixtures cover it; volume does not.
 - `rcm_app` can still write `alembic_version` (recorded at the M0 gate, in
   `docs/M0_GATE_EVIDENCE.md`). Unchanged by this milestone.
+

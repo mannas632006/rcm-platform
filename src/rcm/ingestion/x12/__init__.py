@@ -10,18 +10,39 @@ The layers are deliberately separate and separately testable:
     tokenizer   bytes  -> segments, with the delimiters the file declares
     envelope    segments -> ISA/GS/ST structure, with every control count checked
     remittance  one 835 transaction -> Remittance
+    claim       one 837 transaction -> ClaimSubmission, and back again
+    fields      the element parsers both transaction parsers share
 
-`read_remittances` is the convenience path for the common case; anything that
-needs to inspect a file that fails a later stage uses the three directly.
+`read_remittances` and `read_claims` are the convenience paths for the common
+case; anything that needs to inspect a file that fails a later stage uses the
+layers directly.
 """
 
 from __future__ import annotations
 
+from rcm.ingestion.x12.claim import (
+    STANDARD_SEPARATORS,
+    BillingProvider,
+    Claim837,
+    ClaimServiceLine,
+    ClaimSubmission,
+    Subscriber,
+    TradingPartner,
+    build_837,
+    parse_837,
+)
 from rcm.ingestion.x12.envelope import (
     FunctionalGroup,
     Interchange,
     TransactionSet,
     parse_interchange,
+)
+from rcm.ingestion.x12.fields import (
+    optional_amount,
+    optional_date,
+    parse_amount,
+    parse_date,
+    parse_quantity,
 )
 from rcm.ingestion.x12.remittance import (
     BALANCE_TOLERANCE,
@@ -44,9 +65,14 @@ from rcm.ingestion.x12.tokenizer import (
 
 __all__ = [
     "BALANCE_TOLERANCE",
+    "STANDARD_SEPARATORS",
     "VALID_CAS_GROUPS",
     "Adjustment",
+    "BillingProvider",
+    "Claim837",
     "ClaimPayment",
+    "ClaimServiceLine",
+    "ClaimSubmission",
     "FunctionalGroup",
     "Interchange",
     "Limits",
@@ -55,11 +81,21 @@ __all__ = [
     "Segment",
     "Separators",
     "ServiceLine",
+    "Subscriber",
+    "TradingPartner",
     "TransactionSet",
+    "build_837",
     "decode",
     "detect_separators",
+    "optional_amount",
+    "optional_date",
     "parse_835",
+    "parse_837",
+    "parse_amount",
+    "parse_date",
     "parse_interchange",
+    "parse_quantity",
+    "read_claims",
     "read_interchange",
     "read_remittances",
     "tokenize",
@@ -86,4 +122,20 @@ def read_remittances(
     return tuple(
         parse_835(transaction, interchange.separators)
         for transaction in interchange.transaction_sets("835")
+    )
+
+
+def read_claims(
+    source: str | bytes, *, limits: Limits | None = None
+) -> tuple[ClaimSubmission, ...]:
+    """Every 837 in one interchange.
+
+    A tuple for the same reason `read_remittances` returns one: the standard
+    permits several transaction sets per file, and a caller that silently
+    processed the first would drop claims with no error anywhere.
+    """
+    interchange = read_interchange(source, limits=limits)
+    return tuple(
+        parse_837(transaction, interchange.separators)
+        for transaction in interchange.transaction_sets("837")
     )

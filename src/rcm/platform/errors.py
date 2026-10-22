@@ -256,6 +256,29 @@ class X12LimitExceededError(QuarantineError):
     title = "X12 file exceeds parsing limits"
 
 
+class UnsupportedX12Error(QuarantineError):
+    """A structurally valid transaction this parser does not yet read (M1.5).
+
+    Deliberately distinct from `MalformedX12Error`, because the two mean
+    opposite things to whoever is on the other end of the alert. A malformed
+    file is the sender's defect and the fix is to ask them to resend. An
+    unsupported one is *our* gap: the file is correct X12 and the platform
+    cannot read it yet.
+
+    It is a `QuarantineError` rather than a silent skip because the alternative
+    is worse. The case this was added for is an 837 dependent loop (HL*23),
+    where the patient is someone other than the subscriber. Reading it with the
+    subscriber loop's demographics would attach the claim to the wrong person
+    -- a PHI error that no later stage could detect, since the result is a
+    perfectly well-formed claim about the wrong patient. Failing closed and
+    naming the gap is the only honest outcome (PD-18).
+    """
+
+    code = "unsupported-x12"
+    title = "X12 transaction not supported"
+    detail = "The file is valid X12 but uses a structure this platform does not yet read."
+
+
 # ---------------------------------------------------------------------------
 # Fail-closed and compliance
 # ---------------------------------------------------------------------------
