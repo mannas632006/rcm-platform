@@ -39,10 +39,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Final
 
 from rcm.ingestion.x12.envelope import TransactionSet
+from rcm.ingestion.x12.fields import (
+    ZERO as _ZERO,
+)
+from rcm.ingestion.x12.fields import (
+    optional_amount as _optional_amount,
+)
+from rcm.ingestion.x12.fields import (
+    parse_amount,
+    parse_date,
+)
 from rcm.ingestion.x12.tokenizer import Segment, Separators
 from rcm.platform.errors import MalformedX12Error
 
@@ -67,60 +77,6 @@ _CAS_FIRST_TRIPLET: Final = 2
 _CAS_TRIPLET_WIDTH: Final = 3
 #: 835 permits six triplets per CAS segment.
 _CAS_MAX_TRIPLETS: Final = 6
-
-_ZERO: Final = Decimal("0.00")
-
-
-def parse_amount(raw: str, *, field_name: str, segment: Segment) -> Decimal:
-    """Parse X12 money into `Decimal`, or raise.
-
-    There is deliberately no default. An amount this function cannot read is a
-    file we do not understand, and substituting zero would put a wrong number
-    into a ledger silently -- which CLAUDE.md section 0 calls a compliance
-    event rather than a bug.
-    """
-    text = raw.strip()
-    if not text:
-        raise MalformedX12Error(
-            reason="monetary element is empty", field=field_name, segment=str(segment)
-        )
-    try:
-        return Decimal(text)
-    except InvalidOperation as exc:
-        raise MalformedX12Error(
-            reason="monetary element is not a number",
-            field=field_name,
-            segment=str(segment),
-        ) from exc
-
-
-def _optional_amount(raw: str, *, field_name: str, segment: Segment) -> Decimal:
-    """An amount X12 allows to be omitted. Absent means zero; malformed does not."""
-    if not raw.strip():
-        return _ZERO
-    return parse_amount(raw, field_name=field_name, segment=segment)
-
-
-def parse_date(raw: str, *, field_name: str, segment: Segment) -> date:
-    """Parse a CCYYMMDD date element."""
-    text = raw.strip()
-    # Built as a calendar date rather than parsed into a datetime and
-    # truncated: a date of service is a day, not an instant, and giving it a
-    # notional midnight invites a timezone conversion later that moves it.
-    if len(text) != 8 or not text.isdigit():
-        raise MalformedX12Error(
-            reason="date element is not 8 digits of CCYYMMDD",
-            field=field_name,
-            segment=str(segment),
-        )
-    try:
-        return date(int(text[0:4]), int(text[4:6]), int(text[6:8]))
-    except ValueError as exc:
-        raise MalformedX12Error(
-            reason="date element is not a real calendar date",
-            field=field_name,
-            segment=str(segment),
-        ) from exc
 
 
 @dataclass(frozen=True, slots=True)

@@ -37,6 +37,7 @@ automation path pending human review (FR-BE-07).
 | `file-does-not-balance` | 422 | Remittance file does not balance | yes | An 835's amounts do not reconcile (IR-02, M1.3). |
 | `file-quarantined` | 422 | Inbound file quarantined | yes | A file failed a data quality gate and was quarantined (DR-10). |
 | `malformed-x12` | 422 | Malformed X12 file | yes | Structural failure parsing untrusted EDI input (S-12). |
+| `unsupported-x12` | 422 | X12 transaction not supported | yes | A structurally valid transaction this parser does not yet read (M1.5). |
 | `validation-failed` | 422 | Request failed validation | — | The request was well-formed but failed domain validation. |
 | `x12-limit-exceeded` | 422 | X12 file exceeds parsing limits | yes | Size or nesting limit hit while parsing (S-12). |
 | `rate-limit-exceeded` | 429 | Rate limit exceeded | — | Too many requests. Retry after the interval indicated. |
