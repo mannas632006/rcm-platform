@@ -14,6 +14,7 @@ real rows; only one of them is the denial rate.
 
 from __future__ import annotations
 
+import csv
 import json
 import shutil
 import subprocess
@@ -29,6 +30,8 @@ from sqlalchemy import Engine, func, select, text
 from rcm.analytics.denials import denial_rate
 from rcm.analytics.reversals import reopened_claims
 from rcm.domain.claim import Claim, ClaimLine
+from rcm.domain.payer import Payer, PayerAlias
+from rcm.domain.payer_registry import pending_matches, propose_matches
 from rcm.ingestion.claim_loader import ClaimLoadOutcome, load_claim_file
 from rcm.ingestion.remittance_loader import load_remittance_file
 from rcm.platform.db import reset_engines, session_scope
@@ -333,3 +336,77 @@ def test_reversals_do_not_change_the_claim_count(loaded: dict[str, object]) -> N
 
     assert submissions == _counts("claims", loaded)
     assert claims == _counts("original_claims", loaded)
+
+
+def test_every_payer_spelling_in_the_corpus_is_recorded(loaded: dict[str, object]) -> None:
+    """M1.7 at volume: the names the files actually used are all in the table.
+
+    The corpus carried one canonical name per payer until this milestone, so
+    alias resolution had nothing to resolve. It now carries several spellings
+    per payer under the same identifier, which is what the acceptance
+    condition describes.
+    """
+    del loaded
+    with session_scope() as session:
+        aliases = session.scalars(select(PayerAlias)).all()
+
+    assert len(aliases) > 8  # more spellings than payers, which is the point
+    # Every one unconfirmed: recording a spelling is an observation, and
+    # nothing in the loader is entitled to confirm it.
+    assert all(not alias.confirmed for alias in aliases)
+    assert all(alias.normalised_alias == alias.normalised_alias.strip() for alias in aliases)
+
+
+@pytest.mark.invariant
+def test_the_two_identifier_namespaces_are_raised_for_review(
+    loaded: dict[str, object],
+) -> None:
+    """The problem M1.7 exists for, measured.
+
+    An 837 names a payer by its payer ID and the 835 answering it names the
+    same payer by the clearinghouse ETIN, so loading both sides of the corpus
+    produces two rows for every payer -- each with its own denial rate, each
+    internally consistent, and all of them wrong.
+
+    The expected count comes from the generator's reference data rather than
+    from the loaded rows, so this measures the loader against an independent
+    source instead of against itself.
+
+    Counting *distinct names* would not work, and the reason is the point of
+    PD-8: a payer's recorded name is whichever spelling arrived first, so the
+    ETIN row for BCBS Texas is called `BLUE CROSS TEXAS` while the payer-ID
+    row is called `BCBS Texas`. Sixteen rows, nine names, eight payers. Names
+    do not count anything reliably, which is why they are not the key.
+    """
+    del loaded
+    reference = REPO_ROOT / "tools" / "synthetic" / "reference" / "payers.csv"
+    with reference.open(encoding="utf-8") as handle:
+        real_payers = len(list(csv.DictReader(handle)))
+
+    with session_scope() as session:
+        payers = session.execute(text("SELECT count(*) FROM payer")).scalar()
+        queue = pending_matches(session)
+
+    # One row per identifier namespace, for every real payer.
+    assert payers == 2 * real_payers
+    # Every pair raised, and nothing merged: PD-8 leaves identity to a human.
+    assert len(queue) == real_payers
+    assert {c.payer_id for c in queue} | {c.other_payer_id for c in queue} == set(
+        session_payer_ids()
+    )
+    assert all(c.payer_id < c.other_payer_id for c in queue)
+    assert all(c.status == "PENDING" for c in queue)
+
+
+def session_payer_ids() -> set[str]:
+    with session_scope() as session:
+        return set(session.scalars(select(Payer.payer_id)).all())
+
+
+def test_rescanning_raises_nothing_new(loaded: dict[str, object]) -> None:
+    """The conflicts were caught as the files were loaded, so a later scan has
+    nothing left to find. A scan that keeps raising the same pairs is a queue
+    nobody reads."""
+    del loaded
+    with session_scope() as session:
+        assert propose_matches(session) == 0

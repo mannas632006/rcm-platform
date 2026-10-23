@@ -32,5 +32,7 @@ resubmission_rate: 0.42
 recoupment_rate: 0.012
 # BR-M9-04: a payer reverses a prior payment months later, status 22.
 reversal_rate: 0.015
+# M1.7: how often a file carries an alternate spelling of the payer's name.
+payer_alias_rate: 0.3
 no_newline_file_rate: 0.15
 emit_unbalanced_file: true

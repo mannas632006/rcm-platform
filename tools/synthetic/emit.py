@@ -26,6 +26,44 @@ from .generate import OUT, ROOT, Adjudicator, money
 from .x12 import write_835, write_837p, write_999
 
 
+def _spellings_emitted(x835, x837) -> int:
+    """How many distinct payer spellings reached the X12 files.
+
+    Counted from the emitted text rather than from the configuration, because
+    what matters to M1.7 is what a parser will actually encounter. One
+    spelling per payer means alias resolution is untested whatever the rate
+    says.
+    """
+    seen: set[str] = set()
+    for path in sorted(x835.glob("*.txt")):
+        for line in path.read_text(encoding="utf-8").replace("~", "~\n").splitlines():
+            if line.startswith("N1*PR*"):
+                seen.add(line.split("*")[2].strip())
+    for path in sorted(x837.glob("*.txt")):
+        for line in path.read_text(encoding="utf-8").replace("~", "~\n").splitlines():
+            if line.startswith("NM1*PR*"):
+                seen.add(line.split("*")[3].strip())
+    return len(seen)
+
+
+def payer_spelling(payer: dict, rng, cfg) -> str:
+    """One of the names this payer arrives under.
+
+    M1.7's acceptance condition is that several spellings of one payer resolve
+    to a single `payer_id`, and a corpus carrying one canonical name per payer
+    cannot exercise that at all -- which is what it carried until this was
+    added. The `payer_id` is unchanged: that is what makes these aliases
+    rather than different payers, and what keeps PD-8 the thing under test.
+
+    The canonical spelling stays the common case; `payer_alias_rate` controls
+    how often a file carries one of the alternates.
+    """
+    alternates = [a for a in (payer.get("aliases") or "").split("|") if a.strip()]
+    if alternates and rng.random() < cfg.get("payer_alias_rate", 0.0):
+        return rng.choice(alternates)
+    return payer["canonical_name"]
+
+
 def ensure(p: pathlib.Path):
     p.mkdir(parents=True, exist_ok=True)
     return p
@@ -141,7 +179,7 @@ def run(config_path: pathlib.Path):
                     "patient_dob": pat.dob,
                     "patient_sex": pat.sex,
                     "member_id": c["member_id"],
-                    "payer_name": c["payer"]["canonical_name"],
+                    "payer_name": payer_spelling(c["payer"], rng, cfg),
                     "payer_id": c["payer"]["payer_id"],
                     "billing_name": p.name,
                     "billing_npi": p.npi,
@@ -276,7 +314,7 @@ def run(config_path: pathlib.Path):
         text = write_835(
             payer={
                 "etin": f"PAYER{payer_id}",
-                "name": payer["canonical_name"],
+                "name": payer_spelling(payer, rng, cfg),
                 "routing": "011000015",
                 "account": "1234567890",
                 "tin": "9" + payer_id,
@@ -365,7 +403,7 @@ def run(config_path: pathlib.Path):
         text = write_835(
             payer={
                 "etin": f"PAYER{payer['payer_id']}",
-                "name": payer["canonical_name"],
+                "name": payer_spelling(payer, rng, cfg),
                 "routing": "011000015",
                 "account": "1234567890",
                 "tin": "9" + payer["payer_id"],
@@ -439,7 +477,7 @@ def run(config_path: pathlib.Path):
         text = write_835(
             payer={
                 "etin": f"PAYER{key[0]}",
-                "name": payer["canonical_name"],
+                "name": payer_spelling(payer, rng, cfg),
                 "routing": "011000015",
                 "account": "1234567890",
                 "tin": "9" + key[0],
@@ -613,6 +651,7 @@ def run(config_path: pathlib.Path):
             "x12_835_files": n835,
             "recouped_claims": len(recouped),
             "reversed_claims": len(reversed_claims),
+            "payer_spellings": _spellings_emitted(x835, x837),
         },
         "denial_rate_all_attempts": round(denied / max(1, len(line_rows)), 4),
         "warning": (

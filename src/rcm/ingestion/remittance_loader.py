@@ -37,6 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from rcm.domain.payer import Payer
+from rcm.domain.payer_registry import record_alias
 from rcm.domain.remittance import (
     ClaimPayment,
     ProviderAdjustment,
@@ -115,6 +116,11 @@ def _ensure_payer(session: Session, *, payer_identifier: str, name: str, fallbac
     existing = session.get(Payer, identifier)
     if existing is None:
         session.add(Payer(payer_id=identifier, name=name.strip() or identifier))
+        session.flush()
+    # M1.7: every spelling a file used, against the identifier it carried.
+    # Recorded unconfirmed -- this is an observation that the name was seen,
+    # not a decision that the payer may be resolved by it.
+    record_alias(session, payer_id=identifier, name=name)
     return identifier
 
 

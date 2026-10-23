@@ -6,8 +6,8 @@ permanently. Slow down here."*
 This file covers M1.1 (tokenizer and envelope), M1.2 (835 parser with CAS
 unrolling), M1.3 (balance assertion and quarantine), M1.4 (RAW archive before
 parse), M1.5 (837 generator and parser), M1.8 (CORE schema and loaders) and
-M1.9 (resubmission chaining) and M1.10 (reversals and recoupments). M1.6 and
-M1.7 are not in this change.
+M1.7 (payer normalisation), M1.9 (resubmission chaining) and M1.10 (reversals
+and recoupments). M1.6 is not in this change.
 
 ---
 
@@ -915,6 +915,186 @@ rule, and the only reliable way to tell is to break the code and watch.
 
 ---
 
+## M1.7 — sixteen payers that are eight
+
+The acceptance condition is three spellings resolving to one identifier. The
+problem that was actually sitting in CORE is larger and had been there since
+M1.8:
+
+```
+payer rows      16
+real payers      8
+```
+
+An 837 names the payer `00590`; the 835 answering it names `PAYER00590`,
+because a clearinghouse ETIN and a payer ID are different identifiers from
+different namespaces. Loading both sides of the corpus produces two rows for
+every payer — each accumulating its own claims, its own denial rate, each
+internally consistent, and all of them wrong. PD-8 was being obeyed the whole
+time: identity keyed on an identifier and never on a name. Obeying it is not
+sufficient when two systems disagree about which identifier.
+
+### The corpus had one name per payer
+
+As with reversals in M1.10, the acceptance condition had no volume coverage:
+
+```
+distinct payer names in the corpus   8, one per payer
+spellings of "BCBS Texas"            1
+```
+
+M1.7's acceptance names three spellings of one payer; the corpus offered one.
+The reference data now carries the alternates each payer arrives under, and
+`payer_alias_rate` controls how often a file uses one:
+
+```
+payer spellings: 35 across 8 payers
+```
+
+The independent validator now requires it, which is the check that would have
+caught the gap:
+
+```
+check(len(payer_names) > len(ref_payers),
+      "... alias resolution would be untested at volume")
+```
+
+### What normalisation reaches, and what it does not
+
+Case, spacing, punctuation, legal suffixes and accents are noise and are
+removed. Similarity is the strongest of three readings — the normalised
+strings, the same with spaces removed, and their token sets:
+
+```
+Aetna Commercial     AETNA COMMERCIAL                 1.00   candidate
+Aetna Commercial     Aetna Commercial Inc.            1.00   candidate
+BCBS TX              BcbsTx                           1.00   candidate
+UHC MA               U H C M A                        1.00   candidate
+BCBS Texas           BLUE CROSS TEXAS                 0.70   no
+BCBS Texas           Blue Cross Blue Shield of Texas  0.51   no
+UHC Commercial       UHC Medicare Advantage           0.44   no
+Aetna Commercial     Cigna PPO                        0.32   no
+```
+
+The two `no`s in the middle are deliberate and asserted. Reaching
+`Blue Cross Texas` from `BCBS Texas` means knowing what the acronym stands
+for — domain knowledge, not string similarity — and the only way a matcher
+gets there is by lowering the threshold until this one case passes, which is
+fitting to the test data rather than solving the problem.
+
+So the three spellings resolve by the mechanism that actually scales: each was
+seen on a file naming the same payer, so each is recorded against that
+identifier. `UHC Commercial` against `UHC Medicare Advantage` is the test that
+matters most — they share a parent and most of their text, are genuinely
+different payers with different rules, and a matcher that merges them is worse
+than one that matches nothing, because it is wrong in a way that looks tidy.
+
+### Three operations, deliberately asymmetric
+
+```
+record_alias      permissive   every spelling seen, against the identifier
+                               the file carried. An observation.
+resolve_by_name   strict       confirmed aliases only. A suggestion is not
+                               an answer.
+propose_matches   proposes     writes a review item, never merges.
+```
+
+They carry opposite risks. Recording a spelling that turns out to belong to
+another payer costs a row a human can reject; resolving a claim through an
+unconfirmed alias attributes money to the wrong payer and nothing downstream
+can tell. So `payer_alias.confirmed` is the gate, and
+`test_an_unconfirmed_alias_does_not_resolve` is the invariant.
+
+Nothing merges payers. A merge changes identity and PD-8 puts identity out of
+reach of a heuristic; the SRS asks for *"Manual review UI for ambiguous
+matches"* and `payer_match_candidate` is the queue behind it. Confirming a
+candidate records that a person looked and said yes — both payer rows survive,
+asserted by `test_confirming_a_candidate_does_not_merge_the_payers`.
+
+### The conflicts raise themselves
+
+One spelling claimed by two payers is detected while loading, not by a later
+scan:
+
+```
+candidates raised by the scan : 0
+candidates in the queue       : 8
+```
+
+Every duplicate pair was already found during ingestion, by the alias conflict
+path. The first payer to claim a spelling keeps it — letting the newest file
+win would make resolution depend on load order, which is what the uniqueness
+constraint on `normalised_alias` exists to prevent.
+
+A rejected candidate is never re-proposed. Re-asking a question a human has
+answered is how a review queue becomes something people stop reading.
+
+### Why distinct names cannot be counted
+
+The corpus test tried `payers == 2 * distinct_names` and failed at `16 == 18`:
+
+```
+payer rows    16
+distinct names 9
+real payers    8
+```
+
+A payer's recorded name is whichever spelling arrived first, so the ETIN row
+for BCBS Texas is called `BLUE CROSS TEXAS` while the payer-ID row is called
+`BCBS Texas`. Names do not count anything reliably — which is the whole of
+PD-8 in one failed assertion. The test now counts against the generator's
+reference data instead.
+
+### Eight controls, each removed once
+
+```
+PD-18  unconfirmed aliases resolve                  CAUGHT
+       a conflicting spelling reassigns the alias   CAUGHT
+       a rejected candidate is re-proposed          CAUGHT
+       confirming a candidate merges the payers     CAUGHT
+       every pair proposed (threshold removed)      CAUGHT
+       corporate suffixes are identity              CAUGHT
+       the space-collapsed reading is dropped       CAUGHT
+       generator stops varying the spelling         CAUGHT
+```
+
+And nine constraints on the queue and the alias table, dropped inside a
+transaction and rolled back — including that a reviewed candidate must name
+its reviewer, because "confirmed by nobody at no time" is not an audit trail.
+
+### A reading that nothing exercised
+
+Two mutations survived the first run. One was a badly built mutation rather
+than a weak test. The other was real:
+
+```
+       the space-collapsed reading is dropped    NOT CAUGHT -- test is vacuous
+```
+
+Removing it broke nothing, which meant one of two things: the reading was dead
+weight, or the test set lacked the case that needed it. Measured rather than
+guessed:
+
+```
+                                      direct  collapsed  decides?
+BCBS TX     vs  BcbsTx                  0.92       1.00     no
+Cigna PPO   vs  Cigna  P.P.O.           0.90       1.00     no
+UHC MA      vs  U H C M A               0.80       1.00    YES
+BCBS TX     vs  B C B S T X             0.78       1.00    YES
+```
+
+Letter-spaced names — which senders do produce — fall to 0.78–0.80 compared as
+written and would never reach a reviewer without the collapsed reading. The
+reading earns its place; the test set did not contain a pair that needed it.
+Both are now in the parametrised list.
+
+That is the first time this method found code that *was* load-bearing and a
+test that merely failed to show it. The previous seven were tests asserting
+nothing. This one is the same lesson from the other side: passing told us
+nothing either way until the code was broken.
+
+---
+
 ## Full gate at this commit
 
 ```
@@ -922,13 +1102,15 @@ lint                 OK
 format               76 files already formatted
 mypy strict          no issues found in 32 source files
 module boundaries    3 contracts kept, 0 broken
-unit                 180 passed
+unit                 210 passed
 property              17 passed
-integration           66 passed   (against a real Postgres 16)
-security              73 passed   (against a real Postgres 16, as rcm_app)
-coverage floor       rcm/ingestion/x12  98.1%  (912/930)    rcm/domain  100.0% (196/196)
-migrations           alembic check clean; 0004 and 0005 both downgrade and
-                     re-apply cleanly, grants intact
+integration           85 passed   (against a real Postgres 16)
+security              82 passed   (against a real Postgres 16, as rcm_app)
+coverage floor       rcm/ingestion/x12  97.7%  (909/930)    rcm/domain  99.7% (315/316)
+migrations           alembic check clean; 0004, 0005 and 0006 all downgrade
+                     and re-apply cleanly, grants intact
+generator            independent validator green, and now requires both
+                     reversals and multiple payer spellings to exist
 prime directives     PD-16, PD-17, S-11, T20 all OK
 later-stage guard    no un-wired stage
 bandit               no medium or high findings
@@ -950,6 +1132,8 @@ test_resubmission_chains_to_original        tests/integration/test_claim_loading
 test_denial_rate_excludes_resubmissions     tests/integration/test_denial_rate.py
 test_reversal_reopens_original_claim        tests/integration/test_reversals.py
 test_reprocessing_a_reversal_is_idempotent  tests/integration/test_reversals.py
+test_several_spellings_resolve_to_one_payer_id   tests/integration/test_payer_registry.py
+test_an_unconfirmed_alias_does_not_resolve       tests/integration/test_payer_registry.py
 ```
 
 Both PD-7 invariants are now satisfied. `test_resubmission_chains_to_original`
@@ -998,6 +1182,17 @@ left the platform in.
   (`test_three_submissions_of_one_claim_count_as_one_claim`), not by volume.
 - Modifier order is unexercised by the corpus, which contains no line with two
   modifiers. Fixtures cover it; volume does not.
+- The sixteen payer rows are *raised* for review, not resolved. Confirming a
+  candidate records a decision; actually migrating two payers into one is a
+  data operation nothing in the platform performs yet, and it needs a plan for
+  the claims, remittances and metrics already attached to both.
+- `resolve_by_name` has no caller. Both loaders key on the identifier the file
+  carried, which is PD-8 working correctly; the function exists for the case
+  where a file gives a name and no usable identifier, which the corpus does
+  not contain.
+- One defensive branch in `_propose` is unreachable from either caller (both
+  guarantee distinct ids) and is enforced by a CHECK constraint besides. It is
+  the single uncovered statement in `rcm/domain`.
 - `rcm_app` can still write `alembic_version` (recorded at the M0 gate, in
   `docs/M0_GATE_EVIDENCE.md`). Unchanged by this milestone.
 
