@@ -118,6 +118,46 @@ def _ensure_payer(session: Session, *, payer_identifier: str, name: str, fallbac
     return identifier
 
 
+def _original_posting(
+    session: Session,
+    *,
+    client_id: uuid.UUID,
+    payer_control_number: str,
+    claim_id: str,
+) -> ClaimPayment | None:
+    """The payment a reversal or recoupment is acting on, if it is loaded.
+
+    Matched on the payer's own control number first. DOC-02 section 6 is
+    explicit about why: *"The payer's claim number (CLP07) is how you match
+    resubmissions and reversals. Store it."* It is the only handle that
+    survives a resubmission, where the submitter's claim id changes and the
+    payer's does not.
+
+    Falls back to the submitted claim id when the file carries no control
+    number, which some payers omit. Returns `None` rather than raising when
+    nothing matches: a reversal for a claim this platform never loaded is a
+    real event and the record of money moving is worth keeping even when the
+    other half is missing.
+
+    Reversals are excluded from the search so that a second reversal of the
+    same claim links to the original payment rather than to the first
+    reversal, which would make the chain a history rather than a pairing.
+    """
+    conditions = [
+        ClaimPayment.client_id == client_id,
+        ClaimPayment.is_reversal.is_(False),
+    ]
+    reference = payer_control_number.strip()
+    if reference:
+        conditions.append(ClaimPayment.payer_control_number == reference)
+    else:
+        conditions.append(ClaimPayment.claim_id == claim_id)
+
+    return session.scalars(
+        select(ClaimPayment).where(*conditions).order_by(ClaimPayment.created_at)
+    ).first()
+
+
 def _quarantine(
     session: Session,
     raw_file: RawFile,
@@ -206,7 +246,22 @@ def _load_one_remittance(
             service_date=parsed_claim.service_date,
             member_id=parsed_claim.member_id,
             rendering_provider_npi=parsed_claim.rendering_provider_npi,
+            is_reversal=parsed_claim.is_reversal,
         )
+        if parsed_claim.is_reversal:
+            # BR-M9-04: reverse the original posting and reopen the claim.
+            # Note what is *not* happening here -- no `claim` row is created.
+            # This loader never writes one; claims come from 837s. That is
+            # what makes "not a new negative claim" structural rather than a
+            # rule someone has to remember.
+            original = _original_posting(
+                session,
+                client_id=client_id,
+                payer_control_number=parsed_claim.payer_control_number,
+                claim_id=parsed_claim.claim_id,
+            )
+            if original is not None:
+                claim.reverses_claim_payment_id = original.claim_payment_id
         session.add(claim)
         session.flush()
         claims += 1
@@ -263,6 +318,22 @@ def _load_one_remittance(
                 adjustments += 1
 
     for sequence, parsed_plb in enumerate(parsed.provider_adjustments, start=1):
+        recouped: uuid.UUID | None = None
+        if parsed_plb.is_recoupment and parsed_plb.reference.strip():
+            # EC-47: the payer reduces today's cheque to recover an earlier
+            # overpayment, naming the claim in PLB03-2. Only `WO` entries name
+            # a claim; interest and forwarding balances move money without
+            # undoing a specific payment, and linking those would attribute a
+            # claw-back to a claim that was never over-paid.
+            original = _original_posting(
+                session,
+                client_id=client_id,
+                payer_control_number=parsed_plb.reference,
+                claim_id=parsed_plb.reference,
+            )
+            if original is not None:
+                recouped = original.claim_payment_id
+
         session.add(
             ProviderAdjustment(
                 client_id=client_id,
@@ -273,6 +344,7 @@ def _load_one_remittance(
                 reference=parsed_plb.reference,
                 amount=parsed_plb.amount,
                 sequence=sequence,
+                recoups_claim_payment_id=recouped,
             )
         )
 

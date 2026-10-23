@@ -127,6 +127,17 @@ def _denied_submitter_claim_ids(client_id: uuid.UUID) -> Select[str]:
         .where(
             ClaimPayment.client_id == client_id,
             RemittanceServiceLine.client_id == client_id,
+            # A reversal is the payer taking a payment back, not refusing to
+            # make one, and its amounts are the original's with the signs
+            # flipped. A line that was paid nothing originally is still paid
+            # nothing when negated, and its adjustments come back negated too,
+            # so without this a reversal reads as fresh evidence of a denial
+            # and the claim is counted again (BR-M9-04).
+            #
+            # On the current corpus exactly one reversal line meets that
+            # description, and it belongs to a claim already counted -- so the
+            # rate does not move today. That is coincidence, not safety.
+            ClaimPayment.is_reversal.is_(False),
             # Paid nothing...
             RemittanceServiceLine.paid_amount == 0,
             # ...and said why. Both halves: a zero payment with no reason is

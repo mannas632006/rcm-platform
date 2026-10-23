@@ -27,6 +27,7 @@ import pytest
 from sqlalchemy import Engine, func, select, text
 
 from rcm.analytics.denials import denial_rate
+from rcm.analytics.reversals import reopened_claims
 from rcm.domain.claim import Claim, ClaimLine
 from rcm.ingestion.claim_loader import ClaimLoadOutcome, load_claim_file
 from rcm.ingestion.remittance_loader import load_remittance_file
@@ -270,3 +271,65 @@ def test_every_claim_is_keyed_on_a_payer_identifier(loaded: dict[str, object]) -
     assert payers > 1
     # Every claim named a payer, so nothing fell back to the placeholder.
     assert unknown == 0
+
+
+@pytest.mark.invariant
+def test_reversal_reopens_original_claim_at_corpus_volume(
+    loaded: dict[str, object],
+) -> None:
+    """BR-M9-04 across the whole corpus.
+
+    The reversal files were added to the generator for this milestone: the
+    corpus had none, so every reversal test before this was a fixture test.
+    """
+    reversed_expected = _counts("reversed_claims", loaded)
+    recouped_expected = _counts("recouped_claims", loaded)
+
+    with session_scope() as session:
+        summary = reopened_claims(session, client_id=CLIENT)
+
+        postings = session.execute(
+            text(
+                "SELECT count(*) FILTER (WHERE is_reversal), "
+                "       count(*) FILTER (WHERE is_reversal "
+                "                        AND reverses_claim_payment_id IS NOT NULL) "
+                "FROM claim_payment WHERE client_id = :c"
+            ),
+            {"c": CLIENT},
+        ).one()
+        recoupments = session.execute(
+            text(
+                "SELECT count(*) FILTER (WHERE reason_code = 'WO'), "
+                "       count(*) FILTER (WHERE recoups_claim_payment_id IS NOT NULL) "
+                "FROM provider_adjustment WHERE client_id = :c"
+            ),
+            {"c": CLIENT},
+        ).one()
+        negative_claims = session.execute(
+            text("SELECT count(*) FROM claim WHERE client_id = :c AND total_charge < 0"),
+            {"c": CLIENT},
+        ).scalar()
+
+    # Every reversal in the corpus is loaded and linked to what it reverses.
+    assert postings[0] == reversed_expected
+    assert postings[1] == reversed_expected
+    # Every recoupment names a claim and is linked to its payment.
+    assert recoupments[0] == recouped_expected
+    assert recoupments[1] == recouped_expected
+
+    # BR-M9-04: not a new negative claim. Not one.
+    assert negative_claims == 0
+
+    assert summary.reversed_claims == reversed_expected
+    assert summary.recouped_claims == recouped_expected
+    assert summary.total == reversed_expected + recouped_expected
+
+
+def test_reversals_do_not_change_the_claim_count(loaded: dict[str, object]) -> None:
+    """The counts M1.9 established are untouched by money moving backwards."""
+    with session_scope() as session:
+        submissions = session.scalar(select(func.count()).select_from(Claim))
+        claims = session.scalar(select(func.count(func.distinct(Claim.root_claim_id))))
+
+    assert submissions == _counts("claims", loaded)
+    assert claims == _counts("original_claims", loaded)

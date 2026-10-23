@@ -245,14 +245,44 @@ class ClaimPayment(Base):
         String(20), nullable=False, default="", server_default=""
     )
 
+    #: BR-M9-04 (M1.10). CLP02 = 22: the payer is taking back a payment it
+    #: already made, months later. Denormalised from `status_code` because
+    #: every query that must exclude reversals -- the denial rate above all --
+    #: would otherwise carry a string comparison that is easy to omit and
+    #: invisible when omitted.
+    is_reversal: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sql_text("false")
+    )
+    #: The posting this one reverses, matched on the payer's control number.
+    #: Nullable: a reversal can arrive for a claim this platform never loaded,
+    #: and refusing the file over that would lose the record of money moving.
+    reverses_claim_payment_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("claim_payment.claim_payment_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     __table_args__ = (
+        # A posting cannot reverse itself; that is a one-row cycle.
+        CheckConstraint(
+            "reverses_claim_payment_id <> claim_payment_id",
+            name="posting_does_not_reverse_itself",
+        ),
+        # Only a reversal reverses something. Without this a loader could link
+        # an ordinary payment to an earlier one and quietly remove it from
+        # every "what did the payer actually pay" total.
+        CheckConstraint(
+            "reverses_claim_payment_id IS NULL OR is_reversal",
+            name="only_a_reversal_reverses_a_posting",
+        ),
         Index("ix_claim_payment_client_claim", "client_id", "claim_id"),
         Index("ix_claim_payment_remittance", "remittance_id"),
         Index("ix_claim_payment_payer_control", "payer_control_number"),
+        Index("ix_claim_payment_reverses", "reverses_claim_payment_id"),
     )
 
 
@@ -421,6 +451,16 @@ class ProviderAdjustment(Base):
     )
     amount: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
     sequence: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
+
+    #: EC-47 (M1.10). The claim payment this entry claws back, resolved from
+    #: `reference`. Nullable for the same reason as a reversal's link, and
+    #: because most PLB entries -- interest, forwarding balances, capitation --
+    #: do not claw back a specific claim at all.
+    recoups_claim_payment_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("claim_payment.claim_payment_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

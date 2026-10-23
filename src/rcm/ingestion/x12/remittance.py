@@ -72,6 +72,19 @@ VALID_CAS_GROUPS: Final[frozenset[str]] = frozenset({"CO", "PR", "OA", "PI", "CR
 #: broken file. Anything larger is.
 BALANCE_TOLERANCE: Final = Decimal("0.02")
 
+#: CLP02 (X12 code list 1029) values this platform reads by name.
+#:
+#:   22  reversal of a previous payment. DOC-02 section 9: "a payer can
+#:       reverse a prior payment months later. The original claim's outcome
+#:       changes retroactively."
+CLAIM_STATUS_REVERSAL: Final = "22"
+
+#: PLB03-1 reason codes that take money back from a previous payment, as
+#: opposed to interest, forwarding balances or capitation. `WO` is withholding
+#: -- the payer reducing today's cheque to recover an earlier overpayment
+#: (EC-47) -- and `FB` is a forwarding balance carried between remittances.
+RECOUPMENT_REASON_CODES: Final[frozenset[str]] = frozenset({"WO"})
+
 #: CAS triplets start at element 2 and repeat every three elements.
 _CAS_FIRST_TRIPLET: Final = 2
 _CAS_TRIPLET_WIDTH: Final = 3
@@ -177,7 +190,7 @@ class ClaimPayment:
         A reversal is not a new claim and must reopen the original (PD-7,
         M1.10). Treating it as one inflates both claim counts and denial rates.
         """
-        return self.status_code.strip() == "22"
+        return self.status_code.strip() == CLAIM_STATUS_REVERSAL
 
     @property
     def is_denied(self) -> bool:
@@ -203,6 +216,17 @@ class ProviderAdjustment:
     reason_code: str
     reference: str
     amount: Decimal
+
+    @property
+    def is_recoupment(self) -> bool:
+        """Does this entry claw back an earlier payment (EC-47)?
+
+        Read from the reason code rather than from the sign, because a
+        positive PLB amount also covers interest and forwarding balances,
+        which reduce the cheque without taking back a specific claim's
+        payment. `reference` names the claim only for the ones that do.
+        """
+        return self.reason_code.strip().upper() in RECOUPMENT_REASON_CODES
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,6 +285,16 @@ class Remittance:
     def balances(self) -> bool:
         """IR-02 / BR-M9-01: the file reconciles against its own stated total."""
         return abs(self.balance_discrepancy) <= BALANCE_TOLERANCE
+
+    @property
+    def reversals(self) -> tuple[ClaimPayment, ...]:
+        """Every posting in this file that takes back an earlier payment."""
+        return tuple(claim for claim in self.claims if claim.is_reversal)
+
+    @property
+    def recoupments(self) -> tuple[ProviderAdjustment, ...]:
+        """PLB entries clawing back a specific earlier claim payment (EC-47)."""
+        return tuple(entry for entry in self.provider_adjustments if entry.is_recoupment)
 
     @property
     def unbalanced_service_lines(self) -> tuple[tuple[str, str], ...]:

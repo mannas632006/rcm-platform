@@ -195,19 +195,34 @@ def test_parsed_totals_reconcile_exactly_with_the_generator(corpus: Path) -> Non
     dropped or duplicated somewhere in the corpus, and a `>=` assertion would
     hide exactly that.
 
-    The quarantine fixture is excluded and counted separately. It is written
-    outside the normal claim flow -- it exists to be structurally wrong -- so
-    its rows never reach the CSV the manifest counts. Folding it into the
-    comparison was the first version of this test, and it failed with 1025
-    against 1018: seven lines and three claims that are real output of the
-    parser and correctly absent from the generator's own tally.
+    Two kinds of file are excluded and counted separately.
+
+    The quarantine fixture is written outside the normal claim flow -- it
+    exists to be structurally wrong -- so its rows never reach the CSV the
+    manifest counts. Folding it into the comparison was the first version of
+    this test, and it failed with 1025 against 1018: seven lines and three
+    claims that are real output of the parser and correctly absent from the
+    generator's own tally.
+
+    Reversal files are excluded for the opposite reason: their rows are a
+    *second* remittance for claims the CSV has already counted once. A
+    reversal re-states a claim in order to take the payment back, so counting
+    its lines here would double-count every reversed claim -- which is the
+    same arithmetic error BR-DATA-03 forbids for resubmissions, arriving from
+    the remittance side instead.
     """
     manifest = json.loads((corpus / "manifest.json").read_text(encoding="utf-8"))
     regular: collections.Counter[str] = collections.Counter()
     quarantine_fixture: collections.Counter[str] = collections.Counter()
+    reversals: collections.Counter[str] = collections.Counter()
 
     for path in _remittance_files(corpus):
-        bucket = quarantine_fixture if "UNBALANCED" in path.name else regular
+        if "REVERSAL" in path.name:
+            bucket = reversals
+        elif "UNBALANCED" in path.name:
+            bucket = quarantine_fixture
+        else:
+            bucket = regular
         for remittance in read_remittances(path.read_bytes()):
             bucket["claims"] += len(remittance.claims)
             bucket["lines"] += sum(len(c.service_lines) for c in remittance.claims)
@@ -222,6 +237,11 @@ def test_parsed_totals_reconcile_exactly_with_the_generator(corpus: Path) -> Non
     # something substantial, the exclusion above stops being negligible and
     # this test should be revisited rather than quietly widened.
     assert quarantine_fixture["claims"] <= 10
+
+    # Every reversal is one claim in one file, and there is one per reversed
+    # claim. If that stops being true the exclusion above is hiding something.
+    assert reversals["claims"] == manifest["counts"]["reversed_claims"]
+    assert reversals["payment"] == manifest["counts"]["reversed_claims"]
 
     total_paid = sum(
         (

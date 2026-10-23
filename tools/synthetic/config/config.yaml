@@ -49,5 +49,7 @@ random_denial_carc_weights:
 # ---- edge case injection (DOC-02 section 13) --------------------------------
 resubmission_rate: 0.42           # EC-65: denied claims corrected and resent
 recoupment_rate: 0.012            # EC-47: paid claims clawed back via PLB
+# BR-M9-04: a payer reverses a prior payment months later, status 22.
+reversal_rate: 0.015
 no_newline_file_rate: 0.15        # X12 files with no line breaks — parsers must cope
 emit_unbalanced_file: true        # one file that will not balance, for quarantine tests
