@@ -20,7 +20,7 @@ from decimal import Decimal
 
 # Read the corpus from wherever the generator writes it, rather than keeping a
 # second copy of the path that can drift out of step with it.
-from .generate import OUT
+from .generate import OUT, REF
 
 FAIL: list[str] = []
 WARN: list[str] = []
@@ -284,6 +284,21 @@ def main():
     # check now closes went unnoticed: the generator's own docstring claimed
     # it produced reversals and it never had.
     check(reversal_files > 0, "no reversal files - BR-M9-04 would be untested at volume")
+    # M1.7 needs more than one spelling per payer or alias resolution has
+    # nothing to resolve. The corpus carried exactly one canonical name per
+    # payer until that milestone, and nothing noticed.
+    payer_names = set()
+    for p in d835:
+        for seg in p.read_text(encoding="utf-8").replace("~", "~\n").splitlines():
+            if seg.startswith("N1*PR*"):
+                payer_names.add(seg.split("*")[2].strip())
+    ref_payers = list(csv.DictReader((REF / "payers.csv").open(encoding="utf-8")))
+    print(f"       payer spellings: {len(payer_names)} across {len(ref_payers)} payers")
+    check(
+        len(payer_names) > len(ref_payers),
+        f"only {len(payer_names)} payer spellings for {len(ref_payers)} payers - "
+        "alias resolution would be untested at volume",
+    )
     check(
         reversal_files == reversal_claims,
         f"expected one claim per reversal file, got {reversal_claims} in {reversal_files}",

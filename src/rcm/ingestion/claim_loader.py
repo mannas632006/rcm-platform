@@ -49,6 +49,7 @@ from sqlalchemy.orm import Session
 
 from rcm.domain.claim import MAX_MODIFIERS, Claim, ClaimLine
 from rcm.domain.payer import Payer
+from rcm.domain.payer_registry import record_alias
 from rcm.domain.remittance import RawFile, RawFileStatus
 from rcm.ingestion.archive import ArchivedFile, archive
 from rcm.ingestion.x12 import Claim837 as ParsedClaim
@@ -107,6 +108,8 @@ def _ensure_payer(session: Session, *, payer_id: str, name: str) -> str:
         # immediately after carries a foreign key to this row, and SQLAlchemy
         # has no way to know that ordering from the object graph alone.
         session.flush()
+    # M1.7: record the spelling this file used, unconfirmed.
+    record_alias(session, payer_id=identifier, name=name)
     return identifier
 
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import Engine, text
@@ -384,3 +385,121 @@ def test_a_recoupment_cannot_point_at_a_posting_that_does_not_exist(
                 "recoups": uuid.uuid4(),
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# The payer review queue (M1.7)
+# ---------------------------------------------------------------------------
+
+
+_INSERT_CANDIDATE = text(
+    "INSERT INTO payer_match_candidate (candidate_id, payer_id, other_payer_id, "
+    "matched_on, confidence, status, reviewed_at, reviewed_by) "
+    "VALUES (:id, :a, :b, 'A Payer', :confidence, :status, :at, :by)"
+)
+
+
+@pytest.fixture
+def two_payers(owner_engine: Engine) -> Iterator[tuple[str, str]]:
+    with owner_engine.begin() as conn:
+        conn.execute(text("DELETE FROM payer_match_candidate"))
+        conn.execute(text("DELETE FROM payer_alias"))
+        conn.execute(text("DELETE FROM payer WHERE payer_id IN ('A-PAYER', 'B-PAYER')"))
+        conn.execute(
+            text(
+                "INSERT INTO payer (payer_id, name) VALUES "
+                "('A-PAYER', 'A Payer'), ('B-PAYER', 'A Payer')"
+            )
+        )
+    yield ("A-PAYER", "B-PAYER")
+    with owner_engine.begin() as conn:
+        conn.execute(text("DELETE FROM payer_match_candidate"))
+        conn.execute(text("DELETE FROM payer WHERE payer_id IN ('A-PAYER', 'B-PAYER')"))
+
+
+def _candidate(pair: tuple[str, str], **overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "id": uuid.uuid4(),
+        "a": pair[0],
+        "b": pair[1],
+        "confidence": 0.95,
+        "status": "PENDING",
+        "at": None,
+        "by": None,
+    }
+    values.update(overrides)
+    return values
+
+
+def test_a_well_formed_candidate_is_accepted(
+    app_engine: Engine, two_payers: tuple[str, str]
+) -> None:
+    with app_engine.begin() as conn:
+        conn.execute(_INSERT_CANDIDATE, _candidate(two_payers))
+
+
+def test_a_payer_cannot_be_a_candidate_against_itself(
+    app_engine: Engine, two_payers: tuple[str, str]
+) -> None:
+    with pytest.raises(IntegrityError), app_engine.begin() as conn:
+        conn.execute(_INSERT_CANDIDATE, _candidate(two_payers, b=two_payers[0]))
+
+
+def test_a_candidate_pair_is_stored_in_one_order(
+    app_engine: Engine, two_payers: tuple[str, str]
+) -> None:
+    """Otherwise (A, B) and (B, A) are two proposals for one question."""
+    with pytest.raises(IntegrityError), app_engine.begin() as conn:
+        conn.execute(_INSERT_CANDIDATE, _candidate(two_payers, a=two_payers[1], b=two_payers[0]))
+
+
+def test_the_same_pair_cannot_be_proposed_twice(
+    app_engine: Engine, two_payers: tuple[str, str]
+) -> None:
+    with pytest.raises(IntegrityError), app_engine.begin() as conn:
+        conn.execute(_INSERT_CANDIDATE, _candidate(two_payers))
+        conn.execute(_INSERT_CANDIDATE, _candidate(two_payers))
+
+
+def test_an_unknown_status_is_refused(app_engine: Engine, two_payers: tuple[str, str]) -> None:
+    with pytest.raises(IntegrityError), app_engine.begin() as conn:
+        conn.execute(_INSERT_CANDIDATE, _candidate(two_payers, status="MAYBE"))
+
+
+def test_a_confidence_outside_zero_to_one_is_refused(
+    app_engine: Engine, two_payers: tuple[str, str]
+) -> None:
+    with pytest.raises(IntegrityError), app_engine.begin() as conn:
+        conn.execute(_INSERT_CANDIDATE, _candidate(two_payers, confidence=1.5))
+
+
+def test_a_reviewed_candidate_must_name_its_reviewer(
+    app_engine: Engine, two_payers: tuple[str, str]
+) -> None:
+    """ "Confirmed by nobody at no time" is not an audit trail."""
+    with pytest.raises(IntegrityError), app_engine.begin() as conn:
+        conn.execute(_INSERT_CANDIDATE, _candidate(two_payers, status="CONFIRMED"))
+
+
+def test_a_pending_candidate_must_not_name_a_reviewer(
+    app_engine: Engine, two_payers: tuple[str, str]
+) -> None:
+    """A reviewer recorded against an undecided item reads as a decision."""
+    with pytest.raises(IntegrityError), app_engine.begin() as conn:
+        conn.execute(
+            _INSERT_CANDIDATE,
+            _candidate(two_payers, at=datetime.now(UTC), by="user:reviewer"),
+        )
+
+
+def test_one_spelling_cannot_resolve_to_two_payers(
+    app_engine: Engine, two_payers: tuple[str, str]
+) -> None:
+    """Otherwise resolution depends on row order."""
+    insert = text(
+        "INSERT INTO payer_alias (alias_id, payer_id, alias, normalised_alias) "
+        "VALUES (:id, :payer, 'A Payer', 'a payer')"
+    )
+    with pytest.raises(IntegrityError), app_engine.begin() as conn:
+        conn.execute(insert, {"id": uuid.uuid4(), "payer": two_payers[0]})
+        conn.execute(insert, {"id": uuid.uuid4(), "payer": two_payers[1]})
