@@ -191,6 +191,28 @@ def run(config_path: pathlib.Path):
         k = int(len(recoup_pool) * cfg["recoupment_rate"])
         recouped = {c["claim_id"] for c in rng.sample(recoup_pool, min(k, len(recoup_pool)))}
 
+    # Reversals (BR-M9-04, DOC-02 section 9): "a payer can reverse a prior
+    # payment months later (claim status code 22). The original claim's
+    # outcome changes retroactively."
+    #
+    # Drawn from claims that were actually paid and are not already being
+    # recouped, so that a reversal and a recoupment never collide on one claim
+    # -- they are different mechanisms for taking money back and a file
+    # exercising both at once tests neither cleanly.
+    reversal_pool = [
+        c
+        for c in adjudicated
+        if not c["result"]["denied"]
+        and c["result"]["total_paid"] > 0
+        and c["claim_id"] not in recouped
+    ]
+    reversed_claims = set()
+    if reversal_pool:
+        k = int(len(reversal_pool) * cfg.get("reversal_rate", 0.0))
+        reversed_claims = {
+            c["claim_id"] for c in rng.sample(reversal_pool, min(k, len(reversal_pool)))
+        }
+
     for (payer_id, adj_iso), group in sorted(remit_batches.items()):
         payer = payer_by_id[payer_id]
         payee = group[0]["practice"]
@@ -286,6 +308,92 @@ def run(config_path: pathlib.Path):
         )
         (x835 / f"835_{adj_iso}_{payer_id}_{ctrl}.txt").write_text(text, encoding="utf-8")
         n835 += 1
+
+    # ---------------- reversals, months after the original payment --------
+    # Each reversal is its own later 835 rather than a line inside a weekly
+    # batch, because that is how one arrives: the payer re-adjudicates a claim
+    # it already paid and sends a separate remittance for it. Amounts mirror
+    # the original with the signs flipped, which is what keeps the file
+    # balanced -- `-charge == -paid + -adjustments` holds exactly when the
+    # original held.
+    for c in sorted(
+        (c for c in adjudicated if c["claim_id"] in reversed_claims),
+        key=lambda c: c["claim_id"],
+    ):
+        r = c["result"]
+        payer = c["payer"]
+        payee = c["practice"]
+        reversal_date = c["adjudication_date"] + timedelta(days=120)
+        remits = [
+            {
+                "claim_id": c["claim_id"],
+                # CLP02 = 22, "reversal of previous payment".
+                "claim_status_code": "22",
+                "total_charge": money(-c["total_charge"]),
+                "total_paid": money(-r["total_paid"]),
+                "patient_responsibility": money(-r["patient_responsibility"]),
+                "claim_filing_code": "CI",
+                # The payer's own control number is unchanged: it is the handle
+                # that ties the reversal to what it reverses.
+                "payer_control_number": "PCN" + c["claim_id"][3:],
+                "patient_last": c["patient"].last,
+                "patient_first": c["patient"].first,
+                "member_id": c["member_id"],
+                "rendering_npi": c["provider"].npi,
+                "rendering_last": c["provider"].last,
+                "rendering_first": c["provider"].first,
+                "dos": c["dos"],
+                "claim_adjustments": [],
+                "lines": [
+                    {
+                        "cpt": l["cpt"],
+                        "modifiers": l["modifiers"],
+                        "charge": money(-l["charge"]),
+                        "paid": money(-l["paid"]),
+                        "allowed": money(-l["allowed"]),
+                        "units": l["units"],
+                        "adjustments": [
+                            {**a, "amount": money(-a["amount"])} for a in l["adjustments"]
+                        ],
+                        "rarcs": l["rarcs"],
+                    }
+                    for l in r["lines"]
+                ],
+            }
+        ]
+        ctrl += 1
+        text = write_835(
+            payer={
+                "etin": f"PAYER{payer['payer_id']}",
+                "name": payer["canonical_name"],
+                "routing": "011000015",
+                "account": "1234567890",
+                "tin": "9" + payer["payer_id"],
+                "addr": "1 Payer Plaza",
+                "city": "Hartford",
+                "state": "CT",
+                "zip": "06103",
+                "contact": "PROVIDER SERVICES",
+                "phone": "8005550199",
+            },
+            payee={
+                "etin": "PAYEE0001",
+                "name": payee.name,
+                "npi": payee.npi,
+                "addr": payee.addr,
+                "city": payee.city,
+                "state": payee.state,
+                "zip": payee.zip,
+                "tin": payee.tin,
+            },
+            remits=remits,
+            ctrl=ctrl,
+            check_amount=money(-r["total_paid"]),
+            check_date=reversal_date,
+            trace="TRNREV" + str(ctrl),
+            now=datetime.combine(reversal_date, datetime.min.time()),
+        )
+        (x835 / f"835_REVERSAL_{c['claim_id']}_{ctrl}.txt").write_text(text, encoding="utf-8")
 
     # ---------------- deliberately unbalanced file for quarantine tests ---
     if cfg.get("emit_unbalanced_file", True) and remit_batches:
@@ -504,6 +612,7 @@ def run(config_path: pathlib.Path):
             "x12_837_files": n837,
             "x12_835_files": n835,
             "recouped_claims": len(recouped),
+            "reversed_claims": len(reversed_claims),
         },
         "denial_rate_all_attempts": round(denied / max(1, len(line_rows)), 4),
         "warning": (

@@ -39,6 +39,7 @@ from rcm.ingestion.remittance_loader import (
     LoadOutcome,
     load_remittance_file,
 )
+from rcm.ingestion.x12 import read_remittances
 from rcm.platform.db import reset_engines, session_scope
 
 pytestmark = pytest.mark.integration
@@ -117,6 +118,18 @@ def loaded(
     with session_scope() as session:
         after = _row_counts(session)
 
+    # What the reversal files re-stated, read back out of the corpus rather
+    # than hard-coded: these rows are legitimately loaded but describe claims
+    # the generator's CSVs already counted once.
+    reversal_totals: collections.Counter[str] = collections.Counter()
+    for path in files:
+        if "REVERSAL" not in path.name:
+            continue
+        for remittance in read_remittances(path.read_bytes()):
+            reversal_totals["claims"] += len(remittance.claims)
+            reversal_totals["lines"] += sum(len(c.service_lines) for c in remittance.claims)
+            reversal_totals["adjustments"] += len(remittance.adjustments)
+
     yield {
         "files": len(files),
         "first": first,
@@ -124,6 +137,7 @@ def loaded(
         "snapshot": snapshot,
         "after": after,
         "archive_root": archive_root,
+        "reversal_totals": dict(reversal_totals),
         "manifest": json.loads((corpus / "manifest.json").read_text(encoding="utf-8")),
     }
     reset_engines()
@@ -154,16 +168,28 @@ def test_every_file_is_either_loaded_or_quarantined(loaded: dict[str, object]) -
 def test_the_loaded_rows_reconcile_with_the_generator(loaded: dict[str, object]) -> None:
     """Exact equality against what the generator says it produced.
 
+    Two adjustments to the raw totals, both of them real rather than fudge.
+
     The quarantined file's rows are correctly absent, which is why the
     manifest totals match rather than fall short.
+
+    Reversal files *are* loaded -- they are valid remittances and must be --
+    but their rows re-state claims the CSV already counted, so the CSV totals
+    are expected to be short by exactly what the reversals re-stated. The
+    expected surplus is computed from the corpus rather than hard-coded, so a
+    change in the generator's reversal rate does not silently become a change
+    in what this test tolerates.
     """
     manifest: dict[str, object] = loaded["manifest"]  # type: ignore[assignment]
     counts: dict[str, int] = manifest["counts"]  # type: ignore[assignment]
     snapshot: dict[str, int] = loaded["snapshot"]  # type: ignore[assignment]
+    reversal: dict[str, int] = loaded["reversal_totals"]  # type: ignore[assignment]
 
-    assert snapshot["service_line"] == counts["service_lines"]
-    assert snapshot["adjustment"] == counts["adjustment_rows"]
-    assert snapshot["remittance"] == loaded["files"] - 1  # the quarantined one loaded none
+    assert snapshot["service_line"] == counts["service_lines"] + reversal["lines"]
+    assert snapshot["adjustment"] == counts["adjustment_rows"] + reversal["adjustments"]
+    assert snapshot["claim_payment"] == counts["claims"] + reversal["claims"]
+    # One remittance per file except the quarantined one, which loaded none.
+    assert snapshot["remittance"] == loaded["files"] - 1
 
 
 @pytest.mark.invariant

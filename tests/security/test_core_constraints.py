@@ -304,3 +304,83 @@ def test_the_same_file_cannot_be_archived_twice(
             ),
             {"id": uuid.uuid4(), "client": CLIENT, "hash": existing},
         )
+
+
+# ---------------------------------------------------------------------------
+# BR-M9-04: reversals (M1.10)
+# ---------------------------------------------------------------------------
+
+
+def _insert_posting(conn: object, seeded: dict[str, uuid.UUID], **overrides: object) -> uuid.UUID:
+    posting_id = uuid.uuid4()
+    values: dict[str, object] = {
+        "id": posting_id,
+        "client": CLIENT,
+        "rem": seeded["remittance"],
+        "claim_id": f"C-{uuid.uuid4().hex[:8]}",
+        "is_reversal": False,
+        "reverses": None,
+    }
+    values.update(overrides)
+    conn.execute(  # type: ignore[attr-defined]
+        text(
+            "INSERT INTO claim_payment (claim_payment_id, client_id, remittance_id, claim_id, "
+            "status_code, total_charge, total_paid, patient_responsibility, is_reversal, "
+            "reverses_claim_payment_id) "
+            "VALUES (:id, :client, :rem, :claim_id, '1', 0, 0, 0, :is_reversal, :reverses)"
+        ),
+        values,
+    )
+    return posting_id
+
+
+def test_a_reversal_may_point_at_the_posting_it_reverses(
+    app_engine: Engine, seeded: dict[str, uuid.UUID]
+) -> None:
+    """The control has to let the right thing through, or it proves nothing."""
+    with app_engine.begin() as conn:
+        original = _insert_posting(conn, seeded)
+        _insert_posting(conn, seeded, is_reversal=True, reverses=original)
+
+
+def test_a_posting_cannot_reverse_itself(app_engine: Engine, seeded: dict[str, uuid.UUID]) -> None:
+    """A one-row cycle: the posting that undoes itself."""
+    posting_id = uuid.uuid4()
+    with pytest.raises(IntegrityError), app_engine.begin() as conn:
+        _insert_posting(conn, seeded, id=posting_id, is_reversal=True, reverses=posting_id)
+
+
+def test_only_a_reversal_may_reverse_a_posting(
+    app_engine: Engine, seeded: dict[str, uuid.UUID]
+) -> None:
+    """An ordinary payment linked to an earlier one would quietly remove that
+    earlier payment from every "what did the payer actually pay" total."""
+    with pytest.raises(IntegrityError), app_engine.begin() as conn:
+        original = _insert_posting(conn, seeded)
+        _insert_posting(conn, seeded, is_reversal=False, reverses=original)
+
+
+def test_a_reversal_cannot_point_at_a_posting_that_does_not_exist(
+    app_engine: Engine, seeded: dict[str, uuid.UUID]
+) -> None:
+    with pytest.raises(IntegrityError), app_engine.begin() as conn:
+        _insert_posting(conn, seeded, is_reversal=True, reverses=uuid.uuid4())
+
+
+def test_a_recoupment_cannot_point_at_a_posting_that_does_not_exist(
+    app_engine: Engine, seeded: dict[str, uuid.UUID]
+) -> None:
+    with pytest.raises(IntegrityError), app_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO provider_adjustment (provider_adjustment_id, client_id, "
+                "remittance_id, reason_code, reference, amount, recoups_claim_payment_id) "
+                "VALUES (:id, :client, :rem, 'WO', 'PCN1', 10.00, :recoups)"
+            ),
+            {
+                "id": uuid.uuid4(),
+                "client": CLIENT,
+                "rem": seeded["remittance"],
+                "recoups": uuid.uuid4(),
+            },
+        )

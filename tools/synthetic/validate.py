@@ -218,9 +218,14 @@ def main():
     balanced = unbalanced = 0
     multi_cas_lines = 0
     r835_claims = r835_lines = r835_adj = 0
+    reversal_files = reversal_claims = 0
     for p in d835:
         r = parse_835(p.read_text(encoding="utf-8"))
         is_test = "UNBALANCED" in p.name
+        # A reversal re-states a claim in order to take its payment back, so
+        # its rows describe a claim the CSVs already counted once. Folding
+        # them into the tally below double-counts every reversed claim.
+        is_reversal = "REVERSAL" in p.name
         if r["balances"]:
             balanced += 1
             if is_test:
@@ -233,7 +238,18 @@ def main():
                     f"claims {sum(c['paid'] for c in r['claims'])} "
                     f"- PLB {r['plb_total']} != BPR {r['payment_total']}"
                 )
-        if not is_test:  # fixture re-emits claims; exclude from tallies
+        if is_reversal:
+            reversal_files += 1
+            reversal_claims += len(r["claims"])
+            for c in r["claims"]:
+                if c["status"] != "22":
+                    FAIL.append(
+                        f"{p.name} is a reversal file but CLP02 is {c['status']!r}, not '22'"
+                    )
+                if c["paid"] >= 0:
+                    FAIL.append(f"{p.name} reverses nothing: CLP04 is {c['paid']}")
+
+        if not (is_test or is_reversal):  # these re-emit claims; exclude from tallies
             r835_claims += len(r["claims"])
             for c in r["claims"]:
                 r835_lines += len(c["lines"])
@@ -251,6 +267,7 @@ def main():
         f"(1 unbalanced is the intentional quarantine fixture)"
     )
     print(f"       lines carrying >1 CAS reason: {multi_cas_lines}")
+    print(f"       reversals: {reversal_files} files, {reversal_claims} claims (excluded above)")
     print(f"       CAS groups: {dict(groups)}")
 
     # ---- structural expectations -------------------------------------
@@ -262,6 +279,15 @@ def main():
         "need both CO and PR adjustments to test group-code handling",
     )
     check(unbalanced == 1, f"expected exactly 1 unbalanced file, got {unbalanced}")
+    # BR-M9-04 needs something to test against. A corpus with no reversals
+    # makes every reversal test a fixture test, which is how the gap this
+    # check now closes went unnoticed: the generator's own docstring claimed
+    # it produced reversals and it never had.
+    check(reversal_files > 0, "no reversal files - BR-M9-04 would be untested at volume")
+    check(
+        reversal_files == reversal_claims,
+        f"expected one claim per reversal file, got {reversal_claims} in {reversal_files}",
+    )
 
     # ---- CSV mart cross-checks ---------------------------------------
     lines = list(csv.DictReader((OUT / "csv" / "claim_lines.csv").open(encoding="utf-8")))

@@ -6,7 +6,8 @@ permanently. Slow down here."*
 This file covers M1.1 (tokenizer and envelope), M1.2 (835 parser with CAS
 unrolling), M1.3 (balance assertion and quarantine), M1.4 (RAW archive before
 parse), M1.5 (837 generator and parser), M1.8 (CORE schema and loaders) and
-M1.9 (resubmission chaining). M1.6, M1.7 and M1.10 are not in this change.
+M1.9 (resubmission chaining) and M1.10 (reversals and recoupments). M1.6 and
+M1.7 are not in this change.
 
 ---
 
@@ -761,6 +762,159 @@ one existed, named the right invariant, passed, and verified nothing.
 
 ---
 
+## M1.10 — money moving backwards
+
+Two mechanisms, and they are not the same event:
+
+```
+reversal     CLP02 = 22. The payer re-adjudicates a claim it already paid and
+             sends a later remittance negating the original posting. The
+             claim's outcome changed retroactively.
+recoupment   A PLB entry with reason WO. The adjudication stands; the payer
+             reduces a *later* cheque to recover the money (EC-47).
+```
+
+Both reopen the claim. Only one changes its outcome, which is why they are
+counted apart rather than summed: a reversal means the adjudication was wrong
+and the claim may need reworking, a recoupment means it stood and the cash
+moved. Collapsing them loses the only thing that tells an operator which.
+
+    BR-M9-04 (MUST): Reversals (claim status 22) MUST reverse the original
+    posting and re-open the claim, not create a new negative claim.
+
+Both are matched on the payer's own control number, which DOC-02 singles out
+for exactly this: *"The payer's claim number (CLP07) is how you match
+resubmissions and reversals. Store it."* It is the only handle that survives a
+resubmission, where the submitter's claim id changes and the payer's does not.
+
+### The corpus had no reversals at all
+
+CLAUDE.md section 8 requires the synthetic generator to produce *"reversals,
+recoupments"*, and `tools/synthetic/__init__.py` says it does. It never had:
+
+```
+grep -rn "revers" tools/synthetic/    -> a docstring, a reference CSV row,
+                                         and an unrelated reversed(payload)
+CLP02 = 22 in the corpus              -> 0
+config keys                           -> recoupment_rate, no reversal_rate
+```
+
+So M1.10's headline requirement had no volume coverage, and every reversal
+test would have been a fixture test — the same weakness recorded against
+modifier order in M1.5, where the corpus turned out to contain no line with
+two modifiers.
+
+The generator now emits reversals as separate, later 835 files with the
+original's amounts mirrored. The mirroring is what keeps them valid: `-charge
+== -paid + -adjustments` holds exactly when the original held, so each file
+balances under BR-M9-01 and each line under IR-02 without special-casing.
+
+```
+reversal files        8        all parse, all balance
+CLP02                 22       on every one
+BPR02                 negative on every one
+CSV-derived counts    unchanged: 616 claims, 1018 lines, 1297 adjustments
+```
+
+The independent validator was taught about them too, and now *requires* them:
+
+```
+check(reversal_files > 0, "no reversal files - BR-M9-04 would be untested at volume")
+```
+
+That check is the one that would have caught the original gap. Reversal rows
+are excluded from the CSV reconciliation for the same reason the quarantine
+fixture is — a reversal re-states a claim the CSVs already counted once, so
+folding it in double-counts every reversed claim, which is the arithmetic
+error BR-DATA-03 forbids arriving from the remittance side.
+
+### At corpus volume
+
+```
+claim_payment rows        624
+  of which reversals        8      all 8 linked to the posting they reverse
+provider_adjustment         6
+  recoupments (WO)          6      all 6 linked to the payment they claw back
+claims reopened            14      8 reversed + 6 recouped
+
+claim rows                616      unchanged by M1.10
+distinct claims           600      unchanged
+negative claims             0      BR-M9-04
+```
+
+"No new negative claim" is structural rather than remembered: the remittance
+loader never writes a `claim` row at all. Claims come from 837s. The test
+asserts it anyway, because the next person to touch this will not know that.
+
+### A latent bug in the denial rate
+
+A reversal's amounts are the original's negated, and **zero negates to zero**.
+A line paid nothing originally is still paid nothing once negated, and its
+adjustments come back negated too — so to a query reading service lines, a
+reversal is indistinguishable from a denial. The corpus has exactly one such
+line:
+
+```
+reversal lines with paid = 0 and an adjustment : 1
+claims only reachable through that posting     : 1
+denial rate before the fix                     : 15.17%
+denial rate after                              : 15.17%
+```
+
+The rate does not move, because that line belongs to a claim already counted
+as denied. That is coincidence, not safety. The fix excludes reversal postings
+from the denied set, and the test that proves it had to be rewritten twice
+before it could fail — see below.
+
+### Eight controls, each removed once
+
+```
+BR-M9-04  reversal link dropped                        CAUGHT
+          reversal matched on claim id, not CLP07      CAUGHT
+          reversals not excluded when finding original CAUGHT
+PD-20     reversal links across clients                CAUGHT
+EC-47     recoupment link dropped                      CAUGHT
+          any PLB reason counts as a recoupment        CAUGHT
+          reversal postings counted as denials         CAUGHT
+          generator stops emitting reversals           CAUGHT
+```
+
+And the constraints, dropped inside a transaction and rolled back:
+
+```
+PROVEN  BR-M9-04 CHECK posting_does_not_reverse_itself
+PROVEN  BR-M9-04 CHECK only_a_reversal_reverses_a_posting
+PROVEN  BR-M9-04 FK claim_payment.reverses -> claim_payment
+PROVEN  EC-47    FK provider_adjustment.recoups -> claim_payment
+```
+
+Alembic does not compare CHECK constraints, so both were written into the
+migration by hand. Declared on the model alone they would have lived in the
+ORM and never reached the database — the shape of defect M1.9 found in
+`line_has_a_diagnosis_pointer`. They were also named bare rather than with the
+`ck_<table>_` prefix: the metadata's naming convention adds it, and passing
+the full name produced `ck_claim_payment_ck_claim_payment_...`, truncated with
+a hash, matching nothing the model declares.
+
+### Four more tests that could not fail
+
+Half the mutations passed on the first run. Every one was the test's fault.
+
+| Test | Why it could not fail |
+|---|---|
+| matched on CLP07 | Payment and reversal shared a claim id, so matching on either column passed. Now the reversal carries the *resubmitted* id and only the control number can link them. |
+| reversals excluded from the search | While the original payment is present it is also the earliest posting, so ordering alone picks it. A new test drops the payment entirely: without the exclusion the second reversal links to the first, reading as "this reversal was itself reversed", which is a re-payment. |
+| interest is not a recoupment | The interest PLB carried no reference, so it was rejected for being unreferenced rather than for its reason code. It now names a claim in PLB03-2. |
+| reversal is not a denial | Both postings were loaded, so the claim was already counted and counting it twice changed nothing. The reversal now arrives for a claim whose original remittance was never loaded — which is what happens whenever history starts mid-stream — so the reversal is the only evidence. |
+
+Seven vacuous tests have now been found this way across M1.5, M1.9 and M1.10.
+Every one named the right invariant, passed, and verified nothing. The pattern
+is consistent enough to be worth stating plainly: a test written alongside the
+code that satisfies it tends to assert the shape of that code rather than the
+rule, and the only reliable way to tell is to break the code and watch.
+
+---
+
 ## Full gate at this commit
 
 ```
@@ -770,10 +924,11 @@ mypy strict          no issues found in 32 source files
 module boundaries    3 contracts kept, 0 broken
 unit                 180 passed
 property              17 passed
-integration           53 passed   (against a real Postgres 16)
-security              68 passed   (against a real Postgres 16, as rcm_app)
-coverage floor       rcm/ingestion/x12  97.9%  (900/919)    rcm/domain  100.0% (193/193)
-migrations           alembic check clean; 0004 downgrades and re-applies cleanly
+integration           66 passed   (against a real Postgres 16)
+security              73 passed   (against a real Postgres 16, as rcm_app)
+coverage floor       rcm/ingestion/x12  98.1%  (912/930)    rcm/domain  100.0% (196/196)
+migrations           alembic check clean; 0004 and 0005 both downgrade and
+                     re-apply cleanly, grants intact
 prime directives     PD-16, PD-17, S-11, T20 all OK
 later-stage guard    no un-wired stage
 bandit               no medium or high findings
@@ -793,6 +948,8 @@ test_modifier_25_never_auto_applied         tests/unit/test_x12_claim.py
 test_modifier_59_never_auto_applied         tests/unit/test_x12_claim.py
 test_resubmission_chains_to_original        tests/integration/test_claim_loading.py
 test_denial_rate_excludes_resubmissions     tests/integration/test_denial_rate.py
+test_reversal_reopens_original_claim        tests/integration/test_reversals.py
+test_reprocessing_a_reversal_is_idempotent  tests/integration/test_reversals.py
 ```
 
 Both PD-7 invariants are now satisfied. `test_resubmission_chains_to_original`
@@ -825,8 +982,18 @@ left the platform in.
   reproduces the generator's flag exactly, but classifying *why* a claim was
   denied, and whether it was preventable, is M4.8.
 - Claims and remittances are joined on the claim number the submitter sent and
-  the payer echoed in CLP01. The payer's own control number (CLP07) is stored
-  but not yet used as a second match key, which M1.10 needs for reversals.
+  the payer echoed in CLP01. Reversals and recoupments match on CLP07 instead,
+  which is the stronger key; the claim-to-remittance join has not been moved
+  onto it, so a resubmitted claim still matches by the id it was sent under.
+- `CR` (correction and reversal) remains the one CAS group code that is valid
+  and never appears in a loaded row. Reversals mirror the original
+  adjustments under their original group codes, which is the common payer
+  convention; emitting `CR` instead would have lit up the code path by
+  inventing payer behaviour.
+- A claim whose only posting is a reversal counts as adjudicated for the
+  denial-rate denominator. BR-STATE-05 says final outcome metrics should wait
+  `[TBD-50]` days post-DOS to allow for reversals, and that maturity gate is
+  M2.6 rather than something to approximate here.
 - The corpus chains only two deep. Three-deep chains are covered by fixtures
   (`test_three_submissions_of_one_claim_count_as_one_claim`), not by volume.
 - Modifier order is unexercised by the corpus, which contains no line with two
