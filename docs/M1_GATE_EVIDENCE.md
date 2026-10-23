@@ -5,8 +5,8 @@ permanently. Slow down here."*
 
 This file covers M1.1 (tokenizer and envelope), M1.2 (835 parser with CAS
 unrolling), M1.3 (balance assertion and quarantine), M1.4 (RAW archive before
-parse), M1.5 (837 generator and parser) and M1.8 (CORE schema and loaders).
-M1.6, M1.7, M1.9 and M1.10 are not in this change.
+parse), M1.5 (837 generator and parser), M1.8 (CORE schema and loaders) and
+M1.9 (resubmission chaining). M1.6, M1.7 and M1.10 are not in this change.
 
 ---
 
@@ -595,6 +595,172 @@ and reading it as an integer bills 1.5 units of a drug as 1.
 
 ---
 
+## M1.9 — the number BR-DATA-03 exists to protect
+
+    BR-DATA-03 (MUST): Resubmissions MUST be chained to the original claim,
+    not stored as independent claims. Failure to do this inflates volume and
+    distorts the denial rate.
+
+Measured on the full corpus, both transaction types loaded under one client:
+
+```
+submissions   616        denied submissions   107        17.37%
+claims        600        denied claims         91        15.17%
+```
+
+The wrong number is 2.2 points higher than the right one — a 14% relative
+overstatement, in the direction that makes the operation look worse than it is.
+Both figures are honest counts of real rows. Nothing downstream can tell them
+apart, which is why this is a schema problem rather than a reporting one.
+
+Resubmitting a denied claim does not deny it twice. `DenialRate` reports both
+grains and names the wrong one `per_submission`, because anyone reconciling
+against a previous vendor's numbers needs it to explain the difference, and
+someone looking at it labelled is far less likely to recompute it by accident
+than someone who does not know it exists.
+
+### The chain is stored twice, deliberately
+
+`original_claim_id` is the edge BR-DATA-03 and SRS section 5.2 both describe.
+`root_claim_id` is that chain already resolved, so counting distinct claims is
+`COUNT(DISTINCT root_claim_id)` rather than a recursive CTE.
+
+The redundancy buys the thing that matters: a query that forgets the chain
+returns the same answer as one that remembers. The alternative leaves every
+future counting query one forgotten CTE away from reporting submissions, and
+that query will look right. Same trade already made for `client_id` under
+PD-20 — a correctness property should not depend on every future author
+remembering to write a join.
+
+Three CHECK constraints stop the two representations drifting, each proven by
+dropping it inside a transaction, re-attempting the forbidden row, and rolling
+back, so the schema was never left altered:
+
+```
+PROVEN   PD-7     CHECK claim_does_not_replace_itself
+PROVEN   PD-7     CHECK root_agrees_with_the_chain (original rooted elsewhere)
+PROVEN   PD-7     CHECK root_agrees_with_the_chain (resubmission rooted at itself)
+PROVEN   PD-7     CHECK attempt_agrees_with_the_chain
+PROVEN   PD-14    UNIQUE uq_claim_client_submitter_id
+PROVEN   PD-7     FK claim.original_claim_id -> claim
+PROVEN   BR-M6-01 CHECK line_has_a_diagnosis_pointer
+PROVEN            CHECK units_are_positive
+PROVEN            CHECK procedure_code_is_present
+```
+
+A resubmission rooted at itself is the shape that matters: it counts as a
+separate claim in exactly the query meant to collapse it.
+
+### A constraint that was not constraining
+
+`line_has_a_diagnosis_pointer` was first written as
+`array_length(diagnosis_pointers, 1) >= 1`. On an empty array
+`array_length(x, 1)` returns **NULL**, a CHECK that evaluates to NULL passes,
+and the constraint silently permitted exactly the row it existed to forbid:
+
+```
+E       Failed: DID NOT RAISE IntegrityError
+FAILED test_a_line_must_carry_a_diagnosis_pointer
+```
+
+`cardinality()` returns 0 for an empty array and the constraint now fires. The
+test caught it only because it asserts the refusal rather than assuming it —
+a test that had merely inserted a good row would have passed all the way to
+production.
+
+### Two bugs the loader tests found
+
+**A quarantined file still wrote rows.** The first loader validated and
+inserted in one pass, so a quarantine partway through left the claims added
+before it pending in the session. The file ended up marked `QUARANTINED` with
+CORE rows behind it — the partial load DR-10 exists to prevent, wearing the
+right status.
+
+**A resubmission could not see its original in the same file.** The session
+runs with `autoflush=False`, deliberately: PD-2 depends on nothing reaching the
+database outside an explicit transaction boundary. So a claim added moments
+earlier was invisible to the `SELECT` that looks for the parent, and a file
+carrying both an original and its resubmission quarantined under IR-05.
+
+Both are fixed by the same change: resolve and validate every claim in the file
+*before* writing any row, consulting the batch's own planned claims before the
+database. One pass that plans, one that writes.
+
+### An unknown original is refused, not guessed
+
+A `REF*F8` naming a claim this platform has not loaded quarantines the file
+under `IR-05` rather than loading it as an original. Treating the orphan as a
+new claim is the tempting recovery and it is precisely the failure BR-DATA-03
+names: volume rises, the denial rate moves, and every number stays internally
+consistent.
+
+Files do legitimately arrive out of order, so the recovery matters: the bytes
+are in RAW, reprocessing is idempotent, and re-presenting the file once the
+original has landed loads it normally.
+`test_an_out_of_order_file_succeeds_once_its_original_arrives` asserts that
+round trip. A quarantine that resolves itself on retry is a far better failure
+than a wrong number nobody can see.
+
+### What counts as a denial
+
+DOC-02's glossary: *"Payer refusal to pay a line or claim, with a reason
+code."* So a line is denied when the payer paid nothing on it **and** gave a
+reason — both halves. A line paid at zero with no reason code is not an
+adjudicated denial, and a reason code on a line that was still paid is an
+adjustment, not a refusal.
+
+That rule reproduces the generator's own `is_denied` flag exactly, with no
+disagreement in either direction:
+
+```
+denied lines by this rule   135     generator's is_denied = Y   135
+claims by this rule         107     generator                   107
+not-denied lines            883     of which paid > 0           883
+                                    of which carry a CARC         0
+```
+
+It is a structural signal, not a taxonomy. Classifying *why* a claim was denied
+and whether it was preventable is M4.8's work; this only answers "how often",
+on the right denominator.
+
+### Nine controls, each removed once
+
+```
+PD-7   chain dropped entirely                        CAUGHT
+PD-7   root set to the parent, not the parent's root CAUGHT
+IR-05  orphan loaded as a new claim                  CAUGHT
+       same-file chain resolved from the database    CAUGHT
+IR-07  charge reconciliation dropped                 CAUGHT
+IR-08  diagnosis pointer assertion dropped           CAUGHT
+       denial rate counts submissions                CAUGHT
+PD-20  client scope dropped from the denial rate     CAUGHT
+       a reason code alone counts as a denial        CAUGHT
+```
+
+`git diff` on both mutated files is empty afterwards.
+
+### Two more tests that could not fail
+
+Two of those nine passed under mutation on the first run, and both were the
+test's fault rather than the control's.
+
+**The contractual-adjustment test.** It asserted that a reason code on a paid
+line is not a denial — but its fixture emitted no `CAS` segment at all on a
+paid line, so it was really asserting that a line with *no* adjustment is not a
+denial, which nothing was in danger of getting wrong. The fixture now has a
+`partial` outcome: charged 200, paid 150, 50 written off under CO-45.
+
+**The client-scoping test.** With the two clients using different claim ids,
+the join to `claim_payment` excluded the other client's rows anyway, so
+dropping the client filter on `claim` changed nothing. Both clients now use
+`CLM1` — which is also the realistic case, two practices each numbering their
+claims from 1 — and the control becomes observable.
+
+That is three vacuous tests found across M1.5 and M1.9 by the same method. Each
+one existed, named the right invariant, passed, and verified nothing.
+
+---
+
 ## Full gate at this commit
 
 ```
@@ -604,9 +770,10 @@ mypy strict          no issues found in 32 source files
 module boundaries    3 contracts kept, 0 broken
 unit                 180 passed
 property              17 passed
-integration           22 passed   (against a real Postgres 16)
-security              54 passed   (against a real Postgres 16, as rcm_app)
-coverage floor       rcm/ingestion/x12  97.9%  (900/919)    rcm/domain  100.0%
+integration           53 passed   (against a real Postgres 16)
+security              68 passed   (against a real Postgres 16, as rcm_app)
+coverage floor       rcm/ingestion/x12  97.9%  (900/919)    rcm/domain  100.0% (193/193)
+migrations           alembic check clean; 0004 downgrades and re-applies cleanly
 prime directives     PD-16, PD-17, S-11, T20 all OK
 later-stage guard    no un-wired stage
 bandit               no medium or high findings
@@ -624,11 +791,15 @@ test_reprocessing_835_is_idempotent         tests/integration/test_remittance_lo
 test_resubmission_chains_to_original        tests/unit/test_x12_claim.py
 test_modifier_25_never_auto_applied         tests/unit/test_x12_claim.py
 test_modifier_59_never_auto_applied         tests/unit/test_x12_claim.py
+test_resubmission_chains_to_original        tests/integration/test_claim_loading.py
+test_denial_rate_excludes_resubmissions     tests/integration/test_denial_rate.py
 ```
 
-`test_denial_rate_excludes_resubmissions` is the remaining PD-7 invariant. It
-needs a denial rate to exclude them from, so it lands with M1.9 where the chain
-reaches CORE.
+Both PD-7 invariants are now satisfied. `test_resubmission_chains_to_original`
+appears twice on purpose: once at the parser, where it asserts `REF*F8`
+survives reading, and once at CORE, where it asserts the chain reaches the
+database. The first passing while the second failed is exactly the state M1.5
+left the platform in.
 
 ### Still open
 
@@ -646,9 +817,18 @@ reaches CORE.
   the 2310 rendering-provider loops are both unparsed, so rendering provider,
   referring provider and service facility are not available from an 837 yet.
   None of the corpus needs them; a real payer's files will.
-- Parsed claims do not reach CORE. There is no claim table yet — M1.9
-  (resubmission chaining) and M3 (claim lifecycle) are where `original_claim_id`
-  stops being a field on a parsed object and becomes a foreign key.
+- `claim.practice_identifier` and `subscriber_member_id` are text rather than
+  foreign keys. The SRS schema references `practice(practice_id)` and
+  `patient(patient_id)`; neither table exists until M3, so adding those keys is
+  an expand-migrate step once it does.
+- The denial signal is structural — paid nothing, with a reason code. It
+  reproduces the generator's flag exactly, but classifying *why* a claim was
+  denied, and whether it was preventable, is M4.8.
+- Claims and remittances are joined on the claim number the submitter sent and
+  the payer echoed in CLP01. The payer's own control number (CLP07) is stored
+  but not yet used as a second match key, which M1.10 needs for reversals.
+- The corpus chains only two deep. Three-deep chains are covered by fixtures
+  (`test_three_submissions_of_one_claim_count_as_one_claim`), not by volume.
 - Modifier order is unexercised by the corpus, which contains no line with two
   modifiers. Fixtures cover it; volume does not.
 - `rcm_app` can still write `alembic_version` (recorded at the M0 gate, in
