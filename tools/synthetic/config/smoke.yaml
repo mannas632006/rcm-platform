@@ -34,5 +34,8 @@ recoupment_rate: 0.012
 reversal_rate: 0.015
 # M1.7: how often a file carries an alternate spelling of the payer's name.
 payer_alias_rate: 0.3
+# M1.6 / PD-4: rejections, which never reach adjudication and are not denials.
+syntax_rejection_rate: 0.02
+claim_rejection_rate: 0.04
 no_newline_file_rate: 0.15
 emit_unbalanced_file: true

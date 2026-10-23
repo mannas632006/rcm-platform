@@ -9,6 +9,11 @@ autogenerate diffs that depend on import order.
 
 from __future__ import annotations
 
+from rcm.domain.acknowledgement import (
+    AcknowledgementOutcome,
+    AcknowledgementSource,
+    ClaimAcknowledgement,
+)
 from rcm.domain.claim import MAX_MODIFIERS, Claim, ClaimLine
 from rcm.domain.payer import MatchCandidateStatus, Payer, PayerAlias, PayerMatchCandidate
 from rcm.domain.remittance import (
@@ -25,7 +30,10 @@ from rcm.domain.remittance import (
 __all__ = [
     "MAX_MODIFIERS",
     "VALID_CAS_GROUP_CODES",
+    "AcknowledgementOutcome",
+    "AcknowledgementSource",
     "Claim",
+    "ClaimAcknowledgement",
     "ClaimLine",
     "ClaimPayment",
     "MatchCandidateStatus",

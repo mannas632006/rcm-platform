@@ -23,7 +23,7 @@ from decimal import Decimal
 
 from .build import build
 from .generate import OUT, ROOT, Adjudicator, money
-from .x12 import write_835, write_837p, write_999
+from .x12 import write_277ca, write_835, write_837p, write_999
 
 
 def _spellings_emitted(x835, x837) -> int:
@@ -75,8 +75,9 @@ def run(config_path: pathlib.Path):
     x837 = ensure(OUT / "x12" / "837")
     x835 = ensure(OUT / "x12" / "835")
     x999 = ensure(OUT / "x12" / "999")
+    x277 = ensure(OUT / "x12" / "277CA")
     csvd = ensure(OUT / "csv")
-    for d in (x837, x835, x999):
+    for d in (x837, x835, x999, x277):
         for f in d.glob("*.txt"):
             f.unlink()
 
@@ -149,7 +150,10 @@ def run(config_path: pathlib.Path):
     }
     receiver = {"etin": "CLEARINGHSE1", "name": "SEED CLEARINGHOUSE"}
 
-    n837 = 0
+    n837 = n277 = 0
+    rejected_999 = accepted_277 = rejected_277 = 0
+    #: Claims that never reached adjudication, so never receive an 835.
+    rejected_claim_ids: set[str] = set()
     for (prac_id, payer_id, sub_iso), group in sorted(batches.items()):
         payload = []
         for c in group:
@@ -209,21 +213,84 @@ def run(config_path: pathlib.Path):
             text, encoding="utf-8"
         )
         n837 += 1
+
+        # A 999 answers one narrow question -- did the transmission parse --
+        # and BR-M8-02 says acceptance here is not submission. Most parse; a
+        # few do not, because a corpus where every 999 is accepted leaves the
+        # rejection path untested, which is what it did until M1.6.
+        syntax_accepted = rng.random() >= cfg.get("syntax_rejection_rate", 0.0)
+        if not syntax_accepted:
+            rejected_999 += 1
+            # Rejected at the clearinghouse, so it never reached the payer at
+            # all -- no 277CA and no 835.
+            rejected_claim_ids.update(c["claim_id"] for c in payload)
         (x999 / f"999_{ctrl}.txt").write_text(
-            write_999(receiver["etin"], submitter["etin"], ctrl, True, ctrl),
+            write_999(receiver["etin"], submitter["etin"], ctrl, syntax_accepted, ctrl),
             encoding="utf-8",
         )
 
+        # The 277CA is the payer's front-end verdict, and the transaction
+        # BR-M8-02 actually turns on. A claim the clearinghouse rejected for
+        # syntax never reaches the payer, so it gets no 277CA at all.
+        if syntax_accepted:
+            ack_claims = []
+            for c in payload:
+                claim_rejected = rng.random() < cfg.get("claim_rejection_rate", 0.0)
+                if claim_rejected:
+                    rejected_277 += 1
+                    # DOC-02 section 2.5: a rejection "never reached payer"
+                    # and was "not adjudicated". So this claim gets no 835 --
+                    # emitting one would make the corpus assert that a claim
+                    # was both rejected before adjudication and adjudicated,
+                    # which is the confusion PD-4 exists to prevent.
+                    rejected_claim_ids.add(c["claim_id"])
+                else:
+                    accepted_277 += 1
+                ack_claims.append(
+                    {
+                        "claim_id": c["claim_id"],
+                        "accepted": not claim_rejected,
+                        "charge": c["total_charge"],
+                        "dos": c["dos"],
+                        "patient_last": c["patient_last"],
+                        "patient_first": c["patient_first"],
+                        "status_code": "21",
+                        "reason": "Missing or invalid subscriber identifier",
+                    }
+                )
+            ctrl += 1
+            (x277 / f"277CA_{ctrl}.txt").write_text(
+                write_277ca(
+                    payer={
+                        "etin": f"PAYER{payer_id}",
+                        "name": payer_by_id[payer_id]["canonical_name"],
+                        "payer_id": payer_id,
+                    },
+                    submitter=submitter,
+                    billing={"name": payload[0]["billing_name"], "npi": payload[0]["billing_npi"]},
+                    claims=ack_claims,
+                    ctrl=ctrl,
+                    now=datetime.combine(date.fromisoformat(sub_iso), datetime.min.time()),
+                    newlines=nl,
+                ),
+                encoding="utf-8",
+            )
+            n277 += 1
+
     # ---------------- 835 files, batched by payer + check date -----------
     remit_batches: dict[tuple, list] = {}
-    for c in adjudicated:
+    # Only claims that actually reached adjudication are remitted. A rejected
+    # claim is corrected and resubmitted as a new claim; it is never paid or
+    # denied under the number that was rejected.
+    adjudicated_claims = [c for c in adjudicated if c["claim_id"] not in rejected_claim_ids]
+    for c in adjudicated_claims:
         # weekly remittance cycle -> one 835 spanning many claims, one EFT (EC-46)
         wk = c["adjudication_date"] - timedelta(days=c["adjudication_date"].weekday())
         key = (c["payer"]["payer_id"], wk.isoformat())
         remit_batches.setdefault(key, []).append(c)
 
     n835 = 0
-    recoup_pool = [c for c in adjudicated if not c["result"]["denied"]]
+    recoup_pool = [c for c in adjudicated_claims if not c["result"]["denied"]]
     recouped = set()
     if recoup_pool:
         k = int(len(recoup_pool) * cfg["recoupment_rate"])
@@ -239,7 +306,7 @@ def run(config_path: pathlib.Path):
     # exercising both at once tests neither cleanly.
     reversal_pool = [
         c
-        for c in adjudicated
+        for c in adjudicated_claims
         if not c["result"]["denied"]
         and c["result"]["total_paid"] > 0
         and c["claim_id"] not in recouped
@@ -355,7 +422,7 @@ def run(config_path: pathlib.Path):
     # balanced -- `-charge == -paid + -adjustments` holds exactly when the
     # original held.
     for c in sorted(
-        (c for c in adjudicated if c["claim_id"] in reversed_claims),
+        (c for c in adjudicated_claims if c["claim_id"] in reversed_claims),
         key=lambda c: c["claim_id"],
     ):
         r = c["result"]
@@ -531,6 +598,11 @@ def run(config_path: pathlib.Path):
                 "line_count_on_claim": len(c["lines"]),
                 "submission_attempt_number": c["submission_attempt"],
                 "recouped": "Y" if c["claim_id"] in recouped else "N",
+                # PD-4. A claim rejected before adjudication receives no 835,
+                # so the remittance totals are expected to be short by exactly
+                # these claims -- and anything reconciling the two must say so
+                # rather than relaxing to an inequality.
+                "reached_adjudication": "N" if c["claim_id"] in rejected_claim_ids else "Y",
             }
         )
         for l in r["lines"]:
@@ -583,6 +655,11 @@ def run(config_path: pathlib.Path):
                     "submission_dow": c["submission_date"].weekday(),
                     "submission_month": c["submission_date"].month,
                     # --- labels, from the 835 -------------------------------
+                    # Present only for claims that reached adjudication. A
+                    # rejected claim has no 835, so these columns describe an
+                    # outcome that never happened and PD-11 would call them
+                    # leakage if a model were trained on them unfiltered.
+                    "reached_adjudication": ("N" if c["claim_id"] in rejected_claim_ids else "Y"),
                     "adjudication_date": c["adjudication_date"].isoformat(),
                     "line_allowed_amount": str(l["allowed"]),
                     "line_paid_amount": str(l["paid"]),
@@ -651,6 +728,11 @@ def run(config_path: pathlib.Path):
             "x12_835_files": n835,
             "recouped_claims": len(recouped),
             "reversed_claims": len(reversed_claims),
+            "x12_277ca_files": n277,
+            "rejected_999": rejected_999,
+            "accepted_277ca_claims": accepted_277,
+            "rejected_277ca_claims": rejected_277,
+            "claims_never_adjudicated": len(rejected_claim_ids),
             "payer_spellings": _spellings_emitted(x835, x837),
         },
         "denial_rate_all_attempts": round(denied / max(1, len(line_rows)), 4),

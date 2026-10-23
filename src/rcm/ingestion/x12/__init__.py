@@ -11,7 +11,10 @@ The layers are deliberately separate and separately testable:
     envelope    segments -> ISA/GS/ST structure, with every control count checked
     remittance  one 835 transaction -> Remittance
     claim       one 837 transaction -> ClaimSubmission, and back again
-    fields      the element parsers both transaction parsers share
+    acknowledgement  one 999 -> did the transmission parse
+    claim_status     one 277/277CA -> did the payer accept the claim
+    eligibility      one 271 -> is the patient covered
+    fields      the element parsers the transaction parsers share
 
 `read_remittances` and `read_claims` are the convenience paths for the common
 case; anything that needs to inspect a file that fails a later stage uses the
@@ -20,6 +23,12 @@ layers directly.
 
 from __future__ import annotations
 
+from rcm.ingestion.x12.acknowledgement import (
+    FunctionalAcknowledgement,
+    SegmentError,
+    TransactionAcknowledgement,
+    parse_999,
+)
 from rcm.ingestion.x12.claim import (
     STANDARD_SEPARATORS,
     BillingProvider,
@@ -30,6 +39,18 @@ from rcm.ingestion.x12.claim import (
     TradingPartner,
     build_837,
     parse_837,
+)
+from rcm.ingestion.x12.claim_status import (
+    ClaimStatus,
+    ClaimStatusResponse,
+    parse_277,
+)
+from rcm.ingestion.x12.eligibility import (
+    Benefit,
+    BenefitPeriod,
+    EligibilityResponse,
+    RequestProblem,
+    parse_271,
 )
 from rcm.ingestion.x12.envelope import (
     FunctionalGroup,
@@ -68,34 +89,49 @@ __all__ = [
     "STANDARD_SEPARATORS",
     "VALID_CAS_GROUPS",
     "Adjustment",
+    "Benefit",
+    "BenefitPeriod",
     "BillingProvider",
     "Claim837",
     "ClaimPayment",
     "ClaimServiceLine",
+    "ClaimStatus",
+    "ClaimStatusResponse",
     "ClaimSubmission",
+    "EligibilityResponse",
+    "FunctionalAcknowledgement",
     "FunctionalGroup",
     "Interchange",
     "Limits",
     "ProviderAdjustment",
     "Remittance",
+    "RequestProblem",
     "Segment",
+    "SegmentError",
     "Separators",
     "ServiceLine",
     "Subscriber",
     "TradingPartner",
+    "TransactionAcknowledgement",
     "TransactionSet",
     "build_837",
     "decode",
     "detect_separators",
     "optional_amount",
     "optional_date",
+    "parse_271",
+    "parse_277",
     "parse_835",
     "parse_837",
+    "parse_999",
     "parse_amount",
     "parse_date",
     "parse_interchange",
     "parse_quantity",
+    "read_acknowledgements",
+    "read_claim_statuses",
     "read_claims",
+    "read_eligibility",
     "read_interchange",
     "read_remittances",
     "tokenize",
@@ -138,4 +174,43 @@ def read_claims(
     return tuple(
         parse_837(transaction, interchange.separators)
         for transaction in interchange.transaction_sets("837")
+    )
+
+
+def read_acknowledgements(
+    source: str | bytes, *, limits: Limits | None = None
+) -> tuple[FunctionalAcknowledgement, ...]:
+    """Every 999 in one interchange."""
+    interchange = read_interchange(source, limits=limits)
+    return tuple(
+        parse_999(transaction, interchange.separators)
+        for transaction in interchange.transaction_sets("999")
+    )
+
+
+def read_claim_statuses(
+    source: str | bytes, *, limits: Limits | None = None
+) -> tuple[ClaimStatusResponse, ...]:
+    """Every 277 or 277CA in one interchange.
+
+    Both carry ST01 "277": a 277CA is distinguished by its implementation
+    guide (005010X214) rather than by a different transaction identifier, so
+    filtering on ST01 returns both and the caller decides what the statuses
+    mean.
+    """
+    interchange = read_interchange(source, limits=limits)
+    return tuple(
+        parse_277(transaction, interchange.separators)
+        for transaction in interchange.transaction_sets("277")
+    )
+
+
+def read_eligibility(
+    source: str | bytes, *, limits: Limits | None = None
+) -> tuple[EligibilityResponse, ...]:
+    """Every 271 in one interchange."""
+    interchange = read_interchange(source, limits=limits)
+    return tuple(
+        parse_271(transaction, interchange.separators)
+        for transaction in interchange.transaction_sets("271")
     )

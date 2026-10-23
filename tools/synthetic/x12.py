@@ -413,6 +413,96 @@ def write_999(
     st_index = w.count() + 1
     w.add("ST", "999", str(ctrl).zfill(4), "005010X231A1")
     w.add("AK1", "HC", str(ref_group_ctrl), "005010X222A1")
+    if not accepted:
+        # A 999 saying only "rejected" sends an operator to open the file by
+        # hand. AK2/IK3/IK4/IK5 name the transaction, the segment, its
+        # position and the element that failed, which is the difference
+        # between a queue someone can work and one they cannot.
+        w.add("AK2", "837", str(ref_group_ctrl).zfill(4), "005010X222A1")
+        w.add("IK3", "CLM", "23", "2300", "8")
+        w.add("IK4", "2", "782", "7", "NOTANUMBER")
+        w.add("IK5", "R", "5")
     w.add("AK9", "A" if accepted else "R", "1", "1", "1" if accepted else "0")
+    _close(w, st_index, ctrl, ctrl, 1)
+    return w.render()
+
+
+# ---------------------------------------------------------------------------
+# 277CA - claim acknowledgement
+# ---------------------------------------------------------------------------
+def write_277ca(
+    payer: dict,
+    submitter: dict,
+    billing: dict,
+    claims: list,
+    ctrl: int,
+    now: datetime | None = None,
+    newlines: bool = True,
+) -> str:
+    """The payer's front-end verdict on a batch of claims.
+
+    `claims` is a list of dicts carrying `claim_id`, `accepted`, `charge`,
+    `dos`, `patient_last`, `patient_first` and, for a rejection, a `reason`.
+
+    This is the transaction BR-M8-02 turns on: *"A claim MUST NOT be
+    considered submitted until a 277CA acceptance is received. 999 acceptance
+    alone is insufficient -- it confirms syntax, not acceptance."* The corpus
+    carried 325 syntax acknowledgements and no claim acknowledgements at all,
+    so that rule had nothing to check against.
+
+    Accepted claims carry status category A2 (accepted into adjudication);
+    rejected ones carry A3 (returned as unprocessable), which is a
+    *rejection* in DOC-02 section 2.5's sense and never a denial.
+    """
+    now = now or datetime.now(UTC)
+    w = SegmentWriter(newlines)
+    _isa(w, payer["etin"], submitter["etin"], ctrl, now)
+    _gs(w, "HN", payer["etin"], submitter["etin"], ctrl, now, "005010X214")
+
+    st_index = w.count() + 1
+    w.add("ST", "277", str(ctrl).zfill(4), "005010X214")
+    w.add("BHT", "0085", "08", str(ctrl), _d8(now.date()), _hm(now), "TH")
+
+    # 2000A information source: the payer answering.
+    w.add("HL", "1", "", "20", "1")
+    w.add("NM1", "PR", "2", payer["name"], "", "", "", "", "PI", payer["payer_id"])
+    w.add("TRN", "1", f"BATCH{ctrl}")
+    w.add("DTP", "050", "D8", _d8(now.date()))
+
+    # 2000B information receiver: who sent the claims.
+    w.add("HL", "2", "1", "21", "1")
+    w.add("NM1", "41", "2", submitter["name"], "", "", "", "", "46", submitter["etin"])
+
+    # 2000C provider of service.
+    w.add("HL", "3", "2", "19", "1")
+    w.add("NM1", "85", "2", billing["name"], "", "", "", "", "XX", billing["npi"])
+
+    hl = 4
+    for c in claims:
+        # 2000D patient, then the claim status below it.
+        w.add("HL", str(hl), "3", "22", "0")
+        w.add("NM1", "QC", "1", c["patient_last"], c["patient_first"])
+        w.add("TRN", "2", c["claim_id"])
+        if c["accepted"]:
+            w.add("STC", COMP.join(["A2", "20"]), _d8(now.date()), "WQ", _amt(c["charge"]))
+            w.add("REF", "1K", "PCN" + c["claim_id"][3:])
+        else:
+            w.add(
+                "STC",
+                COMP.join(["A3", c.get("status_code", "21")]),
+                _d8(now.date()),
+                "U",
+                _amt(c["charge"]),
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                c.get("reason", "Missing or invalid information"),
+            )
+        w.add("DTP", "472", "D8", _d8(c["dos"]))
+        hl += 1
+
     _close(w, st_index, ctrl, ctrl, 1)
     return w.render()

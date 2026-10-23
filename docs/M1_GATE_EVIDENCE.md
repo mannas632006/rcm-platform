@@ -7,7 +7,9 @@ This file covers M1.1 (tokenizer and envelope), M1.2 (835 parser with CAS
 unrolling), M1.3 (balance assertion and quarantine), M1.4 (RAW archive before
 parse), M1.5 (837 generator and parser), M1.8 (CORE schema and loaders) and
 M1.7 (payer normalisation), M1.9 (resubmission chaining) and M1.10 (reversals
-and recoupments). M1.6 is not in this change.
+and recoupments) and M1.6 (271/277/999/277CA parsers). With M1.6 the
+milestone is complete, so the gate measurements at the end of this file are
+the M1 gate itself rather than a progress report.
 
 ---
 
@@ -1095,22 +1097,298 @@ nothing either way until the code was broken.
 
 ---
 
+## M1.6 — the milestone that closes PD-4
+
+On paper M1.6 is four more parsers. In practice it is the milestone where
+PD-4 becomes testable, and that is the better frame for it, because
+`test_rejection_is_not_denial` had been sitting unsatisfied in CLAUDE.md
+section 7.2 since M0 with nothing in the platform able to produce a rejection
+at all.
+
+A rejection and a denial are both "the claim was not paid", which is why they
+get conflated, and they behave oppositely:
+
+```
+                        rejection              denial
+reached adjudication?   no                     yes
+arrives via             999 / 277CA            835
+timely filing           clock keeps running    date preserved
+appealable?             no -- fix and resend   yes
+counts in denial rate   no                     yes
+```
+
+### What conflating them costs, measured
+
+The full corpus, loaded and then queried both ways:
+
+```
+honest     5690 denied / 32062 adjudicated claims   17.75%
+conflated  6981 denied / 33353 adjudicated claims   20.93%
+```
+
+A platform that counts rejections as denials reports **20.93% against a true
+17.75%** — 3.18 percentage points, an 18% relative overstatement. The reason
+this is worth a number rather than a warning is that every figure in the wrong
+column is a real count of real rows. Nothing downstream can detect it. It does
+not look like a bug, it looks like payers behaving worse, and the operational
+response to those two readings is completely different: one sends you to
+renegotiate contracts and the other sends you to fix a field on an intake
+form.
+
+### The separation is structural, not a flag
+
+`claim_acknowledgement` holds rejections. Denials are derived from
+`claim_payment`, `remittance_service_line` and `remittance_adjustment`. The
+denial query does not read the acknowledgement table, and there is no join
+that would pull it in by accident.
+
+That matters more than it sounds. A flag on a shared table leaves every future
+query one forgotten `WHERE` away from the conflation, and the queries that
+matter get written in a hurry by someone who was not here for this decision.
+Separate tables mean the wrong answer is not reachable. The enum helps the
+same way by what it lacks:
+
+```python
+class AcknowledgementOutcome(StrEnum):
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+```
+
+There is deliberately no `DENIED`, and the database agrees:
+
+```
+CHECK (outcome IN ('ACCEPTED', 'REJECTED'))   ck_claim_acknowledgement_outcome_is_known
+CHECK (source  IN ('999', '277CA', '277'))    ck_claim_acknowledgement_source_is_known
+```
+
+`source` excluding `835` is the same control from the other direction: an 835
+carries denials, so letting it be a source here would be the conflation
+arriving by the back door.
+
+### Three distinctions that are one wrong character apart
+
+Each of these is a pair of codes that read almost identically and mean
+opposite things. All three are now pinned by a test, and each test was
+confirmed to fail without its control.
+
+**999 `P` is a rejection, not an acceptance.** `P` is "partially accepted —
+at least one transaction set was rejected". A pipeline reading it as
+acceptance loses exactly the claims that failed, and loses them silently, so
+it sits in `REJECTED_CODES` with `M`, `R`, `W` and `X` (PD-18, fail closed).
+`E` — "accepted, but errors were noted" — is on the accepted side, because
+treating it as a rejection stops a submission that actually landed.
+
+**271 `5` pays and `7` does not.** `5` is "active, pending investigation";
+`7` is "inactive, pending eligibility update". Collapsing them denies
+coverage to a patient who has it. The mutation pass found that these are
+really two separate controls and I had written one test for them: removing `7`
+from the inactive list does not make it active, it makes the response read as
+*unanswered*, which is a different wrong answer. Both now have their own test.
+
+**An unanswered enquiry is not a negative answer.** `AAA` segments mean the
+payer could not process the question — invalid member id, name mismatch, payer
+unavailable. "We could not look" and "they are not covered" lead to opposite
+actions and the second one bills an insured patient, so `answered` and
+`is_active` are separate properties and a 271 carrying only `AAA` problems
+answers `False` to both without either meaning "uncovered".
+
+### An unreadable category stops the file
+
+A 277 status category outside both code lists has no verdict this platform can
+read. Guessing one means a claim silently acquires an outcome nobody chose, so
+the file quarantines under a named assertion:
+
+```
+IR-09: file contains a 999, 277 or 271 transaction
+IR-10: every claim status category is one the platform reads
+```
+
+Quarantine is all-or-nothing. A file naming four readable claims and one
+unreadable one loads none of them — partial loading would leave the readable
+claims in, the unreadable one out, and nothing recording the difference. The
+bytes are in RAW, so the file loads in full once the code list is extended
+(PD-9, PD-10).
+
+### A bug the tests found
+
+The 999 error loop dropped every IK4 after the first:
+
+```python
+# before
+current.errors.append(SegmentError(...))
+current.pending_segment = None      # <- the next IK4 fails its own guard
+```
+
+The guard on the IK4 branch is `current.pending_segment is not None`, so
+clearing it meant the second and third IK4 under one IK3 were silently
+discarded — directly contradicting the comment three lines above, which
+promised that "several IK4s may follow one IK3, each naming a different
+element, so each becomes its own row rather than overwriting the last".
+
+A 999 rejecting a claim for three bad elements reported one. An operator fixes
+it, resubmits, and is rejected again for the second — which is the failure
+mode that looks like a flaky clearinghouse rather than a parser bug. Fixed by
+keeping the group open and tracking whether any IK4 refined it, so an IK3 with
+no IK4 is still kept on its own and an IK3 with several is not duplicated:
+
+```python
+pending_refined: bool = False
+
+def close_segment(self) -> None:
+    if self.pending_segment is not None and not self.pending_refined:
+        self.errors.append(self.pending_segment)
+    self.pending_segment = None
+    self.pending_refined = False
+```
+
+### Two tests I wrote wrong
+
+Worth recording, because in both cases the schema was right and the test was
+the thing that needed fixing — the opposite of the usual direction.
+
+`ACCEPTED_WITH_ERRORS` is 20 characters against a `varchar(16)`, so Postgres
+refused it with `StringDataRightTruncation` before the CHECK ever saw it. The
+row is refused either way, but by a different control than the one I was
+claiming to test. Split into two tests, one per control.
+
+A uniqueness test asserted that two clients may hold the same claim id in one
+file. They cannot, and should not be able to: a `raw_file` belongs to exactly
+one client, so `uq_acknowledgement_fact` keying on `raw_file_id` already
+scopes the fact to a client without naming `client_id`. One file carrying two
+clients' verdicts is not a case to permit, it is a thing that cannot be
+archived in the first place. The test now uses two files, which is the only
+way the scenario can actually occur.
+
+### Prove the negative — 17 controls, 17 proven
+
+Each control removed once, its test run and confirmed to fail, the source
+restored and verified byte-identical by hash.
+
+```
+PROVEN  PD-4   REJECTED_CATEGORIES contains A3
+PROVEN  PD-4   the category lists are disjoint
+PROVEN  PD-18  999 'P' partially accepted is a rejection
+PROVEN  271    '7' is never read as active coverage
+PROVEN  271    '7' is an answer, not a silence
+PROVEN  PD-18  a refused enquiry is not a negative answer
+PROVEN  999    several IK4s under one IK3 are each recorded
+PROVEN  271    coverage is a period, not a state
+PROVEN  277    an STC outside a claim loop is refused
+PROVEN  IR-10  an unknown status category quarantines the file
+PROVEN  PD-4   a rejected claim receives no 835 (generator)
+PROVEN  PD-4   CHECK outcome_is_known (no DENIED)
+PROVEN  PD-4   CHECK source_is_known (no 835)
+PROVEN         CHECK a_rejection_names_its_reason
+PROVEN         CHECK acknowledgement_names_its_claim
+PROVEN  PD-14  UNIQUE uq_acknowledgement_fact
+PROVEN  PD-9   FK raw_file_id -> raw_file
+```
+
+Two came back NOT PROVEN on the first run and both were the harness, not a
+gap: changing an error message proves nothing about a test that asserts the
+exception *type*, and removing `7` from the inactive list does not make it
+active. Correcting the mutations is what surfaced the two-controls-one-test
+problem described above.
+
+### The corpus had no 277CAs at all
+
+The same gap as M1.5's missing multi-modifier lines and M1.10's missing
+reversals: the acceptance condition names a behaviour the corpus did not
+contain, so every test of it would have passed by not running. The generator
+now emits 277CAs and rejects a configurable share of claims, and — this is
+the part that keeps the gap from recurring — the independent validator
+*requires* the shape rather than tolerating it:
+
+```python
+check(never_adjudicated > 0, "no rejected claims - PD-4 would be untested at volume")
+```
+
+Finding this also surfaced a corpus that was impossible on its own terms: 3
+claims were both 277CA-rejected and 835-adjudicated, which DOC-02 section 2.5
+forbids. Rejected claims now receive no 835, and both CSVs carry a
+`reached_adjudication` column so the reconciliation tests derive their
+expectations from the generator instead of hard-coding numbers that go stale.
+
+---
+
+## The M1 gate
+
+CLAUDE.md: *"Ingest the full synthetic corpus. Every file balances or
+quarantines. Reprocessing the entire corpus changes nothing (idempotency).
+Report: files processed, rows loaded, quarantine count, and the reprocessing
+diff (must be empty)."*
+
+```
+files processed     12173     3597 x 837, 3597 x 999, 3528 x 277CA, 1451 x 835
+rows loaded        304150
+quarantined             1     the intentional unbalanced fixture
+reprocessing diff   EMPTY
+```
+
+Pass two recognised 8575 files as already loaded and 1 as quarantined, and
+every table count was identical afterwards:
+
+```
+claim                     34773      remittance                  1450
+claim_line                58120      claim_payment              33186
+claim_acknowledgement     37690      remittance_service_line    55445
+raw_file                  12173      remittance_adjustment      70902
+payer                        16      provider_adjustment          363
+payer_alias                  24
+```
+
+PD-4 at full volume, which is the measurement M1.6 adds to the gate:
+
+```
+277CA rejections        1355 claims
+denials                 6366 claims
+both                       0
+999 rejections            69
+277CA acceptances      32738
+```
+
+Denial rate on the corpus, per claim rather than per submission (BR-DATA-03):
+
+```
+claims        32062    denied  5690    17.75%
+submissions   32738    denied  6366    19.45%   <- not the denial rate
+inflation      1.70 percentage points
+```
+
+The independent validator agrees on the shape of the corpus it checks
+separately:
+
+```
+837: 34773 claims, 58120 service lines
+835: 32738 claims, 54706 lines, 69968 CAS reasons
+     balanced 1450, unbalanced 1 (the intentional quarantine fixture)
+     lines carrying >1 CAS reason: 15262
+     reversals: 448 files, 448 claims
+     payer spellings: 35 across 8 payers
+     never adjudicated: 3414 lines (rejected, no 835)
+all checks passed
+```
+
+---
+
 ## Full gate at this commit
 
 ```
 lint                 OK
-format               76 files already formatted
-mypy strict          no issues found in 32 source files
+format               99 files already formatted
+mypy strict          no issues found in 43 source files
 module boundaries    3 contracts kept, 0 broken
-unit                 210 passed
-property              17 passed
-integration           85 passed   (against a real Postgres 16)
-security              82 passed   (against a real Postgres 16, as rcm_app)
-coverage floor       rcm/ingestion/x12  97.7%  (909/930)    rcm/domain  99.7% (315/316)
-migrations           alembic check clean; 0004, 0005 and 0006 all downgrade
+unit                 248 passed
+property              25 passed
+integration          105 passed   (against a real Postgres 16)
+security             102 passed   (against a real Postgres 16, as rcm_app)
+                     --------
+                     480 passed
+coverage floor       rcm/ingestion/x12  98.2%  (1277/1300)   rcm/domain  99.7% (347/348)
+migrations           alembic check clean; 0004 through 0007 all downgrade
                      and re-apply cleanly, grants intact
-generator            independent validator green, and now requires both
-                     reversals and multiple payer spellings to exist
+generator            independent validator green, and now requires reversals,
+                     multiple payer spellings and rejected claims to exist
 prime directives     PD-16, PD-17, S-11, T20 all OK
 later-stage guard    no un-wired stage
 bandit               no medium or high findings
@@ -1134,7 +1412,20 @@ test_reversal_reopens_original_claim        tests/integration/test_reversals.py
 test_reprocessing_a_reversal_is_idempotent  tests/integration/test_reversals.py
 test_several_spellings_resolve_to_one_payer_id   tests/integration/test_payer_registry.py
 test_an_unconfirmed_alias_does_not_resolve       tests/integration/test_payer_registry.py
+test_rejection_is_not_denial                tests/integration/test_acknowledgement_loading.py
+test_no_claim_is_both_rejected_and_denied   tests/integration/test_acknowledgement_corpus_load.py
+test_rejections_do_not_reach_the_denial_rate     (same file)
+test_999_acceptance_is_not_payer_acceptance tests/integration/test_acknowledgement_loading.py
+test_an_acknowledgement_cannot_be_recorded_as_a_denial
+                                            tests/security/test_acknowledgement_constraints.py
+test_reprocessing_an_acknowledgement_is_idempotent
+                                            tests/integration/test_acknowledgement_loading.py
 ```
+
+`test_rejection_is_not_denial` is the one worth calling out: it is the PD-4
+invariant CLAUDE.md section 7.2 has named since M0, and until this milestone
+the platform could not produce a rejection to test it with. **All twelve
+M1-scope invariants from section 7.2 are now satisfied.**
 
 Both PD-7 invariants are now satisfied. `test_resubmission_chains_to_original`
 appears twice on purpose: once at the parser, where it asserts `REF*F8`
@@ -1195,4 +1486,24 @@ left the platform in.
   the single uncovered statement in `rcm/domain`.
 - `rcm_app` can still write `alembic_version` (recorded at the M0 gate, in
   `docs/M0_GATE_EVIDENCE.md`). Unchanged by this milestone.
+- `claim_acknowledgement` takes the same grants as the rest of CORE, so
+  `rcm_app` can UPDATE and DELETE it. An acknowledgement is a historical fact
+  — a payer said this at this time — so an append-only argument exists, but
+  making one CORE table append-only and leaving `claim_payment` and
+  `remittance` writable would be an inconsistency that reads as an oversight.
+  PD-10 carries the integrity story meanwhile: every row traces to archived
+  bytes and the table rebuilds from RAW.
+- A 999 rejection is recorded against the transaction set control number
+  rather than the claims inside it. AK2 carries no claim id, so attributing
+  the rejection to individual claims would mean inventing a mapping the file
+  does not contain — but it does mean a 999 rejection has to be joined
+  through the 837 to find the claims it affected, which nothing does yet.
+- 271 responses are parsed, counted and then discarded. Eligibility is M3's
+  module and a table nothing reads is a table that rots, so the parser is
+  proven by fixtures and the storage waits for the module that needs it.
+- The `277` source value is reachable in the schema but not from the loader:
+  every 277 in the corpus is a 277CA, and the two are distinguished by
+  implementation guide rather than by ST01, so telling them apart means
+  reading GS08 — which matters only once there is a status-enquiry path to
+  send, in M3.
 

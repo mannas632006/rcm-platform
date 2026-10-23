@@ -197,28 +197,62 @@ def test_every_chain_resolves_to_a_real_claim(loaded: dict[str, object]) -> None
 def test_denial_rate_excludes_resubmissions_at_corpus_volume(
     loaded: dict[str, object],
 ) -> None:
-    """The measurement BR-DATA-03 exists to protect.
+    """The measurement BR-DATA-03 exists to protect, at volume.
 
-    One remittance in the corpus is the deliberately unbalanced file, which is
-    quarantined and contributes nothing -- so the claims it would have
-    adjudicated are simply not counted, in either figure.
+    The expected figures are computed from the generator's own CSVs rather
+    than written as constants, so this compares the loaded database against
+    an independent source. The first version hard-coded 616/600/107/91 and
+    went stale the moment M1.6 stopped adjudicating rejected claims -- which
+    is a test asserting yesterday's corpus rather than today's rule.
+
+    Two exclusions, both of them rules rather than adjustments:
+
+      BR-DATA-03  a resubmission is the same claim, so claims are counted by
+                  the root of the chain
+      PD-4        a claim rejected before adjudication was never paid or
+                  denied, so it is in neither the numerator nor the
+                  denominator
     """
     assert loaded["quarantined_remittances"] == 1
+
+    corpus_dir = REPO_ROOT / "data" / "synthetic"
+    with (corpus_dir / "csv" / "claim_headers.csv").open(encoding="utf-8") as handle:
+        headers = {r["claim_id"]: r for r in csv.DictReader(handle)}
+    with (corpus_dir / "csv" / "claim_lines.csv").open(encoding="utf-8") as handle:
+        lines = list(csv.DictReader(handle))
+
+    adjudicated = {r["claim_id"] for r in lines if r.get("reached_adjudication", "Y") == "Y"}
+
+    def root_of(claim_id: str) -> str:
+        seen: set[str] = set()
+        while headers.get(claim_id, {}).get("original_claim_id") and claim_id not in seen:
+            seen.add(claim_id)
+            claim_id = headers[claim_id]["original_claim_id"]
+        return claim_id
+
+    denied_submissions = {
+        r["claim_id"] for r in lines if r["is_denied"] == "Y" and r["claim_id"] in adjudicated
+    }
+
+    expected_submissions = len(adjudicated)
+    expected_claims = len({root_of(c) for c in adjudicated})
+    expected_denied_submissions = len(denied_submissions)
+    expected_denied_claims = len({root_of(c) for c in denied_submissions})
 
     with session_scope() as session:
         result = denial_rate(session, client_id=CLIENT)
 
-    assert result.submissions == 616
-    assert result.denied_submissions == 107
-    assert result.per_submission == Decimal("17.37")
+    assert result.submissions == expected_submissions
+    assert result.claims == expected_claims
+    assert result.denied_submissions == expected_denied_submissions
+    assert result.denied_claims == expected_denied_claims
 
-    assert result.claims == 600
-    assert result.denied_claims == 91
-    assert result.rate == Decimal("15.17")
-
-    # Counting submissions overstates the denial rate by 2.2 points, a 14%
-    # relative error, in the direction that makes the operation look worse.
-    assert result.inflation == Decimal("2.20")
+    # The relationship is the point, not the constants: counting submissions
+    # always overstates, because resubmitting a denied claim does not deny it
+    # a second time.
+    assert expected_claims < expected_submissions
+    assert result.per_submission > result.rate
+    assert result.inflation > Decimal("0")
 
 
 def test_reprocessing_every_claim_file_changes_nothing(loaded: dict[str, object]) -> None:
