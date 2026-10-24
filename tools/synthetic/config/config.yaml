@@ -53,5 +53,8 @@ recoupment_rate: 0.012            # EC-47: paid claims clawed back via PLB
 reversal_rate: 0.015
 # M1.7: how often a file carries an alternate spelling of the payer's name.
 payer_alias_rate: 0.3
+# M1.6 / PD-4: rejections, which never reach adjudication and are not denials.
+syntax_rejection_rate: 0.02
+claim_rejection_rate: 0.04
 no_newline_file_rate: 0.15        # X12 files with no line breaks — parsers must cope
 emit_unbalanced_file: true        # one file that will not balance, for quarantine tests

@@ -16,6 +16,7 @@ deliberately unbalanced file.
 from __future__ import annotations
 
 import collections
+import csv
 import json
 import shutil
 import subprocess
@@ -229,8 +230,22 @@ def test_parsed_totals_reconcile_exactly_with_the_generator(corpus: Path) -> Non
             bucket["adjustments"] += len(remittance.adjustments)
             bucket["payment"] += 1
 
-    assert regular["lines"] == manifest["counts"]["service_lines"]
-    assert regular["adjustments"] == manifest["counts"]["adjustment_rows"]
+    # PD-4: a claim rejected before adjudication receives no 835, so the
+    # remittance totals are short by exactly those claims. The adjudicated
+    # subset is read from the generator's own CSV rather than assumed, so a
+    # change in the rejection rate cannot quietly become a change in what
+    # this test tolerates.
+    with (corpus / "csv" / "claim_lines.csv").open(encoding="utf-8") as handle:
+        csv_lines = list(csv.DictReader(handle))
+    adjudicated = [r for r in csv_lines if r.get("reached_adjudication", "Y") == "Y"]
+    adjudicated_ids = {r["claim_id"] for r in adjudicated}
+    with (corpus / "csv" / "adjustments.csv").open(encoding="utf-8") as handle:
+        csv_adjustments = [r for r in csv.DictReader(handle) if r["claim_id"] in adjudicated_ids]
+
+    assert len(adjudicated) < len(csv_lines), "no rejected claims - PD-4 untested here"
+    assert regular["lines"] == len(adjudicated)
+    assert regular["adjustments"] == len(csv_adjustments)
+    assert manifest["counts"]["service_lines"] == len(csv_lines)
     assert regular["claims"] > 0
 
     # The fixture is one file carrying a handful of claims. If it grows into

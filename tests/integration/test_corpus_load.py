@@ -14,6 +14,7 @@ reversals, recoupments, multi-CAS lines and the one deliberately broken file.
 from __future__ import annotations
 
 import collections
+import csv
 import json
 import shutil
 import subprocess
@@ -138,6 +139,7 @@ def loaded(
         "after": after,
         "archive_root": archive_root,
         "reversal_totals": dict(reversal_totals),
+        "never_adjudicated": _never_adjudicated(corpus),
         "manifest": json.loads((corpus / "manifest.json").read_text(encoding="utf-8")),
     }
     reset_engines()
@@ -185,9 +187,21 @@ def test_the_loaded_rows_reconcile_with_the_generator(loaded: dict[str, object])
     snapshot: dict[str, int] = loaded["snapshot"]  # type: ignore[assignment]
     reversal: dict[str, int] = loaded["reversal_totals"]  # type: ignore[assignment]
 
-    assert snapshot["service_line"] == counts["service_lines"] + reversal["lines"]
-    assert snapshot["adjustment"] == counts["adjustment_rows"] + reversal["adjustments"]
-    assert snapshot["claim_payment"] == counts["claims"] + reversal["claims"]
+    # Two corrections, both real. Reversal files re-state claims the CSVs
+    # already counted, so they are a surplus; claims rejected before
+    # adjudication receive no 835 at all, so they are a shortfall (PD-4).
+    never_adjudicated: dict[str, int] = loaded["never_adjudicated"]  # type: ignore[assignment]
+
+    assert snapshot["service_line"] == (
+        counts["service_lines"] - never_adjudicated["lines"] + reversal["lines"]
+    )
+    assert snapshot["adjustment"] == (
+        counts["adjustment_rows"] - never_adjudicated["adjustments"] + reversal["adjustments"]
+    )
+    assert snapshot["claim_payment"] == (
+        counts["claims"] - never_adjudicated["claims"] + reversal["claims"]
+    )
+    assert never_adjudicated["claims"] > 0, "no rejected claims - PD-4 untested here"
     # One remittance per file except the quarantined one, which loaded none.
     assert snapshot["remittance"] == loaded["files"] - 1
 
@@ -274,3 +288,18 @@ def test_every_archived_file_is_readable_back(loaded: dict[str, object]) -> None
         stored = read_archived(record.storage_path, archive_root=archive_root)
         assert len(stored) == record.byte_size
         assert content_hash(stored) == record.content_hash
+
+
+def _never_adjudicated(corpus: Path) -> dict[str, int]:
+    """Claims the generator rejected before adjudication, from its own CSVs.
+
+    These receive no 835, so every remittance total is short by exactly this
+    much. Counted from the corpus rather than hard-coded, so a change in the
+    rejection rate shows up as a different number rather than a passing test.
+    """
+    with (corpus / "csv" / "claim_lines.csv").open(encoding="utf-8") as handle:
+        rows = [r for r in csv.DictReader(handle) if r.get("reached_adjudication", "Y") == "N"]
+    claim_ids = {r["claim_id"] for r in rows}
+    with (corpus / "csv" / "adjustments.csv").open(encoding="utf-8") as handle:
+        adjustments = [r for r in csv.DictReader(handle) if r["claim_id"] in claim_ids]
+    return {"claims": len(claim_ids), "lines": len(rows), "adjustments": len(adjustments)}

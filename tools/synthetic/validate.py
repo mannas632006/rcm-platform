@@ -307,8 +307,25 @@ def main():
     # ---- CSV mart cross-checks ---------------------------------------
     lines = list(csv.DictReader((OUT / "csv" / "claim_lines.csv").open(encoding="utf-8")))
     adjr = list(csv.DictReader((OUT / "csv" / "adjustments.csv").open(encoding="utf-8")))
-    check(len(lines) == r835_lines, f"CSV lines {len(lines)} != 835 lines {r835_lines}")
-    check(len(adjr) == r835_adj, f"CSV adjustment rows {len(adjr)} != 835 CAS reasons {r835_adj}")
+    # PD-4: a claim rejected before adjudication receives no 835 at all, so
+    # the remittance totals are compared against the adjudicated subset. The
+    # subset is read from the CSV rather than assumed, so a change in the
+    # rejection rate cannot quietly become a change in what this tolerates.
+    adjudicated_lines = [r for r in lines if r.get("reached_adjudication", "Y") == "Y"]
+    adjudicated_ids = {r["claim_id"] for r in adjudicated_lines}
+    adjudicated_adj = [r for r in adjr if r["claim_id"] in adjudicated_ids]
+    never_adjudicated = len(lines) - len(adjudicated_lines)
+    print(f"       never adjudicated: {never_adjudicated} lines (rejected, no 835)")
+    check(
+        len(adjudicated_lines) == r835_lines,
+        f"adjudicated CSV lines {len(adjudicated_lines)} != 835 lines {r835_lines}",
+    )
+    check(
+        len(adjudicated_adj) == r835_adj,
+        f"adjudicated CSV adjustment rows {len(adjudicated_adj)} != 835 CAS reasons {r835_adj}",
+    )
+    # And the rejection path must exist, or PD-4 is untested at volume.
+    check(never_adjudicated > 0, "no rejected claims - PD-4 would be untested at volume")
 
     keys = Counter((r["claim_id"], r["line_number"]) for r in lines)
     check(max(keys.values()) == 1, "claim_id+line_number is not unique - grain is broken")
