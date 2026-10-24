@@ -284,6 +284,23 @@ class UnsupportedX12Error(QuarantineError):
 # ---------------------------------------------------------------------------
 
 
+class LeakageError(PlatformError):
+    """PD-11/PD-12: a dataset operation that would invalidate the model.
+
+    Raised where the requested operation is not a mistake about *this* run
+    but about what a training set is -- splitting randomly, or training on
+    outcomes that have not matured. It is a hard error rather than a warning
+    because the damage is invisible: the resulting model scores well and is
+    wrong, and nothing downstream can tell.
+    """
+
+    code = "leakage-refused"
+    title = "Refused: would leak"
+    status = HTTPStatus.UNPROCESSABLE_ENTITY
+    detail = "The requested dataset operation would leak information and was refused."
+    suspends_automation = True
+
+
 class UncertaintyEscalationError(PlatformError):
     """PD-18: the system does not know, so it does not act.
 

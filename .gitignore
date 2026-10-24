@@ -45,3 +45,12 @@ Thumbs.db
 .vscode/
 !.vscode/extensions.json
 mlruns/
+
+# dbt writes these beside its project file (M2.1). `target/` is compiled SQL
+# and run artefacts, `logs/` is the run log -- both are build output, and the
+# log embeds the compiled SQL of every model, so committing it would also
+# commit a copy of the warehouse's source.
+src/rcm/analytics/dbt/target/
+src/rcm/analytics/dbt/logs/
+src/rcm/analytics/dbt/dbt_packages/
+src/rcm/analytics/dbt/.user.yml

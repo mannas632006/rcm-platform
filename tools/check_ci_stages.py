@@ -56,7 +56,16 @@ PENDING: Final[tuple[Stage, ...]] = (
     Stage(
         name="dbt build",
         milestone="M2.1",
-        triggers=("src/rcm/analytics/dbt_project.yml", "analytics/dbt_project.yml"),
+        # The project lives in its own subdirectory rather than directly in
+        # `analytics/`: dbt writes `target/` and `logs/` beside its project
+        # file, and `analytics/` also holds the Python feature builders that
+        # CLAUDE.md section 4 puts there. Both spellings stay listed so the
+        # guard still fires if someone later moves it up.
+        triggers=(
+            "src/rcm/analytics/dbt/dbt_project.yml",
+            "src/rcm/analytics/dbt_project.yml",
+            "analytics/dbt_project.yml",
+        ),
         wired_marker="dbt build",
         required_by="M2.1 gate: dbt build green, all tests pass",
     ),

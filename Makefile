@@ -103,7 +103,13 @@ test-synthetic: ## Generator contract: the corpus contains every edge case M1 ne
 test-security: ## Security control tests (CLAUDE.md section 6.3)
 	COVERAGE_FILE=.coverage.security $(BIN)/pytest tests/security -m security --cov --cov-report=
 
-test: test-unit test-property test-integration test-security ## All Python suites
+test-leakage: ## PD-11 leakage suite; builds the warehouse twice (M2.4)
+	COVERAGE_FILE=.coverage.leakage $(BIN)/pytest tests/leakage -m leakage --cov --cov-report=
+
+dbt: ## Build the warehouse: staging -> core -> marts, with its tests
+	$(PYTHON) tools/run_dbt.py build --select staging core marts
+
+test: test-unit test-property test-integration test-security test-leakage ## All Python suites
 
 coverage: ## Combine every suite's coverage and enforce the floor (CLAUDE.md section 7.1)
 	@rm -f .coverage

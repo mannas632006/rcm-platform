@@ -36,6 +36,7 @@ automation path pending human review (FR-BE-07).
 | `payload-too-large` | 413 | Payload too large | — | The request body exceeds the configured maximum. |
 | `file-does-not-balance` | 422 | Remittance file does not balance | yes | An 835's amounts do not reconcile (IR-02, M1.3). |
 | `file-quarantined` | 422 | Inbound file quarantined | yes | A file failed a data quality gate and was quarantined (DR-10). |
+| `leakage-refused` | 422 | Refused: would leak | yes | PD-11/PD-12: a dataset operation that would invalidate the model. |
 | `malformed-x12` | 422 | Malformed X12 file | yes | Structural failure parsing untrusted EDI input (S-12). |
 | `unsupported-x12` | 422 | X12 transaction not supported | yes | A structurally valid transaction this parser does not yet read (M1.5). |
 | `validation-failed` | 422 | Request failed validation | — | The request was well-formed but failed domain validation. |

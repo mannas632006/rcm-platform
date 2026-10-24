@@ -142,6 +142,19 @@ class Claim(Base):
     place_of_service: Mapped[str] = mapped_column(
         String(4), nullable=False, default="", server_default=""
     )
+    #: BHT04, the date the submitter stated it created the transaction. This
+    #: is the *business* submission date, and it is not the same thing as
+    #: `raw_file.received_at`, which is when this platform archived the file.
+    #:
+    #: The difference only matters when they diverge, and they diverge exactly
+    #: when it is most expensive: replaying a year of history in an afternoon
+    #: gives every claim the same `received_at`. Any trailing-window feature
+    #: computed as-of that timestamp then has no history behind it and comes
+    #: back empty, which is DR-07 failing silently rather than loudly.
+    #:
+    #: Nullable because a file may omit BHT04; the loader falls back to the
+    #: archival date and the mart records which it used.
+    submitted_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     date_of_service: Mapped[date | None] = mapped_column(Date, nullable=True)
     total_charge: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
 
@@ -189,6 +202,9 @@ class Claim(Base):
         # The counting index. Every "how many claims" question groups by this.
         Index("ix_claim_root", "client_id", "root_claim_id"),
         Index("ix_claim_payer", "client_id", "payer_id"),
+        # Every trailing-window feature orders by the submission date within
+        # a client, and M2.5's temporal split cuts on it.
+        Index("ix_claim_submitted_on", "client_id", "submitted_on"),
     )
 
 
