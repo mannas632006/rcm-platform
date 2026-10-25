@@ -224,6 +224,13 @@ jobs:
         run: alembic upgrade head
       - name: generate the synthetic corpus
         run: python -m tools.synthetic --config tools/synthetic/config/smoke.yaml
+      - name: load the corpus into CORE
+        # Generating the corpus writes X12 files; it does not ingest them.
+        # Without this the build runs over an empty warehouse and every
+        # assertion passes having examined nothing -- which is what happened
+        # the first time this job ran, and what
+        # `assert_the_warehouse_is_not_empty` exists to refuse.
+        run: python -m tools.load_corpus
       - name: dbt build (M2.1)
         # The milestone's acceptance condition: `dbt build` green, all tests
         # pass. `build` runs the models and their data tests together, so a

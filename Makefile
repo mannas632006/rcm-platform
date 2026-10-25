@@ -62,6 +62,7 @@ migrate: ## Run Alembic migrations to head
 seed: ## Generate and load the synthetic corpus
 	$(PYTHON) -m tools.synthetic --config tools/synthetic/config/config.yaml
 	$(PYTHON) -m tools.synthetic.validate
+	$(PYTHON) -m tools.load_corpus
 
 seed-smoke: ## Generate the small corpus the tests use
 	$(PYTHON) -m tools.synthetic --config tools/synthetic/config/smoke.yaml
