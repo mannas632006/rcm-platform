@@ -74,7 +74,7 @@ openapi: ## Regenerate the OpenAPI schema and the frontend client
 # --- quality gates ----------------------------------------------------------
 
 lint: ## Ruff, import boundaries, frontend lint
-	$(BIN)/ruff check src tests tools
+	$(BIN)/ruff check src tests tools migrations
 	$(BIN)/ruff format --check src tests tools
 	$(BIN)/lint-imports --config .importlinter
 

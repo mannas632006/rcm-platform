@@ -19,6 +19,7 @@ it runs with migration-shaped privileges.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -54,6 +55,29 @@ def connection_env(url: str) -> dict[str, str]:
     }
 
 
+def dbt_executable() -> Path | None:
+    """Find dbt in the project venv, or on PATH.
+
+    Both arrangements are real and neither is wrong. A local checkout runs
+    `make install` and gets a `.venv`, which is what every other tool in this
+    repo resolves against. CI installs with `pip install -e ".[dev]"` into
+    the runner's own Python and calls tools straight from PATH -- there is no
+    `.venv` on a GitHub runner at all.
+
+    Resolving only against `.venv` therefore works perfectly on a developer
+    machine and fails on every CI run, which is exactly how it was found:
+    green locally, 127 in the integration job.
+
+    The venv comes first so that a developer with both never silently gets
+    the wrong version.
+    """
+    local = SCRIPTS / ("dbt.exe" if os.name == "nt" else "dbt")
+    if local.exists():
+        return local
+    found = shutil.which("dbt")
+    return Path(found) if found else None
+
+
 def main(argv: list[str]) -> int:
     url = os.environ.get("RCM_MIGRATION_DATABASE_URL")
     if not url:
@@ -64,9 +88,12 @@ def main(argv: list[str]) -> int:
         )
         return 2
 
-    executable = SCRIPTS / ("dbt.exe" if os.name == "nt" else "dbt")
-    if not executable.exists():
-        sys.stderr.write(f"dbt is not installed in {SCRIPTS}.\nRun `make install`.\n")
+    executable = dbt_executable()
+    if executable is None:
+        sys.stderr.write(
+            f"dbt is not installed in {SCRIPTS} and is not on PATH.\n"
+            "Run `make install` for a local checkout, or `pip install -e '.[dev]'`.\n"
+        )
         return 127
 
     env = {
