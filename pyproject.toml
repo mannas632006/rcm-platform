@@ -50,6 +50,17 @@ dev = [
     # tools/check_coverage_floor.py parses the coverage report; the stdlib XML
     # parser is vulnerable to entity-expansion attacks and bandit flags it (B314).
     "defusedxml>=0.7",
+    # M2.1. dbt is a CLI, not something `rcm` imports -- the import-linter
+    # contract would refuse it in a module anyway -- so it lives in dev rather
+    # than in the runtime dependencies.
+    "dbt-core>=1.12,<1.13",
+    "dbt-postgres>=1.11,<1.12",
+    # Pinned to the single band that satisfies both dbt-core (<1.1,>=0.9) and
+    # mypy (>=1.0.0). Outside it one of the two stops importing: dbt-core 1.9
+    # holds pathspec below 1.0 and mypy will not start, which is a broken
+    # typecheck rather than a dependency warning. Re-check this when either
+    # moves.
+    "pathspec>=1.0,<1.1",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -146,6 +157,7 @@ markers = [
     "security: security control tests (CLAUDE.md section 6.3)",
     "invariant: named invariant test from CLAUDE.md section 7.2",
     "edge_case: maps to an EC-nn in docs/02_Domain_and_Functional.md section 13",
+    "leakage: PD-11 feature leakage suite; builds the warehouse twice (M2.4)",
 ]
 filterwarnings = ["error"]
 

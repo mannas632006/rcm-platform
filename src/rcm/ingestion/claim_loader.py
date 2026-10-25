@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Final
@@ -186,6 +186,7 @@ class _PlannedClaim:
     """
 
     parsed: ParsedClaim
+    submitted_on: date
     claim_id: uuid.UUID
     original_claim_id: uuid.UUID | None
     root_claim_id: uuid.UUID
@@ -291,7 +292,17 @@ def load_claim_file(
             {"code": exc.code, **{k: str(v) for k, v in exc.context.items()}},
         )
 
-    parsed_claims = [claim for submission in submissions for claim in submission.claims]
+    # BHT04 lives on the transaction set, not the claim, so it is carried
+    # down here rather than looked up again later. `created_on` is the date
+    # the submitter stated; the archival date stands in when the file omits
+    # it (DR-07 needs a business date, and the archival one is the closest
+    # available approximation when there is nothing better).
+    submitted_default = archived.received_at.date()
+    parsed_claims = [
+        (claim, submission.created_on or submitted_default)
+        for submission in submissions
+        for claim in submission.claims
+    ]
     if not parsed_claims:
         return quarantined(
             ASSERTION_CONTAINS_CLAIM,
@@ -300,7 +311,7 @@ def load_claim_file(
         )
 
     # --- assert -------------------------------------------------------------
-    for parsed in parsed_claims:
+    for parsed, _ in parsed_claims:
         if not parsed.charges_reconcile:
             return quarantined(
                 ASSERTION_CHARGES_RECONCILE,
@@ -336,7 +347,7 @@ def load_claim_file(
     planned: list[_PlannedClaim] = []
     by_submitter_id: dict[str, _PlannedClaim] = {}
 
-    for parsed in parsed_claims:
+    for parsed, submitted_on in parsed_claims:
         if parsed.claim_id in by_submitter_id:
             # The same CLM01 twice in one file is the same claim stated twice.
             continue
@@ -363,6 +374,7 @@ def load_claim_file(
         claim_id = uuid.uuid4()
         plan = _PlannedClaim(
             parsed=parsed,
+            submitted_on=submitted_on,
             claim_id=claim_id,
             # BR-DATA-03: the chain as an edge, and already resolved. `root`
             # comes from the parent's root rather than the parent, so a
@@ -387,6 +399,7 @@ def load_claim_file(
                 client_id=client_id,
                 raw_file_id=raw_file.raw_file_id,
                 submitter_claim_id=parsed.claim_id,
+                submitted_on=plan.submitted_on,
                 original_claim_id=plan.original_claim_id,
                 root_claim_id=plan.root_claim_id,
                 submission_attempt=plan.submission_attempt,

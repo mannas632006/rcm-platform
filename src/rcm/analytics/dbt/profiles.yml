@@ -1,0 +1,21 @@
+# Connection details come from the environment, never from this file. The
+# values are derived from RCM_MIGRATION_DATABASE_URL by tools/run_dbt.py, so
+# there is one connection string in the project rather than two that drift.
+#
+# S-8: no credential is committed here. The defaults are the local development
+# cluster and nothing else.
+rcm:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DBT_HOST', '127.0.0.1') }}"
+      port: "{{ env_var('DBT_PORT', '5432') | int }}"
+      user: "{{ env_var('DBT_USER', 'rcm_migrator') }}"
+      password: "{{ env_var('DBT_PASSWORD', '') }}"
+      dbname: "{{ env_var('DBT_DBNAME', 'rcm') }}"
+      schema: "{{ env_var('DBT_SCHEMA', 'analytics') }}"
+      threads: 4
+      keepalives_idle: 0
+      connect_timeout: 10
+      retries: 1

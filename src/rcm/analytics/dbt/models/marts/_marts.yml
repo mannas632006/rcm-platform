@@ -1,0 +1,36 @@
+version: 2
+
+models:
+  - name: mart_claim_line_outcome
+    description: >
+      SRS 5.5, DOC-02 Dataset 1. One row per submitted service line per
+      adjustment reason (PD-6). Lines on claims that were never adjudicated
+      are present with null labels, so a dataset built from this does not
+      silently exclude the claims most worth predicting.
+    columns:
+      - name: claim_line_id
+        description: The submitted line. Never null - the mart starts from submissions.
+        data_tests: [not_null]
+      - name: adjustment_id
+        description: >
+          PD-6: the grain. Unique where present - one row per adjustment
+          reason, never two rows sharing one.
+        data_tests: [unique]
+      - name: client_id
+        description: "PD-20: on every row, so scoping never depends on a join."
+        data_tests: [not_null]
+      - name: cas_group_code
+        description: >
+          PD-3. Null only when the line carries no adjustment at all; never
+          null alongside a CARC, which is the thing PD-3 forbids.
+      - name: submission_date
+        description: "DR-07's as-of date. BHT04 where the file gave one."
+        data_tests: [not_null]
+
+  - name: mart_final_outcome
+    description: >
+      DR-09. The subset of mart_claim_line_outcome whose outcome has matured.
+      Final-outcome metrics and training read from here.
+    columns:
+      - name: outcome_matured_at
+        data_tests: [not_null]

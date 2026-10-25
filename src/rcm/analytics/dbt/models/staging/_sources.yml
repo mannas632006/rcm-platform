@@ -1,0 +1,84 @@
+version: 2
+
+sources:
+  - name: core
+    description: >
+      The CORE tables, owned by Alembic and loaded by the M1 ingestion
+      loaders. dbt reads them and never writes them: every model in this
+      project builds into an `analytics_*` schema, which is what makes the
+      PD-10 reconstruction test a drop-and-rebuild rather than a repair.
+    schema: public
+    tables:
+      # --- pre-submission: everything knowable when the claim was sent ------
+      #
+      # The split below is not decoration. DR-07 asks of every feature
+      # "could this have been known the second before we pressed SEND?", and
+      # the most reliable answer is which document it came from. A value read
+      # from a remittance was not knowable at submission however
+      # time-invariant it looks, because the row did not exist yet. The
+      # leakage suite reads these groups and enforces the boundary.
+      - name: claim
+        description: One row per submission (PD-7 chains them via original_claim_id).
+        columns:
+          - name: claim_id
+            data_tests: [unique, not_null]
+          - name: client_id
+            data_tests: [not_null]
+          - name: payer_id
+            data_tests: [not_null]
+      - name: claim_line
+        description: One row per service line as submitted.
+        columns:
+          - name: claim_line_id
+            data_tests: [unique, not_null]
+          - name: claim_id
+            data_tests: [not_null]
+      - name: payer
+        description: >
+          Payer identity and the contract terms that were in force. PD-8:
+          keyed on payer_id, never on a free-text name.
+        columns:
+          - name: payer_id
+            data_tests: [unique, not_null]
+      - name: raw_file
+        description: >
+          The archived file every row traces back to (PD-9). `received_at`
+          on the 837 is the platform's submission timestamp, which makes this
+          a pre-submission source for claim-side rows only.
+        columns:
+          - name: raw_file_id
+            data_tests: [unique, not_null]
+
+      # --- post-submission: labels, and nothing that may become a feature ---
+      - name: claim_payment
+        description: CLP loop. Exists only once the payer has adjudicated.
+        columns:
+          - name: claim_payment_id
+            data_tests: [unique, not_null]
+      - name: remittance_service_line
+        description: SVC loop.
+        columns:
+          - name: service_line_id
+            data_tests: [unique, not_null]
+      - name: remittance_adjustment
+        description: >
+          CAS unrolled, one row per reason (PD-6). The analytical grain of
+          the mart is this table.
+        columns:
+          - name: adjustment_id
+            data_tests: [unique, not_null]
+          - name: cas_group_code
+            data_tests: [not_null]
+      - name: remittance
+        description: The 835 as a whole, carrying the payment date.
+        columns:
+          - name: remittance_id
+            data_tests: [unique, not_null]
+      - name: claim_acknowledgement
+        description: >
+          999/277CA verdicts (M1.6). Present so rejections can be reported,
+          and deliberately NOT a feature source: a rejection is something the
+          payer said after submission.
+        columns:
+          - name: acknowledgement_id
+            data_tests: [unique, not_null]

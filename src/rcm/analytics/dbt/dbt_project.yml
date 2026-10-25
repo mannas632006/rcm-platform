@@ -1,0 +1,77 @@
+# The warehouse is the same PostgreSQL instance as OLTP (CLAUDE.md section 3:
+# "PostgreSQL 16+ (OLTP and analytics both -- no separate warehouse yet)").
+#
+# What keeps them apart is schemas, not servers. CORE lives in `public` and is
+# owned by Alembic; everything dbt builds lands in `analytics_*` schemas and is
+# owned by dbt. Nothing here writes to a table a migration created, which is
+# what makes PD-10 reconstruction a drop-and-rebuild rather than a repair.
+name: rcm
+version: "1.0.0"
+config-version: 2
+
+profile: rcm
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+# Fail on anything that would otherwise be a silent surprise.
+flags:
+  send_anonymous_usage_stats: false
+  # A model that selects a column no longer present should break the build,
+  # not quietly return fewer columns.
+  state_modified_compare_more_unrendered_values: true
+
+vars:
+  # [TBD-50] DOC-02/BR-STATE-05: how long after the date of service an outcome
+  # is considered final. Reversals and recoupments change outcomes
+  # retroactively (BR-M9-04), so a row counted as "paid" too early is counted
+  # wrongly. 180 days is the SRS's recommendation in DR-09, NOT a measured
+  # value -- it is a labelled placeholder awaiting the sponsor's decision, and
+  # it is a variable rather than a literal so that changing it is a config
+  # change and not a code change.
+  outcome_maturity_days: 180
+
+  # M2.4. The as-of cutoff used by the leakage suite. Null means "build the
+  # whole world", which is every ordinary run.
+  #
+  # Setting it rebuilds the warehouse as it would have looked on that date:
+  # claims submitted later are absent, and remittances that arrived later are
+  # absent. The leakage test builds twice -- once whole, once truncated -- and
+  # asserts that every FEATURE column is identical for the rows present in
+  # both. A feature whose value depends on data that arrived after the claim
+  # was sent is, by definition, one that could not have been known when we
+  # pressed SEND (DR-07), and this is how it gets caught rather than argued
+  # about.
+  as_of_date: null
+
+models:
+  rcm:
+    staging:
+      # Tables, not views, which is against the usual dbt convention and is
+      # deliberate here.
+      #
+      # OLTP and analytics share one PostgreSQL instance (CLAUDE.md section
+      # 3: "no separate warehouse yet"). A staging *view* makes the
+      # warehouse a dependent object of the CORE tables, and Postgres then
+      # refuses any migration that touches a column a view selects:
+      #
+      #     cannot drop column submitted_on of table claim because other
+      #     objects depend on it
+      #     DETAIL: view analytics_staging.stg_claims depends on it
+      #
+      # That turns "can this migration be rolled back" into "has anyone run
+      # dbt in this database lately", which is not a question a rollback
+      # path may depend on (Definition of Done: a rollback path exists).
+      # Materialising as tables costs a copy of the staging layer and buys
+      # migrations that do not care whether the warehouse has been built.
+      +materialized: table
+      +schema: staging
+    core:
+      +materialized: table
+      +schema: core
+    marts:
+      +materialized: table
+      +schema: marts
