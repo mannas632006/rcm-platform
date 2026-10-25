@@ -19,19 +19,35 @@ it split them wrongly, dbt would quietly connect somewhere else.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 from tools.run_dbt import connection_env, dbt_executable
 
 
-def test_the_venv_is_preferred_when_present() -> None:
+def test_the_venv_is_preferred_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A developer with dbt in both places must not silently get the one on
-    PATH, which may be a different version than `make install` pinned."""
-    found = dbt_executable()
-    assert found is not None
-    assert found.parent.name in {"bin", "Scripts"}
-    assert ".venv" in str(found)
+    PATH, which may be a different version than `make install` pinned.
+
+    Both locations are constructed rather than read from the machine this
+    runs on. The first version of this test called `dbt_executable()` bare
+    and asserted `.venv` appeared in the answer, which is true only where a
+    venv exists -- it passed locally and failed on CI, which is the same
+    mistake the fix under test exists to correct, one layer up. A test for
+    "prefers A over B" has to supply both A and B.
+    """
+    scripts = tmp_path / "bin"
+    scripts.mkdir()
+    in_venv = scripts / ("dbt.exe" if os.name == "nt" else "dbt")
+    in_venv.touch()
+
+    monkeypatch.setattr("tools.run_dbt.SCRIPTS", scripts)
+    monkeypatch.setattr("tools.run_dbt.shutil.which", lambda _: "/usr/local/bin/dbt")
+
+    assert dbt_executable() == in_venv
 
 
 def test_path_is_used_when_there_is_no_venv(monkeypatch: pytest.MonkeyPatch) -> None:
