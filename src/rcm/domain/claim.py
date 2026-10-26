@@ -154,6 +154,18 @@ class Claim(Base):
     #:
     #: Nullable because a file may omit BHT04; the loader falls back to the
     #: archival date and the mart records which it used.
+    #: M3.1/M3.2. Where the claim is in DOC-02 section 7.1's machine.
+    #: Text rather than a native enum: the state list changes with the
+    #: business, and an ALTER TYPE is a migration that locks the table
+    #: while a CHECK is one that does not. The valid set is enforced by a
+    #: constraint and by `rcm.domain.claim_state`.
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="Registered", server_default="Registered"
+    )
+    #: BR-STATE-04. Null only for the states a claim may rest in; the
+    #: lifecycle service refuses a transition into any other state without
+    #: one.
+    next_action_due: Mapped[date | None] = mapped_column(Date, nullable=True)
     submitted_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     date_of_service: Mapped[date | None] = mapped_column(Date, nullable=True)
     total_charge: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
@@ -205,6 +217,24 @@ class Claim(Base):
         # Every trailing-window feature orders by the submission date within
         # a client, and M2.5's temporal split cuts on it.
         Index("ix_claim_submitted_on", "client_id", "submitted_on"),
+        # BR-STATE-04's query reads "claims in a state that needs action,
+        # due on or before today, or with no date at all". The second half
+        # is the one that matters and the one a plain btree on the date
+        # would not serve, so the state leads.
+        Index("ix_claim_next_action", "client_id", "state", "next_action_due"),
+        # FR-BE-09/BR-STATE-02 at the schema level. The state machine
+        # refuses an undefined *transition*; this refuses an undefined
+        # *state*, which is what a backfill or a hand-edited row would
+        # otherwise introduce without going through the machine at all.
+        CheckConstraint(
+            "state IN ("
+            "'Registered','EligibilityVerified','AuthPending','AuthApproved','AuthDenied',"
+            "'ServiceRendered','Coded','Charged','Scrubbing','ScrubFailed','ReadyToSubmit',"
+            "'Submitted','Rejected','InAdjudication','Paid','PartiallyPaid','Denied',"
+            "'Appealing','Correcting','WrittenOff','SecondaryBilling','PatientBalance',"
+            "'Closed','Reopened','Cancelled')",
+            name="state_is_known",
+        ),
     )
 
 
