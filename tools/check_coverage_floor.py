@@ -41,6 +41,14 @@ GUARDED: Final[tuple[str, ...]] = (
     "rcm/decision",
     "rcm/ingestion/x12",
     "rcm/domain",
+    # CLAUDE.md section 7.1 names the three above. `rcm/work` is added
+    # because it is the same kind of code: FR-WORK-01's exclusive lock is
+    # the control standing between one operator and two people phoning the
+    # same payer about the same denial, and M3.5 through M3.7 will add the
+    # exception manager and the circuit breaker to this package. Putting it
+    # under the floor now is cheaper than noticing after it has drifted --
+    # it arrives at 99%, so the floor costs nothing today.
+    "rcm/work",
 )
 
 #: Below this many statements a package is still a stub and the ratio is noise.
