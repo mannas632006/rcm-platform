@@ -122,3 +122,45 @@ def test_the_corpus_is_generated_and_loaded_before_dbt_builds(ci_commands: list[
     # sequence the workflow no longer has.
     assert any("tools.synthetic" in c for c in ci_commands)
     assert any("tools.load_corpus" in c for c in ci_commands)
+
+
+GATE_JOB = "verify"
+
+
+def test_the_gate_depends_on_every_other_job() -> None:
+    """A job the gate does not wait for is a job whose failure does not block
+    a merge.
+
+    `verify` is the single required check on `main`, so the other jobs are
+    advisory to GitHub and become blocking only by sitting in its `needs`
+    chain. The chain is not obvious by eye: `test-leakage` is absent from
+    the gate's own `needs` list and is nonetheless blocking, because
+    `coverage-floor` and `build` both wait on it and the gate waits on them.
+    Reading the list alone suggests PD-11's leakage suite is ungated; walking
+    the graph shows it is not.
+
+    That gap between the two readings is the reason for this test. The next
+    job added is as likely to be wired in through one edge as nine, and only
+    the walk can tell the difference.
+    """
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    jobs = workflow["jobs"]
+    assert GATE_JOB in jobs, f"the gate job `{GATE_JOB}` is gone; this test is stale"
+
+    def needs_of(job: str) -> list[str]:
+        declared = jobs[job].get("needs", [])
+        return [declared] if isinstance(declared, str) else list(declared)
+
+    reachable: set[str] = set()
+    frontier = needs_of(GATE_JOB)
+    while frontier:
+        job = frontier.pop()
+        if job in reachable:
+            continue
+        reachable.add(job)
+        frontier.extend(needs_of(job))
+
+    ungated = sorted(set(jobs) - reachable - {GATE_JOB})
+    assert not ungated, (
+        f"these CI jobs can fail without failing the gate, so they cannot block a merge: {ungated}"
+    )
