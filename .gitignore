@@ -54,3 +54,12 @@ src/rcm/analytics/dbt/target/
 src/rcm/analytics/dbt/logs/
 src/rcm/analytics/dbt/dbt_packages/
 src/rcm/analytics/dbt/.user.yml
+
+# tools/verify_ci.py builds this to reproduce CI's environment: a separate
+# install from pyproject, with the project's own .venv kept off PATH.
+.ci-venv/
+
+# tools/verify_ci.py exports the tree here and runs the stages from it, so
+# that nothing the developer's working directory happens to contain -- a
+# .venv above all -- is visible to the run.
+.ci-run/

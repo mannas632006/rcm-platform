@@ -125,6 +125,9 @@ coverage: ## Combine every suite's coverage and enforce the floor (CLAUDE.md sec
 
 # The order mirrors CI (CLAUDE.md section 7.4). Fail fast: .SHELLFLAGS sets -e, and each
 # recipe line is a separate shell, so the first failure stops the target.
+verify-ci: ## THE GATE, as CI runs it: separate env, empty DB, CI's step order
+	$(PYTHON) -m tools.verify_ci $(ARGS)
+
 verify: lint typecheck test coverage ## THE GATE: lint + types + every suite + the coverage floor
 	@echo ""
 	@echo "verify: PASS"

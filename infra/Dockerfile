@@ -58,7 +58,28 @@ ENV PYTHONUNBUFFERED=1 \
 # remote-code-execution path in its TLS stack, and the reproducibility that
 # matters for audit comes from the lockfile and the image digest recorded at
 # release, not from the base layer never changing.
-RUN apt-get update \
+#
+# `SECURITY_REFRESH` is what makes that true in CI, and it was added after the
+# trade above turned out not to be happening.
+#
+# The build caches layers (`cache-from: type=gha`). A `RUN` whose text and
+# parent layer are unchanged is restored from cache rather than re-executed,
+# so `apt-get upgrade` ran once, when the layer was first built, and was
+# replayed on every build afterwards. The image kept shipping whatever
+# packages were current that day. Caching had quietly handed back the
+# reproducibility this comment gives up, and taken the patching with it.
+#
+# It surfaced as Trivy failing on CVE-2026-84782 -- an OpenSSL information
+# disclosure, fixed in Debian's `3.0.22-1~deb12u2`, against an image still
+# carrying `deb12u1` -- on a pull request that changed nothing in this file.
+#
+# CI passes the current date, so the layer is rebuilt at most once a day and
+# always carries current security updates. The layers below it are a copy and
+# two deletions; the expensive one is `pip install` in the builder stage,
+# which is untouched and stays cached.
+ARG SECURITY_REFRESH=unset
+RUN echo "security refresh: ${SECURITY_REFRESH}" \
+ && apt-get update \
  && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends libpq5 \
  && apt-get autoremove -y \

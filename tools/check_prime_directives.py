@@ -33,8 +33,34 @@ SCANNED_ROOTS: Final = ("src", "tools", "migrations")
 SCANNED_SUFFIXES: Final = frozenset({".py", ".sql", ".yaml", ".yml"})
 
 #: Directories never scanned: generated, vendored or virtual.
+#: Directories whose contents are not source and must not be scanned.
+#:
+#: `target`, `logs` and `dbt_packages` are dbt's build output. They matter
+#: because dbt writes *compiled* copies of every model there, so a grep for
+#: a forbidden pattern would find it twice and report a path nobody edits.
+#: Worse, dbt names compiled artefacts after their source, and a directory
+#: called `_marts.yml` makes a scanner that assumes "`.yml` suffix means
+#: file" raise `IsADirectoryError` mid-run.
+#:
+#: CI never hit that because `dbt build` and this check run in different
+#: jobs with separate checkouts. `make verify-ci` runs both in one
+#: workspace, which is how it surfaced -- an instance of the thing that
+#: harness exists to find.
 SKIP_PARTS: Final = frozenset(
-    {".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".ruff_cache"}
+    {
+        ".git",
+        ".venv",
+        "venv",
+        ".ci-venv",
+        ".ci-run",
+        "node_modules",
+        "__pycache__",
+        ".mypy_cache",
+        ".ruff_cache",
+        "target",
+        "logs",
+        "dbt_packages",
+    }
 )
 
 
@@ -106,7 +132,18 @@ RULES: Final[tuple[Rule, ...]] = (
         # itself, never request data, so there is no injection surface. Any
         # migration that interpolates a value rather than an identifier is still
         # a violation and must be caught in review.
-        allow_paths=("tools/check_prime_directives.py", "migrations/"),
+        #
+        # `verify_ci.py` is exempt on exactly the same grounds and no others:
+        # it issues `DROP SCHEMA <name>` and `TRUNCATE <tables>` to reset a
+        # local database before running the suite, and both interpolate
+        # module-level constants in this repository. It never sees request
+        # data, and it never runs against anything but a developer's own
+        # database. Widening this list is a visible diff on purpose.
+        allow_paths=(
+            "tools/check_prime_directives.py",
+            "tools/verify_ci.py",
+            "migrations/",
+        ),
         remedy="Bind parameters. String interpolation into SQL fails review (SR-11).",
     ),
     Rule(
@@ -134,6 +171,10 @@ def _scanned_files() -> list[Path]:
             if path.suffix not in SCANNED_SUFFIXES:
                 continue
             if SKIP_PARTS & set(path.parts):
+                continue
+            # A matching suffix is not a promise that this is a file: dbt
+            # creates directories named after the models they compile.
+            if not path.is_file():
                 continue
             files.append(path)
     return sorted(files)
