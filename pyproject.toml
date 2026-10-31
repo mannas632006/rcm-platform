@@ -161,6 +161,25 @@ markers = [
 ]
 filterwarnings = ["error"]
 
+# pytest-asyncio warns when this is unset, and `filterwarnings = ["error"]`
+# turns that warning into an `INTERNALERROR` during `pytest_configure` --
+# before a single test runs, so the output is a traceback rather than a
+# failure. It broke CI on a pull request that touched nothing related.
+#
+# The trigger was pytest 9.2.0, which escalates configure-time warnings that
+# 9.1.1 let through. Neither package changed behaviour deliberately: the
+# warning had been emitted all along and was simply not being treated as an
+# error yet.
+#
+# "function" is the scope pytest-asyncio has announced as its future default,
+# so setting it now is what the warning asks for and keeps today's behaviour
+# matching tomorrow's. Nothing in this suite depends on it -- the async
+# definitions in the tests are FastAPI route handlers driven through
+# `TestClient`, not pytest-asyncio fixtures -- which is precisely why the
+# value should be the forward-compatible one rather than whichever happens to
+# be current.
+asyncio_default_fixture_loop_scope = "function"
+
 [tool.coverage.run]
 branch = true
 source = ["src/rcm"]
