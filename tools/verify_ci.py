@@ -183,7 +183,24 @@ def reset_database() -> None:
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         for schema in ANALYTICS_SCHEMAS:
             conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        conn.execute(text(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE"))
+
+        # Truncate only what exists. The reset runs before the `migrate`
+        # stage, so on a database that has never been migrated -- which is
+        # the state a CI runner starts in, and therefore the one most worth
+        # reproducing -- none of these tables are there yet, and a blanket
+        # TRUNCATE aborts the whole run before migrate can create them.
+        present = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+                )
+            ).all()
+        }
+        wanted = [name.strip() for name in TABLES.split(",")]
+        existing = [name for name in wanted if name in present]
+        if existing:
+            conn.execute(text(f"TRUNCATE {', '.join(existing)} RESTART IDENTITY CASCADE"))
     engine.dispose()
 
 
