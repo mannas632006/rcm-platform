@@ -38,6 +38,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -158,6 +159,18 @@ class WorkItem(Base):
     deadline_pinned: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    #: FR-WORK-06: why the item ranks where it does, in words and numbers.
+    priority_reason: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
+    priority_components: Mapped[dict[str, str] | None] = mapped_column(JSONB, nullable=True)
+    #: PD-1: the logic that produced the score. Null until first scored.
+    priority_logic_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    prioritised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: BR-M10-06: expected recovery below [TBD-46] -- bulk, not individual work.
+    bulk_handling: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     #: FR-WORK-01. One holder or none; the column cannot represent two.
     assigned_to: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -214,6 +227,16 @@ class WorkItem(Base):
         # BR-EXC-02: an owner, always.
         CheckConstraint("length(owner_role) > 0", name="work_item_names_its_owner"),
         CheckConstraint("priority_score BETWEEN 0 AND 100", name="priority_score_is_a_percentage"),
+        # PD-15 / FR-WORK-05: 100 means pinned and only pinned. A pinned
+        # item cannot carry a demotable score, and nothing scored can
+        # quietly claim the top of the queue.
+        CheckConstraint(
+            "deadline_pinned = (priority_score = 100)", name="only_a_pinned_item_scores_100"
+        ),
+        # A pinned item is a person's work, never bulk.
+        CheckConstraint(
+            "NOT (deadline_pinned AND bulk_handling)", name="a_pinned_item_is_not_bulk"
+        ),
         # FR-WORK-04 at the schema level: an outcome is one of the structured
         # values or nothing. Free text here is the training signal lost.
         CheckConstraint(
@@ -242,6 +265,15 @@ class WorkItem(Base):
         ),
         # The queue read: open items for one client, best first.
         Index("ix_work_item_queue", "client_id", "state", "priority_score"),
+        # M3.6's read: open, individual work, pinned first, then by score.
+        Index(
+            "ix_work_item_next",
+            "client_id",
+            "state",
+            "bulk_handling",
+            "deadline_pinned",
+            "priority_score",
+        ),
         # The expiry sweep (FR-WORK-02).
         Index("ix_work_item_lease", "client_id", "lock_expires_at"),
         Index("ix_work_item_claim", "client_id", "claim_id"),

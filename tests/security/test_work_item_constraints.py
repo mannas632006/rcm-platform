@@ -278,3 +278,45 @@ def test_an_item_a_human_held_cannot_be_auto_resolved(app_engine: Engine) -> Non
             ),
             {"id": uuid.uuid4(), "client": CLIENT},
         )
+
+
+# ---------------------------------------------------------------------------
+# PD-15 at the schema level (M3.6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.invariant
+@pytest.mark.parametrize(("pinned", "score"), [(True, 99), (False, 100)])
+def test_only_a_pinned_item_scores_100(app_engine: Engine, pinned: bool, score: int) -> None:
+    """A pinned item cannot carry a demotable score, and nothing scored can
+    quietly take the top of the queue (FR-WORK-05)."""
+    with (
+        pytest.raises(IntegrityError, match="only_a_pinned_item_scores_100"),
+        app_engine.begin() as conn,
+    ):
+        conn.execute(
+            text(
+                "INSERT INTO work_item (work_item_id, client_id, kind, state, title, "
+                "owner_role, priority_score, deadline_pinned, category, sla_due_at) "
+                "VALUES (:id, :client, 'DENIAL', 'Queued', 'CO-50 on claim 3f2a', "
+                "'denials_specialist', :score, :pinned, 'OPERATIONAL', '2026-06-04 12:00+00')"
+            ),
+            {"id": uuid.uuid4(), "client": CLIENT, "score": score, "pinned": pinned},
+        )
+
+
+def test_a_pinned_item_is_never_bulk(app_engine: Engine) -> None:
+    """An urgent claim stays in a person's queue, whatever its balance."""
+    with (
+        pytest.raises(IntegrityError, match="a_pinned_item_is_not_bulk"),
+        app_engine.begin() as conn,
+    ):
+        conn.execute(
+            text(
+                "INSERT INTO work_item (work_item_id, client_id, kind, state, title, "
+                "owner_role, priority_score, deadline_pinned, bulk_handling, category, "
+                "sla_due_at) VALUES (:id, :client, 'DENIAL', 'Queued', 'CO-50 on claim 3f2a', "
+                "'denials_specialist', 100, true, true, 'OPERATIONAL', '2026-06-04 12:00+00')"
+            ),
+            {"id": uuid.uuid4(), "client": CLIENT},
+        )

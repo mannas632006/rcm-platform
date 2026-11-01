@@ -106,6 +106,14 @@ REGISTRY: Final[dict[str, Placeholder]] = {
         provisional=3,
         source="DOC-02 Appendix A",
     ),
+    "bulk_handling_threshold": Placeholder(
+        tbd_id="TBD-46",
+        description="Expected recovery below which a work item is routed to bulk "
+        "handling rather than individual work (BR-M10-06, M3.6).",
+        owner="Muhammad Anas",
+        provisional="25.00",
+        source="DOC-02 Appendix A",
+    ),
     # No register declares these. They were raised at M3.5, where BR-EXC-02
     # and BR-EXC-04 need numbers the specifications never give.
     "exception_sla_hours": Placeholder(

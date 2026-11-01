@@ -12,6 +12,7 @@ CLAUDE.md section 12.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
@@ -105,6 +106,7 @@ class Settings(BaseSettings):
     )
     exception_trend_ratio: float = Field(default=1.5)
     exception_trend_min_count: int = Field(default=10)
+    bulk_handling_threshold: Decimal = Field(default=Decimal("25.00"))
 
     def validate_for_environment(self) -> None:
         """Refuse configurations that are unsafe for the environment they name.
