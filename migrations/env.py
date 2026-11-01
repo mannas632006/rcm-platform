@@ -16,6 +16,7 @@ from alembic import context
 # model not imported is a model Alembic will cheerfully propose dropping.
 from rcm.domain.acknowledgement import ClaimAcknowledgement  # noqa: F401 - metadata
 from rcm.domain.claim import Claim, ClaimLine  # noqa: F401 - registers metadata
+from rcm.domain.claim_state_log import ClaimStateTransition  # noqa: F401 - metadata
 from rcm.domain.payer import (  # noqa: F401 - registers metadata
     Payer,
     PayerAlias,
@@ -31,6 +32,7 @@ from rcm.domain.remittance import (  # noqa: F401 - registers metadata
 )
 from rcm.platform.audit import AuditEvent, DecisionRecord  # noqa: F401 - registers metadata
 from rcm.platform.db import Base, migration_engine
+from rcm.work.models import WorkItem  # noqa: F401 - registers metadata
 
 config = context.config
 if config.config_file_name is not None:
