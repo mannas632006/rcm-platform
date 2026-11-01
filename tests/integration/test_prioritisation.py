@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -88,7 +88,7 @@ def set_filing_term(owner_engine: Engine, days: int | None) -> None:
         conn.execute(text("UPDATE payer SET timely_filing_days = :d"), {"d": days})
 
 
-def denial_for(claim_id: uuid.UUID) -> uuid.UUID:
+def denial_for(claim_id: uuid.UUID, *, raised_at: datetime = FAR) -> uuid.UUID:
     with session_scope() as session:
         item = raise_exception(
             session,
@@ -97,7 +97,7 @@ def denial_for(claim_id: uuid.UUID) -> uuid.UUID:
             problem="CO-50 medical necessity denial on line 1",
             record=RecordRef("claim", claim_id),
             source_key=f"denial:{claim_id}",
-            now=FAR,
+            now=raised_at,
             claim_id=claim_id,
         )
         return item.work_item_id
@@ -292,3 +292,135 @@ def test_the_balance_is_what_is_still_owed(archive_root: Path) -> None:
     with session_scope() as session:
         balance = priority.outstanding_balance(session, claim_id=claim_id, client_id=CLIENT)
     assert balance == Decimal("500.00")
+
+
+@pytest.mark.invariant
+def test_re_prioritising_the_missing_deadline_question_keeps_it_pinned(
+    archive_root: Path, owner_engine: Engine
+) -> None:
+    """The question asking the user for a deadline is itself urgent work;
+    prioritising it again must not drop it to the bottom."""
+    (claim_id,) = load(archive_root, "CLM-ASK")
+    set_filing_term(owner_engine, None)
+    run(denial_for(claim_id), FAR)
+    with session_scope() as session:
+        ask = session.scalar(
+            select(WorkItem.work_item_id).where(
+                WorkItem.kind == str(WorkItemKind.MISSING_FILING_DEADLINE)
+            )
+        )
+    assert ask is not None
+    run(ask, FAR)
+    assert get(ask).deadline_pinned is True
+
+
+def test_an_unscored_item_is_not_treated_as_low_priority(
+    archive_root: Path, owner_engine: Engine
+) -> None:
+    """PD-18: before it is prioritised an item's urgency is unknown, so it
+    reads ahead of scored work, not behind it."""
+    scored_claim, fresh_claim = load(archive_root, "CLM-S1", "CLM-S2")
+    set_filing_term(owner_engine, 365)
+    scored = denial_for(scored_claim)
+    run(scored, FAR)
+    fresh = denial_for(fresh_claim)
+
+    with session_scope() as session:
+        order = [i.work_item_id for i in priority.next_items(session, client_id=CLIENT)]
+    assert order.index(fresh) < order.index(scored)
+
+
+# ---------------------------------------------------------------------------
+# Healthcare review findings
+# ---------------------------------------------------------------------------
+
+
+def test_an_accepted_claim_is_not_pinned_on_its_filing_deadline(
+    archive_root: Path, owner_engine: Engine
+) -> None:
+    """Once the payer accepted the claim, timely filing is met for good."""
+    (claim_id,) = load(archive_root, "CLM-ACC")
+    set_filing_term(owner_engine, 365)
+    with owner_engine.begin() as conn:
+        conn.execute(text("UPDATE claim SET state = 'Denied', next_action_due = '2025-01-15'"))
+    item_id = denial_for(claim_id)
+    run(item_id, NEAR)
+    assert get(item_id).deadline_pinned is False
+
+
+def test_the_earliest_line_date_stands_in_for_a_missing_claim_date(
+    archive_root: Path, owner_engine: Engine
+) -> None:
+    """837P dates the lines (DTP*472), not always the claim."""
+    (claim_id,) = load(archive_root, "CLM-LINEDATE")
+    set_filing_term(owner_engine, 365)
+    with owner_engine.begin() as conn:
+        conn.execute(text("UPDATE claim SET date_of_service = NULL"))
+    item_id = denial_for(claim_id)
+    run(item_id, FAR)
+    assert get(item_id).days_to_deadline == 213
+    with session_scope() as session:
+        assert (
+            session.scalar(select(WorkItem).where(WorkItem.kind == str(WorkItemKind.DATA_QUALITY)))
+            is None
+        )
+
+
+def test_pinned_items_read_nearest_deadline_first(archive_root: Path, owner_engine: Engine) -> None:
+    """Expiring tomorrow comes before expiring in ten days."""
+    later, sooner = load(archive_root, "CLM-10D", "CLM-2D")
+    set_filing_term(owner_engine, 365)
+    with owner_engine.begin() as conn:
+        # FAR is 2024-06-01: 355 days back leaves 10, 363 days back leaves 2.
+        conn.execute(
+            text(
+                "UPDATE claim SET date_of_service = '2023-06-12' "
+                "WHERE submitter_claim_id = 'CLM-10D'"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE claim SET date_of_service = '2023-06-04' "
+                "WHERE submitter_claim_id = 'CLM-2D'"
+            )
+        )
+    # The ten-day item is older, so every tie-breaker after the deadline key
+    # (SLA, then age) would put it first: only the deadline key can pass.
+    later_item = denial_for(later, raised_at=FAR - timedelta(days=1))
+    sooner_item = denial_for(sooner)
+    run(later_item, FAR)
+    run(sooner_item, FAR)
+    with session_scope() as session:
+        order = [i.work_item_id for i in priority.next_items(session, client_id=CLIENT)]
+    assert order.index(sooner_item) < order.index(later_item)
+
+
+@pytest.mark.invariant
+def test_reprioritising_daily_pins_a_claim_as_its_deadline_arrives(
+    archive_root: Path, owner_engine: Engine
+) -> None:
+    """A pin set once and never refreshed lets a claim slip past the
+    threshold. The daily re-score catches it."""
+    (claim_id,) = load(archive_root, "CLM-DRIFT")
+    set_filing_term(owner_engine, 365)
+    item_id = denial_for(claim_id)
+    run(item_id, FAR)
+    assert get(item_id).deadline_pinned is False
+
+    with session_scope() as session:
+        assert priority.reprioritise_open(session, client_id=CLIENT, now=NEAR) >= 1
+    assert get(item_id).deadline_pinned is True
+
+
+def test_the_missing_deadline_question_names_the_payer(
+    archive_root: Path, owner_engine: Engine
+) -> None:
+    (claim_id,) = load(archive_root, "CLM-NAME")
+    set_filing_term(owner_engine, None)
+    run(denial_for(claim_id), FAR)
+    with session_scope() as session:
+        ask = session.scalar(
+            select(WorkItem).where(WorkItem.kind == str(WorkItemKind.MISSING_FILING_DEADLINE))
+        )
+        assert ask is not None
+        assert "00590" in ask.title

@@ -167,6 +167,9 @@ class WorkItem(Base):
     #: PD-1: the logic that produced the score. Null until first scored.
     priority_logic_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     prioritised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Days left to file when last prioritised; orders pinned items by how
+    #: close they are. Null when unknown or when the clock has stopped.
+    days_to_deadline: Mapped[int | None] = mapped_column(Integer, nullable=True)
     #: BR-M10-06: expected recovery below [TBD-46] -- bulk, not individual work.
     bulk_handling: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"

@@ -26,11 +26,12 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from rcm.decision.prioritisation import PriorityInputs, PriorityResult, prioritise
-from rcm.domain.claim import Claim
+from rcm.domain.claim import Claim, ClaimLine
+from rcm.domain.claim_state import ClaimState
 from rcm.domain.payer import Payer
 from rcm.domain.remittance import ClaimPayment
 from rcm.platform.audit import DecisionType, record_decision
@@ -39,9 +40,35 @@ from rcm.platform.errors import ResourceNotFoundError, ValidationFailedError
 from rcm.platform.logging import get_logger
 from rcm.work import exceptions
 from rcm.work.models import WorkItem, WorkItemKind
+from rcm.work.state import OPEN_STATES as OPEN_QUEUE_STATES
 from rcm.work.state import WorkItemState
 
 log = get_logger(__name__)
+
+#: States in which a claim has not yet been accepted by the payer, so the
+#: timely-filing clock is still running. Everything after a 277CA
+#: acceptance (InAdjudication onwards) has been filed on time; its next
+#: deadline -- an appeal window, say -- is a different clock (M4/M11).
+#: `SecondaryBilling` is here: the secondary claim has its own filing term,
+#: counted (for now) from the date of service.
+FILING_CLOCK_STATES: frozenset[ClaimState] = frozenset(
+    {
+        ClaimState.REGISTERED,
+        ClaimState.ELIGIBILITY_VERIFIED,
+        ClaimState.AUTH_PENDING,
+        ClaimState.AUTH_APPROVED,
+        ClaimState.SERVICE_RENDERED,
+        ClaimState.CODED,
+        ClaimState.CHARGED,
+        ClaimState.SCRUBBING,
+        ClaimState.SCRUB_FAILED,
+        ClaimState.READY_TO_SUBMIT,
+        ClaimState.SUBMITTED,
+        ClaimState.REJECTED,
+        ClaimState.CORRECTING,
+        ClaimState.SECONDARY_BILLING,
+    }
+)
 
 
 def outstanding_balance(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) -> Decimal:
@@ -78,7 +105,7 @@ def _days_to_deadline(
             session,
             client_id=item.client_id,
             kind=WorkItemKind.MISSING_FILING_DEADLINE,
-            problem="No timely-filing deadline is recorded for this claim's payer",
+            problem=f"No timely-filing deadline is recorded for payer {claim.payer_id}",
             record=exceptions.RecordRef("claim", claim.claim_id),
             # One question per payer: every claim for it is waiting on the
             # same answer.
@@ -86,7 +113,14 @@ def _days_to_deadline(
             now=now,
         )
         return None
-    if claim.date_of_service is None:
+    service_date = claim.date_of_service or session.scalar(
+        # 837P usually dates the lines (DTP*472), not the claim: the clock
+        # starts at the earliest service on it.
+        select(func.min(ClaimLine.service_date)).where(
+            ClaimLine.claim_id == claim.claim_id, ClaimLine.client_id == claim.client_id
+        )
+    )
+    if service_date is None:
         exceptions.raise_exception(
             session,
             client_id=item.client_id,
@@ -98,7 +132,7 @@ def _days_to_deadline(
             now=now,
         )
         return None
-    return term - (now.date() - claim.date_of_service).days
+    return term - (now.date() - service_date).days
 
 
 def prioritise_item(
@@ -117,6 +151,7 @@ def prioritise_item(
 
     balance = Decimal("0.00")
     days: int | None = None
+    clock_applies = True
     claim: Claim | None = None
     if item.claim_id is not None:
         claim = session.scalar(
@@ -125,7 +160,9 @@ def prioritise_item(
         if claim is None:
             raise ResourceNotFoundError(entity="claim", entity_id=str(item.claim_id))
         balance = outstanding_balance(session, claim_id=claim.claim_id, client_id=client_id)
-        days = _days_to_deadline(session, item=item, claim=claim, now=now)
+        clock_applies = ClaimState(claim.state) in FILING_CLOCK_STATES
+        if clock_applies:
+            days = _days_to_deadline(session, item=item, claim=claim, now=now)
 
     inputs = PriorityInputs(
         kind=item.kind,
@@ -133,6 +170,7 @@ def prioritise_item(
         days_to_deadline=days,
         age_days=max(0, (now - item.created_at).days),
         has_claim=claim is not None,
+        filing_clock_applies=clock_applies,
     )
     settings = get_settings()
     result = prioritise(
@@ -143,6 +181,7 @@ def prioritise_item(
 
     item.priority_score = result.score
     item.deadline_pinned = result.pinned
+    item.days_to_deadline = days
     item.bulk_handling = result.bulk
     item.priority_reason = result.reason
     item.priority_components = result.components
@@ -162,6 +201,7 @@ def prioritise_item(
             "days_to_deadline": inputs.days_to_deadline,
             "age_days": inputs.age_days,
             "has_claim": inputs.has_claim,
+            "filing_clock_applies": inputs.filing_clock_applies,
             "escalation_days": settings.timely_filing_escalation_days,
             "bulk_threshold": str(settings.bulk_handling_threshold),
         },
@@ -170,6 +210,7 @@ def prioritise_item(
             "pinned": result.pinned,
             "bulk": result.bulk,
             "reason": result.reason,
+            "components": result.components,
         },
     )
     session.flush()
@@ -180,10 +221,12 @@ def prioritise_item(
 def next_items(
     session: Session, *, client_id: uuid.UUID, limit: int = 50, include_bulk: bool = False
 ) -> list[WorkItem]:
-    """The queue, best first: pinned, then score, then SLA, then age.
+    """The queue, best first: pinned, then never-scored, then score, SLA, age.
 
-    PD-15 lives in the first sort key. Bulk work (BR-M10-06) is left out of
-    the individual queue unless asked for.
+    PD-15 lives in the first sort key. An item not yet prioritised sorts
+    straight after the pinned ones: its urgency is unknown, and unknown is
+    treated as urgent (PD-18), never as a score of zero. Bulk work
+    (BR-M10-06) is left out of the individual queue unless asked for.
     """
     query = select(WorkItem).where(
         WorkItem.client_id == client_id, WorkItem.state == str(WorkItemState.QUEUED)
@@ -194,6 +237,15 @@ def next_items(
         session.scalars(
             query.order_by(
                 WorkItem.deadline_pinned.desc(),
+                # Among pinned items, the nearest deadline first; an unknown
+                # one is treated as due today (PD-18).
+                case(
+                    (WorkItem.deadline_pinned, func.coalesce(WorkItem.days_to_deadline, 0)),
+                    else_=None,
+                )
+                .asc()
+                .nulls_last(),
+                WorkItem.prioritised_at.is_(None).desc(),
                 WorkItem.priority_score.desc(),
                 WorkItem.sla_due_at,
                 WorkItem.created_at,
@@ -201,3 +253,22 @@ def next_items(
             ).limit(limit)
         ).all()
     )
+
+
+def reprioritise_open(session: Session, *, client_id: uuid.UUID, now: datetime) -> int:
+    """Re-score every open item for one client. Run daily (beat schedule).
+
+    A pin set once and never refreshed is how a claim 45 days out slips
+    past a 30-day threshold unnoticed -- and bulk items, kept out of the
+    individual queue, would never be looked at again. Deadlines move every
+    day, so the scores do too.
+    """
+    ids = session.scalars(
+        select(WorkItem.work_item_id).where(
+            WorkItem.client_id == client_id,
+            WorkItem.state.in_([str(s) for s in OPEN_QUEUE_STATES]),
+        )
+    ).all()
+    for work_item_id in ids:
+        prioritise_item(session, work_item_id=work_item_id, client_id=client_id, now=now)
+    return len(ids)

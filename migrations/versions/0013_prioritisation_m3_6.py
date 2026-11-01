@@ -49,6 +49,7 @@ def upgrade() -> None:
         "work_item",
         sa.Column("bulk_handling", sa.Boolean(), server_default="false", nullable=False),
     )
+    op.add_column("work_item", sa.Column("days_to_deadline", sa.Integer(), nullable=True))
 
     op.execute("UPDATE work_item SET priority_score = 100 WHERE deadline_pinned")
     op.execute(
@@ -72,6 +73,7 @@ def downgrade() -> None:
     op.drop_index("ix_work_item_next", table_name="work_item")
     op.drop_constraint("a_pinned_item_is_not_bulk", "work_item", type_="check")
     op.drop_constraint("only_a_pinned_item_scores_100", "work_item", type_="check")
+    op.drop_column("work_item", "days_to_deadline")
     op.drop_column("work_item", "bulk_handling")
     op.drop_column("work_item", "prioritised_at")
     op.drop_column("work_item", "priority_logic_version")

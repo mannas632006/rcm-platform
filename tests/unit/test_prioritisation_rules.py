@@ -162,3 +162,26 @@ def test_scores_stay_on_the_scale(balance: Decimal, days: int | None, age: int, 
         assert result.score == 100
     else:
         assert 0 <= result.score <= 99
+
+
+@pytest.mark.parametrize("kind", sorted(prioritisation.PINNED_KINDS))
+def test_deadline_risk_kinds_stay_pinned_whatever_else_is_known(kind: str) -> None:
+    """Re-scoring the question that asks for a missing deadline must not
+    sink it: it has no claim and no balance, and it is still urgent."""
+    for overrides in (
+        {"has_claim": False, "balance": Decimal("0"), "days_to_deadline": None},
+        {"has_claim": True, "days_to_deadline": 5000},
+    ):
+        assert rank(inputs(kind=kind, **overrides)) == (True, 100)
+
+
+def test_an_accepted_claim_is_not_pinned_on_timely_filing() -> None:
+    """The filing clock stops at payer acceptance. A denial on a claim
+    filed on time cannot miss its *filing* deadline, so it is scored."""
+    for days in (None, 3, -50):
+        result = prioritise(
+            inputs(days_to_deadline=days, filing_clock_applies=False),
+            escalation_days=ESCALATION_DAYS,
+            bulk_threshold=BULK,
+        )
+        assert result.pinned is False, days

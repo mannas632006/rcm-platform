@@ -84,6 +84,11 @@ URGENCY_WINDOW_DAYS: Final = 120.0
 #: Value-per-effort-hour at which the score reaches half the scale.
 HALF_SCALE_VALUE: Final = 200.0
 
+#: Kinds that are deadline risk by definition (DOC-02 10.1: the priority
+#: queue "overrides all"). Pinned whatever else is known, so re-scoring one
+#: -- including the question asking for a missing deadline -- cannot sink it.
+PINNED_KINDS: Final[frozenset[str]] = frozenset({"DEADLINE_RISK", "MISSING_FILING_DEADLINE"})
+
 _PINNED_SCORE: Final = 100
 _TOP_SCORE: Final = 99
 
@@ -99,6 +104,10 @@ class PriorityInputs:
     days_to_deadline: int | None
     age_days: int
     has_claim: bool
+    #: Timely filing is a deadline to *get a claim accepted*. Once the payer
+    #: has accepted it the clock has stopped, and pinning on it would fill
+    #: the top of the queue with claims that can no longer expire.
+    filing_clock_applies: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +127,13 @@ def prioritise(
     inputs: PriorityInputs, *, escalation_days: int, bulk_threshold: Decimal
 ) -> PriorityResult:
     """Pin, or score. The deadline is decided before anything else runs."""
-    if inputs.has_claim:
+    if inputs.kind in PINNED_KINDS:
+        return PriorityResult(
+            score=_PINNED_SCORE,
+            pinned=True,
+            reason="deadline-risk work: always at the top of the queue",
+        )
+    if inputs.has_claim and inputs.filing_clock_applies:
         if inputs.days_to_deadline is None:
             return PriorityResult(
                 score=_PINNED_SCORE,
@@ -161,7 +176,7 @@ def _score(inputs: PriorityInputs) -> tuple[int, dict[str, str]]:
     )
     decay = 0.5 ** (inputs.age_days / AGE_HALF_LIFE_DAYS)
     urgency = 1.0
-    if inputs.days_to_deadline is not None:
+    if inputs.filing_clock_applies and inputs.days_to_deadline is not None:
         urgency += max(0.0, URGENCY_WINDOW_DAYS - inputs.days_to_deadline) / URGENCY_WINDOW_DAYS
         urgency = min(urgency, 2.0)
 
