@@ -107,6 +107,11 @@ class Settings(BaseSettings):
     exception_trend_ratio: float = Field(default=1.5)
     exception_trend_min_count: int = Field(default=10)
     bulk_handling_threshold: Decimal = Field(default=Decimal("25.00"))
+    # M3.7. Clearinghouse resilience; no specification gives these numbers.
+    clearinghouse_breaker_failures: int = Field(default=5)
+    clearinghouse_breaker_open_seconds: int = Field(default=60)
+    outbox_retry_seconds: int = Field(default=300)
+    submission_ack_followup_days: int = Field(default=2)
 
     def validate_for_environment(self) -> None:
         """Refuse configurations that are unsafe for the environment they name.

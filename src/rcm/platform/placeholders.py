@@ -114,6 +114,37 @@ REGISTRY: Final[dict[str, Placeholder]] = {
         provisional="25.00",
         source="DOC-02 Appendix A",
     ),
+    "clearinghouse_breaker_failures": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Consecutive clearinghouse failures that open its circuit breaker "
+        "and fail over to the secondary (IR-09, M3.7).",
+        owner="Eng 1",
+        provisional=5,
+        source="none -- raised at M3.7",
+    ),
+    "clearinghouse_breaker_open_seconds": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Seconds a tripped breaker stays open before one probe is allowed.",
+        owner="Eng 1",
+        provisional=60,
+        source="none -- raised at M3.7",
+    ),
+    "outbox_retry_seconds": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Seconds before an unsent submission is retried when no "
+        "clearinghouse was available (IR-06).",
+        owner="Eng 1",
+        provisional=300,
+        source="none -- raised at M3.7",
+    ),
+    "submission_ack_followup_days": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Days after submission before a claim with no 999/277CA "
+        "acknowledgement needs a person (BR-STATE-04).",
+        owner="Ops",
+        provisional=2,
+        source="none -- raised at M3.7",
+    ),
     # No register declares these. They were raised at M3.5, where BR-EXC-02
     # and BR-EXC-04 need numbers the specifications never give.
     "exception_sla_hours": Placeholder(

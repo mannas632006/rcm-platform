@@ -49,6 +49,9 @@ GUARDED: Final[tuple[str, ...]] = (
     # under the floor now is cheaper than noticing after it has drifted --
     # it arrives at 99%, so the floor costs nothing today.
     "rcm/work",
+    # M3.7: the outbox and the circuit breaker are what stand between a
+    # clearinghouse outage and a lost or duplicated claim (IR-06, IR-09).
+    "rcm/submission",
 )
 
 #: Below this many statements a package is still a stub and the ratio is noise.

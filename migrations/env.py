@@ -32,6 +32,7 @@ from rcm.domain.remittance import (  # noqa: F401 - registers metadata
 )
 from rcm.platform.audit import AuditEvent, DecisionRecord  # noqa: F401 - registers metadata
 from rcm.platform.db import Base, migration_engine
+from rcm.submission.models import SubmissionOutbox  # noqa: F401 - registers metadata
 from rcm.work.models import WorkItem  # noqa: F401 - registers metadata
 
 config = context.config
