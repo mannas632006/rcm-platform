@@ -277,7 +277,9 @@ class AutomationSuspension(Base):
         CheckConstraint(_one_of("path", AutomationPath), name="suspension_path_is_known"),
         # Lifting names who lifted it; an unlifted row names nobody.
         CheckConstraint(
-            "(lifted_at IS NULL) = (lifted_by IS NULL)", name="a_lift_names_who_lifted_it"
+            "(lifted_at IS NULL) = (lifted_by IS NULL) "
+            "AND (lifted_by IS NULL OR length(lifted_by) > 0)",
+            name="a_lift_names_who_lifted_it",
         ),
         Index("ix_suspension_active", "client_id", "path", "lifted_at"),
     )

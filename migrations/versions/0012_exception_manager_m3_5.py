@@ -123,7 +123,8 @@ def upgrade() -> None:
             name=op.f("ck_automation_suspension_suspension_path_is_known"),
         ),
         sa.CheckConstraint(
-            "(lifted_at IS NULL) = (lifted_by IS NULL)",
+            "(lifted_at IS NULL) = (lifted_by IS NULL) "
+            "AND (lifted_by IS NULL OR length(lifted_by) > 0)",
             name=op.f("ck_automation_suspension_a_lift_names_who_lifted_it"),
         ),
         sa.ForeignKeyConstraint(
@@ -139,14 +140,29 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    if bind.execute(sa.text("SELECT count(*) FROM automation_suspension")).scalar_one():
+        raise RuntimeError(
+            "downgrade refused: automation_suspension holds compliance history; archive it first"
+        )
     op.drop_index("ix_suspension_active", table_name="automation_suspension")
     op.drop_table("automation_suspension")
     op.drop_index("uq_work_item_open_source", table_name="work_item")
+    # Refuse rather than delete: rows of the new kinds cannot satisfy the
+    # old CHECK, and dropping them would lose exceptions -- compliance
+    # concerns among them -- with no record. Resolve and archive first.
+    bind = op.get_bind()
+    blocking = bind.execute(
+        sa.text("SELECT count(*) FROM work_item WHERE kind <> ALL(:kinds)").bindparams(
+            kinds=list(OLD_KINDS)
+        )
+    ).scalar_one()
+    if blocking:
+        raise RuntimeError(
+            f"downgrade refused: {blocking} work items use kinds added in 0012; "
+            "resolve and archive them first"
+        )
     op.drop_constraint("work_item_kind_is_known", "work_item", type_="check")
-    # Rows of the new kinds cannot satisfy the old CHECK; they go first.
-    op.execute(
-        sa.text("DELETE FROM work_item WHERE kind <> ALL(:kinds)").bindparams(kinds=list(OLD_KINDS))
-    )
     op.create_check_constraint(
         "work_item_kind_is_known", "work_item", f"kind IN ({_quoted(OLD_KINDS)})"
     )

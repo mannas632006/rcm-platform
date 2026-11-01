@@ -383,3 +383,138 @@ def test_an_exception_is_closed_only_with_a_recorded_resolution() -> None:
         assert found is not None
         assert WorkItemState(found.state) is WorkItemState.QUEUED
         assert found.outcome is None
+
+
+# ---------------------------------------------------------------------------
+# Review findings: nothing may fail open
+# ---------------------------------------------------------------------------
+
+
+def resolve_item(item_id: uuid.UUID) -> None:
+    with session_scope() as session:
+        queue.claim(session, work_item_id=item_id, client_id=CLIENT, operator="co", now=NOON)
+        queue.open_item(session, work_item_id=item_id, client_id=CLIENT, operator="co", now=NOON)
+        queue.resolve(
+            session,
+            work_item_id=item_id,
+            client_id=CLIENT,
+            operator="co",
+            outcome=WorkItemOutcome.NO_ACTION_NEEDED,
+            now=NOON,
+        )
+
+
+def assert_suspended(path: AutomationPath) -> None:
+    with pytest.raises(ComplianceError), session_scope() as session:
+        exceptions.require_automation_allowed(session, client_id=CLIENT, path=path)
+
+
+@pytest.mark.invariant
+def test_re_raising_a_compliance_concern_suspends_the_newly_named_path() -> None:
+    """The idempotent return must not skip a suspension: the caller is told
+    the item exists, so the path it named has to be stopped too."""
+    first = raise_compliance(AutomationPath.CLAIM_SUBMISSION)
+    second = raise_compliance(AutomationPath.AUTO_CORRECTION)
+    assert first.work_item_id == second.work_item_id
+    assert_suspended(AutomationPath.CLAIM_SUBMISSION)
+    assert_suspended(AutomationPath.AUTO_CORRECTION)
+
+
+@pytest.mark.invariant
+def test_a_reopened_compliance_concern_suspends_its_path_again() -> None:
+    """Resolved, lifted, then reopened: the concern is back, so the path
+    stops again until it is reviewed again (BR-EXC-03, PD-18)."""
+    item = raise_compliance()
+    resolve_item(item.work_item_id)
+    with session_scope() as session:
+        exceptions.lift_suspension(
+            session, client_id=CLIENT, work_item_id=item.work_item_id, operator="co", now=NOON
+        )
+        exceptions.reopen_exception(
+            session,
+            client_id=CLIENT,
+            work_item_id=item.work_item_id,
+            operator="co",
+            now=NOON,
+            reason="payer flagged the service again",
+        )
+    assert_suspended(AutomationPath.CLAIM_SUBMISSION)
+
+
+def test_a_lift_that_lifts_nothing_is_refused() -> None:
+    """A resolved item with no active suspension: saying "lifted" is false."""
+    item = raise_quarantine()
+    resolve_item(item.work_item_id)
+    with pytest.raises(StateTransitionError), session_scope() as session:
+        exceptions.lift_suspension(
+            session, client_id=CLIENT, work_item_id=item.work_item_id, operator="co", now=NOON
+        )
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "Member id ABC123456789 has no eligibility on file",
+        "Patient SSN 123-45-6789 does not match the subscriber",
+        "Date of birth 1980-02-14 disagrees with the payer record",
+    ],
+)
+def test_a_problem_carrying_a_patient_identifier_is_refused(problem: str) -> None:
+    """PD-13: the title is shown on screens. Name the record by its id."""
+    with pytest.raises(ValidationFailedError) as raised:
+        raise_quarantine(problem=problem)
+    assert "PD-13" in raised.value.context["reason"]
+
+
+def test_simultaneous_raises_of_one_fact_return_one_item() -> None:
+    """Both callers miss the select; the index stops the second insert, and
+    the loser gets the winner's item rather than an IntegrityError."""
+    import threading
+
+    from rcm.platform.db import session_factory
+
+    maker = session_factory()
+    barrier = threading.Barrier(2)
+    ids: list[uuid.UUID] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def contend() -> None:
+        session = maker()
+        try:
+            barrier.wait(timeout=10)
+            item = raise_exception(
+                session,
+                client_id=CLIENT,
+                kind=WorkItemKind.DATA_QUALITY,
+                problem="835 does not balance: BPR02 differs from claim payments less PLB",
+                record=RAW_FILE,
+                source_key="race:1",
+                now=NOON,
+            )
+            session.commit()
+            with lock:
+                ids.append(item.work_item_id)
+        except BaseException as err:  # collected and asserted below
+            session.rollback()
+            with lock:
+                errors.append(err)
+        finally:
+            session.close()
+
+    threads = [threading.Thread(target=contend) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+
+    assert errors == []
+    assert len(ids) == 2 and ids[0] == ids[1]
+    with session_scope() as session:
+        assert len(session.scalars(select(WorkItem)).all()) == 1
+
+
+def test_a_long_problem_is_marked_as_cut() -> None:
+    item = raise_quarantine(problem="835 does not balance because " + "x" * 300)
+    assert len(item.title) <= 200
+    assert "…" in item.title

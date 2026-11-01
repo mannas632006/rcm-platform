@@ -18,8 +18,11 @@ forget it.
 **Records are named by surrogate id, never by a patient identifier.** The
 title is shown on queue screens. CLM01 is usually a patient account number,
 which is a HIPAA identifier, so the record arrives as a `RecordRef` (entity
-type plus UUID) and the title is built from that -- a caller cannot put a
-member id in a title by accident.
+type plus UUID) and the title is built from that. The free-text problem and
+detail are also run past the PHI scrubber's patterns and refused if it would
+redact anything (PD-13). That catches structured identifiers -- SSNs, member
+ids, phone numbers, dates -- not a name typed into prose, so callers still
+describe problems in domain terms, never in patient terms.
 """
 
 from __future__ import annotations
@@ -28,15 +31,16 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Final
+from typing import Any, Final
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from rcm.platform.audit import ActorType, record_audit_event
 from rcm.platform.config import get_settings
 from rcm.platform.errors import ComplianceError, StateTransitionError, ValidationFailedError
-from rcm.platform.logging import get_logger
+from rcm.platform.logging import get_logger, scrub
 from rcm.work import queue
 from rcm.work.models import (
     AutomationPath,
@@ -55,6 +59,7 @@ __all__ = [
     "exception_volume",
     "lift_suspension",
     "raise_exception",
+    "reopen_exception",
     "require_automation_allowed",
 ]
 
@@ -127,6 +132,8 @@ _GENERIC: Final = re.compile(
 #: A problem shorter than this cannot name what is wrong.
 _MIN_PROBLEM_LENGTH: Final = 12
 _TITLE_LIMIT: Final = 200
+#: `work_item.source_key` is VARCHAR(160).
+_SOURCE_KEY_LIMIT: Final = 160
 
 
 def _sla_due(category: ExceptionCategory, now: datetime) -> datetime:
@@ -140,14 +147,78 @@ def _sla_due(category: ExceptionCategory, now: datetime) -> datetime:
     return now + timedelta(hours=hours)
 
 
+def _refuse_phi(field: str, value: str) -> None:
+    """PD-13: titles and details are shown on screens and must not carry a
+    patient identifier. The record is named by surrogate id; free text that
+    the scrubber would redact is refused rather than stored."""
+    if scrub(value) != value:
+        raise ValidationFailedError(
+            field=field,
+            reason="PD-13: this text looks like it contains a patient identifier; "
+            "name the record by its id instead",
+        )
+
+
 def _title(problem: str, record: RecordRef) -> str:
     if _GENERIC.match(problem) or len(problem.strip()) < _MIN_PROBLEM_LENGTH:
         raise ValidationFailedError(
             field="problem",
             reason="BR-EXC-01: name the specific problem; a generic message is a defect",
         )
+    _refuse_phi("problem", problem)
     suffix = f" ({record.entity_type} {str(record.entity_id)[:8]})"
-    return problem.strip()[: _TITLE_LIMIT - len(suffix)] + suffix
+    room = _TITLE_LIMIT - len(suffix)
+    text = problem.strip()
+    # Marked when cut, so a reader knows the full problem is in the detail.
+    if len(text) > room:
+        text = text[: room - 1] + "\u2026"
+    return text + suffix
+
+
+def _suspend(session: Session, *, item: WorkItem, path: AutomationPath, now: datetime) -> None:
+    """Make sure `path` is suspended by `item`. A no-op if it already is."""
+    active = session.scalar(
+        select(AutomationSuspension.suspension_id).where(
+            AutomationSuspension.client_id == item.client_id,
+            AutomationSuspension.work_item_id == item.work_item_id,
+            AutomationSuspension.path == str(path),
+            AutomationSuspension.lifted_at.is_(None),
+        )
+    )
+    if active is not None:
+        return
+    session.add(
+        AutomationSuspension(
+            client_id=item.client_id,
+            path=str(path),
+            work_item_id=item.work_item_id,
+            raised_at=now,
+        )
+    )
+    record_audit_event(
+        session,
+        actor_type=ActorType.SYSTEM,
+        actor_id="system:exception_manager",
+        action="automation.suspended",
+        entity_type="work_item",
+        entity_id=item.work_item_id,
+        after_state={"path": str(path)},
+    )
+    session.flush()
+    log.warning("automation.suspended", path=str(path))
+
+
+def _open_item(
+    session: Session, *, client_id: uuid.UUID, kind: WorkItemKind, source_key: str
+) -> WorkItem | None:
+    return session.scalar(
+        select(WorkItem).where(
+            WorkItem.client_id == client_id,
+            WorkItem.kind == str(kind),
+            WorkItem.source_key == source_key,
+            WorkItem.state.in_([str(s) for s in OPEN_STATES]),
+        )
+    )
 
 
 def raise_exception(
@@ -168,8 +239,16 @@ def raise_exception(
     Idempotent on `(client_id, kind, source_key)` while an item for it is
     open: a loader that re-reads the same bad file gets the same item back.
     """
+    if now.tzinfo is None:
+        raise ValidationFailedError(field="now", reason="time must be timezone-aware")
+    if not source_key or len(source_key) > _SOURCE_KEY_LIMIT:
+        raise ValidationFailedError(
+            field="source_key",
+            reason=f"name the raising fact in 1 to {_SOURCE_KEY_LIMIT} characters",
+        )
     route = ROUTES[kind]
     title = _title(problem, record)
+    _refuse_phi("detail", detail)
 
     if (route.category is ExceptionCategory.COMPLIANCE) != (suspends is not None):
         raise ValidationFailedError(
@@ -178,21 +257,20 @@ def raise_exception(
             "suspends, and only a compliance exception suspends one",
         )
 
-    existing = session.scalar(
-        select(WorkItem).where(
-            WorkItem.client_id == client_id,
-            WorkItem.kind == str(kind),
-            WorkItem.source_key == source_key,
-            WorkItem.state.in_([str(s) for s in OPEN_STATES]),
-        )
-    )
+    existing = _open_item(session, client_id=client_id, kind=kind, source_key=source_key)
     if existing is not None:
+        # The same fact, still open: hand back the item -- but never let the
+        # early return skip a suspension. A compliance concern that is open
+        # (including one reopened after its suspension was lifted) keeps its
+        # path stopped, whichever path this call names (PD-18).
+        if suspends is not None:
+            _suspend(session, item=existing, path=suspends, now=now)
         return existing
 
     if kind is WorkItemKind.MISSING_FILING_DEADLINE and not detail:
         detail = MISSING_DEADLINE_DETAIL
 
-    item = queue.create(
+    item = _create_once(
         session,
         client_id=client_id,
         kind=kind,
@@ -209,28 +287,33 @@ def raise_exception(
     )
 
     if suspends is not None:
-        session.add(
-            AutomationSuspension(
-                client_id=client_id,
-                path=str(suspends),
-                work_item_id=item.work_item_id,
-                raised_at=now,
-            )
-        )
-        record_audit_event(
-            session,
-            actor_type=ActorType.SYSTEM,
-            actor_id="system:exception_manager",
-            action="automation.suspended",
-            entity_type="work_item",
-            entity_id=item.work_item_id,
-            after_state={"path": str(suspends)},
-        )
-        session.flush()
-        log.warning("automation.suspended", path=str(suspends))
+        _suspend(session, item=item, path=suspends, now=now)
 
     log.info("exception.raised", kind=str(kind), category=str(route.category))
     return item
+
+
+def _create_once(session: Session, **fields: Any) -> WorkItem:
+    """Create the item, or return the one a concurrent raise just created.
+
+    The select above and this insert are two statements, so two callers can
+    both miss. The partial unique index stops the second insert; the
+    savepoint keeps that from poisoning the caller's transaction, and the
+    loser gets the winner's item rather than a raw IntegrityError.
+    """
+    try:
+        with session.begin_nested():
+            return queue.create(session, **fields)
+    except IntegrityError:
+        winner = _open_item(
+            session,
+            client_id=fields["client_id"],
+            kind=fields["kind"],
+            source_key=fields["source_key"],
+        )
+        if winner is None:
+            raise
+        return winner
 
 
 def require_automation_allowed(
@@ -266,10 +349,14 @@ def lift_suspension(
     *"Until reviewed"* is enforced, not trusted: the item that raised the
     suspension must already be resolved, with its structured outcome.
     """
+    if not operator.strip():
+        raise ValidationFailedError(field="operator", reason="a lift names who reviewed it")
+    # Locked, so a concurrent reopen cannot slip between this check and the
+    # lift below.
     item = session.scalar(
-        select(WorkItem).where(
-            WorkItem.work_item_id == work_item_id, WorkItem.client_id == client_id
-        )
+        select(WorkItem)
+        .where(WorkItem.work_item_id == work_item_id, WorkItem.client_id == client_id)
+        .with_for_update()
     )
     if item is None or WorkItemState(item.state) is not WorkItemState.RESOLVED:
         raise StateTransitionError(
@@ -287,6 +374,14 @@ def lift_suspension(
         )
         .with_for_update()
     ).all()
+    if not suspensions:
+        # A lift that lifts nothing is a caller with the wrong item, or a
+        # path already restored. Either way, saying "done" would be false.
+        raise StateTransitionError(
+            source=item.state,
+            target="SuspensionLifted",
+            reason="BR-EXC-03: this item holds no active suspension",
+        )
     for suspension in suspensions:
         suspension.lifted_at = now
         suspension.lifted_by = operator
@@ -300,6 +395,42 @@ def lift_suspension(
             after_state={"path": suspension.path},
         )
     session.flush()
+
+
+def reopen_exception(
+    session: Session,
+    *,
+    client_id: uuid.UUID,
+    work_item_id: uuid.UUID,
+    operator: str,
+    now: datetime,
+    reason: str,
+) -> WorkItem:
+    """Reopen a resolved exception, re-suspending any path it once stopped.
+
+    A compliance concern that comes back is a compliance concern again: the
+    path its first raising suspended is suspended again until it is
+    reviewed again (BR-EXC-03, PD-18).
+    """
+    item = queue.reopen(
+        session,
+        work_item_id=work_item_id,
+        client_id=client_id,
+        operator=operator,
+        now=now,
+        reason=reason,
+    )
+    paths = session.scalars(
+        select(AutomationSuspension.path)
+        .where(
+            AutomationSuspension.client_id == client_id,
+            AutomationSuspension.work_item_id == work_item_id,
+        )
+        .distinct()
+    ).all()
+    for path in paths:
+        _suspend(session, item=item, path=AutomationPath(path), now=now)
+    return item
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +452,8 @@ def exception_volume(
     payer changed a format, a feed started sending blanks -- and it shows
     here before any single operator notices more of the same item.
     """
+    if window_days <= 0:
+        raise ValidationFailedError(field="window_days", reason="a window is at least a day")
     settings = get_settings()
     window = timedelta(days=window_days)
     current_start, previous_start = now - window, now - 2 * window

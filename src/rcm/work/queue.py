@@ -468,6 +468,45 @@ def resolve(
     log.info("work_item.resolved", outcome=str(outcome))
 
 
+def reopen(
+    session: Session,
+    *,
+    work_item_id: uuid.UUID,
+    client_id: uuid.UUID,
+    operator: str,
+    now: datetime,
+    reason: str,
+) -> WorkItem:
+    """Resolved -> Reopened -> Queued: the outcome was reversed.
+
+    `Resolved` is not final (FR-WORK-04's outcomes are reversible). The old
+    outcome is cleared because an open item has none (the outcome CHECK),
+    and kept in the audit record so the reversal is explainable.
+    """
+    del now
+    item = _locked(session, work_item_id=work_item_id, client_id=client_id)
+    previous = item.outcome
+    check(WorkItemState(item.state), WorkItemState.REOPENED)
+    check(WorkItemState.REOPENED, WorkItemState.QUEUED)
+    item.state = str(WorkItemState.QUEUED)
+    item.outcome = None
+    item.resolved_at = None
+
+    record_audit_event(
+        session,
+        actor_type=ActorType.USER,
+        actor_id=operator,
+        action="work_item.reopened",
+        entity_type="work_item",
+        entity_id=work_item_id,
+        before_state={"state": str(WorkItemState.RESOLVED), "outcome": previous},
+        after_state={"state": str(WorkItemState.QUEUED), "reason": reason},
+    )
+    session.flush()
+    log.info("work_item.reopened", work_item_id=str(work_item_id))
+    return item
+
+
 def auto_resolve(
     session: Session,
     *,
