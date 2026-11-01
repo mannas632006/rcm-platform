@@ -137,6 +137,14 @@ REGISTRY: Final[dict[str, Placeholder]] = {
         provisional=300,
         source="none -- raised at M3.7",
     ),
+    "outbox_max_attempts": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Failed delivery attempts after which an unsent submission stops "
+        "retrying and goes to a person (M3.7).",
+        owner="Eng 1",
+        provisional=12,
+        source="none -- raised at M3.7",
+    ),
     "submission_ack_followup_days": Placeholder(
         tbd_id="UNREGISTERED",
         description="Days after submission before a claim with no 999/277CA "

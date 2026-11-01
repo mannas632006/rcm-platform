@@ -111,6 +111,7 @@ class Settings(BaseSettings):
     clearinghouse_breaker_failures: int = Field(default=5)
     clearinghouse_breaker_open_seconds: int = Field(default=60)
     outbox_retry_seconds: int = Field(default=300)
+    outbox_max_attempts: int = Field(default=12)
     submission_ack_followup_days: int = Field(default=2)
 
     def validate_for_environment(self) -> None:

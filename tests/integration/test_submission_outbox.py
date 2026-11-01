@@ -299,3 +299,171 @@ def test_another_clients_claim_cannot_be_enqueued(ready_claim: uuid.UUID) -> Non
 
     with pytest.raises(ResourceNotFoundError):
         enqueue(ready_claim, client_id=OTHER_CLIENT)
+
+
+# ---------------------------------------------------------------------------
+# Review findings: every outcome lands somewhere a person can see
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def two_ready_claims(tmp_path: Path) -> tuple[uuid.UUID, uuid.UUID]:
+    root = tmp_path / "raw2"
+    root.mkdir()
+    with session_scope() as session:
+        load_claim_file(
+            session,
+            file_for(claim("CLM-A1"), claim("CLM-B2")),
+            client_id=CLIENT,
+            original_filename="claims2.edi",
+            archive_root=root,
+        )
+    with session_scope() as session:
+        ids = list(
+            session.scalars(
+                select(Claim.claim_id)
+                .where(Claim.client_id == CLIENT)
+                .order_by(Claim.submitter_claim_id)
+            ).all()
+        )
+        for claim_id in ids:
+            for target, facts in PATH_TO_READY:
+                transition(
+                    session,
+                    claim_id=claim_id,
+                    client_id=CLIENT,
+                    target=target,
+                    actor_type=ActorType.SYSTEM,
+                    actor_id="system:test",
+                    facts=facts,
+                    next_action_due=date(2026, 6, 2),
+                )
+    return ids[0], ids[1]
+
+
+def items_of(kind: WorkItemKind) -> list[WorkItem]:
+    with session_scope() as session:
+        return list(session.scalars(select(WorkItem).where(WorkItem.kind == str(kind))).all())
+
+
+def test_a_reused_key_for_another_claim_is_a_conflict(
+    two_ready_claims: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Returning claim A's row to claim B would say B was submitted."""
+    from rcm.platform.errors import IdempotencyConflictError
+
+    first, second = two_ready_claims
+    enqueue(first, key="shared")
+    with pytest.raises(IdempotencyConflictError):
+        enqueue(second, key="shared")
+    assert state_of(second) is ClaimState.READY_TO_SUBMIT
+
+
+@pytest.mark.invariant
+def test_a_lost_response_goes_to_a_person_and_is_never_resent(ready_claim: uuid.UUID) -> None:
+    primary = MockAdapter("primary", loses_response=True)
+    secondary = MockAdapter("secondary")
+    r = router(primary, secondary)
+    enqueue(ready_claim)
+
+    report = dispatch(r)
+    assert report.needs_review == 1
+    (row,) = rows()
+    assert row.status == str(OutboxStatus.NEEDS_REVIEW)
+    assert len(items_of(WorkItemKind.EXTERNAL_SYSTEM_FAILURE)) == 1
+
+    primary.loses_response = False
+    dispatch(r, NOW + timedelta(hours=2))
+    assert primary.transmissions == 1  # never sent again
+    assert secondary.attempts == 0
+
+
+def test_a_rejected_file_goes_to_a_person_and_the_batch_continues(
+    two_ready_claims: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    first, second = two_ready_claims
+    primary = MockAdapter("primary", rejecting=True)
+    r = router(primary, MockAdapter("secondary"))
+    enqueue(first, key="k-first")
+    with session_scope() as session:
+        outbox.dispatch(session, router=r, client_id=CLIENT, now=NOW, limit=1)
+    primary.rejecting = False
+    enqueue(second, key="k-second")
+    dispatch(r)
+
+    statuses = sorted(row.status for row in rows())
+    assert statuses == ["REJECTED", "SENT"]
+    (rejection,) = items_of(WorkItemKind.SUBMISSION_REJECTION)
+    assert rejection.claim_id == first
+
+
+def test_an_unexpected_adapter_failure_does_not_lose_the_batch(
+    two_ready_claims: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """An adapter crash on one row is that row's problem: the rows already
+    sent stay sent, and the crash goes to a person."""
+    first, second = two_ready_claims
+    primary = MockAdapter("primary")
+    r = router(primary, MockAdapter("secondary"))
+    enqueue(first, key="k-first")
+    enqueue(second, key="k-second")
+
+    class CrashOnSecond:
+        name = "primary"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def submit_837(self, payload: bytes, *, idempotency_key: str):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("connection reset")
+            return primary.submit_837(payload, idempotency_key=idempotency_key)
+
+        def fetch_responses(self) -> list[bytes]:
+            return []
+
+        def health_check(self) -> bool:
+            return True
+
+    r = ClearinghouseRouter(
+        primary=CrashOnSecond(),
+        secondary=MockAdapter("secondary"),
+        failure_threshold=5,
+        open_seconds=60,
+    )
+    report = dispatch(r)
+    assert (report.sent, report.needs_review) == (1, 1)
+    assert sorted(row.status for row in rows()) == ["NEEDS_REVIEW", "SENT"]
+
+
+def test_retries_stop_after_the_maximum(
+    ready_claim: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row cannot retry forever unnoticed."""
+    from rcm.platform.config import get_settings
+
+    monkeypatch.setenv("RCM_OUTBOX_MAX_ATTEMPTS", "2")
+    get_settings.cache_clear()
+    try:
+        down = router(MockAdapter("p", failing=True), MockAdapter("s", failing=True))
+        enqueue(ready_claim)
+        dispatch(down)
+        dispatch(down, NOW + timedelta(hours=1))
+    finally:
+        monkeypatch.delenv("RCM_OUTBOX_MAX_ATTEMPTS")
+        get_settings.cache_clear()
+    (row,) = rows()
+    assert row.status == str(OutboxStatus.NEEDS_REVIEW)
+    assert row.attempts == 2
+
+
+def test_rows_not_tried_in_an_outage_keep_their_attempt_count(
+    two_ready_claims: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    first, second = two_ready_claims
+    enqueue(first, key="k-first")
+    enqueue(second, key="k-second")
+    report = dispatch(router(MockAdapter("p", failing=True), MockAdapter("s", failing=True)))
+    assert report.outage is True
+    assert sorted(row.attempts for row in rows()) == [0, 1]

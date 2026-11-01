@@ -44,7 +44,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.CheckConstraint(
-            "status IN ('PENDING','SENT')",
+            "status IN ('PENDING','SENT','REJECTED','NEEDS_REVIEW')",
             name=op.f("ck_submission_outbox_outbox_status_is_known"),
         ),
         sa.CheckConstraint(

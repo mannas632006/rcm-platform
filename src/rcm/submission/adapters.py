@@ -15,7 +15,11 @@ import hashlib
 from dataclasses import dataclass
 from typing import Protocol
 
-from rcm.platform.errors import ExternalSystemError
+from rcm.platform.errors import (
+    ExternalSystemError,
+    ExternalSystemOutcomeUnknownError,
+    ExternalSystemRejectedError,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +32,17 @@ class SubmissionReceipt:
 
 
 class ClearinghouseAdapter(Protocol):
+    """The contract every adapter keeps, because the router relies on it:
+
+    - raise `ExternalSystemError` only when the file was definitely *not*
+      delivered (connection refused, auth failed before upload);
+    - raise `ExternalSystemRejectedError` when it was received and refused;
+    - raise `ExternalSystemOutcomeUnknownError` on a timeout or a lost
+      response -- anything after which it might have been accepted.
+
+    Anything else an adapter raises is treated as outcome unknown.
+    """
+
     name: str
 
     def submit_837(self, payload: bytes, *, idempotency_key: str) -> SubmissionReceipt:
@@ -49,9 +64,24 @@ class MockAdapter:
     transmitted again (EC-41).
     """
 
-    def __init__(self, name: str, *, failing: bool = False) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        failing: bool = False,
+        rejecting: bool = False,
+        loses_response: bool = False,
+        crashes: bool = False,
+    ) -> None:
         self.name = name
+        #: Refuses the connection: definitely not delivered.
         self.failing = failing
+        #: Receives the file and refuses it.
+        self.rejecting = rejecting
+        #: Accepts the file, then the response is lost: outcome unknown.
+        self.loses_response = loses_response
+        #: Raises something no adapter contract names.
+        self.crashes = crashes
         #: Every call, successful or not.
         self.attempts = 0
         self._accepted: dict[str, SubmissionReceipt] = {}
@@ -64,8 +94,12 @@ class MockAdapter:
 
     def submit_837(self, payload: bytes, *, idempotency_key: str) -> SubmissionReceipt:
         self.attempts += 1
+        if self.crashes:
+            raise RuntimeError("socket closed")
         if self.failing:
             raise ExternalSystemError(system=self.name, operation="submit_837")
+        if self.rejecting:
+            raise ExternalSystemRejectedError(system=self.name, operation="submit_837")
         if idempotency_key in self._accepted:
             return self._accepted[idempotency_key]
         digest = hashlib.sha256(idempotency_key.encode()).hexdigest()[:16]
@@ -74,6 +108,8 @@ class MockAdapter:
         )
         self._accepted[idempotency_key] = receipt
         self.received.append(payload)
+        if self.loses_response:
+            raise ExternalSystemOutcomeUnknownError(system=self.name, operation="submit_837")
         return receipt
 
     def fetch_responses(self) -> list[bytes]:

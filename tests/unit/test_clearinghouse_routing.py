@@ -13,7 +13,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from rcm.platform.errors import ExternalSystemError, ExternalSystemUnavailableError
+from rcm.platform.errors import (
+    ExternalSystemError,
+    ExternalSystemOutcomeUnknownError,
+    ExternalSystemRejectedError,
+    ExternalSystemUnavailableError,
+)
 from rcm.submission.adapters import MockAdapter
 from rcm.submission.breaker import BreakerState, CircuitBreaker
 from rcm.submission.router import ClearinghouseRouter
@@ -167,3 +172,41 @@ def test_the_primary_comes_back_after_its_probe_succeeds() -> None:
     primary.failing = False
     receipt = r.submit_837(PAYLOAD, idempotency_key="k-probe", now=T0 + timedelta(seconds=61))
     assert receipt.adapter == "primary"
+
+
+# ---------------------------------------------------------------------------
+# Review findings: what a failure proves decides what happens next
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.invariant
+def test_a_lost_response_never_fails_over() -> None:
+    """The primary accepted the file and the answer was lost. The secondary
+    has never seen the key, so sending there would submit the claim twice."""
+    primary = MockAdapter("primary", loses_response=True)
+    secondary = MockAdapter("secondary")
+    with pytest.raises(ExternalSystemOutcomeUnknownError):
+        router(primary, secondary).submit_837(PAYLOAD, idempotency_key="k", now=T0)
+    assert primary.transmissions == 1
+    assert secondary.attempts == 0
+
+
+def test_an_unclassified_adapter_failure_is_outcome_unknown() -> None:
+    """A socket error says nothing about whether the file arrived."""
+    primary, secondary = MockAdapter("primary", crashes=True), MockAdapter("secondary")
+    with pytest.raises(ExternalSystemOutcomeUnknownError):
+        router(primary, secondary).submit_837(PAYLOAD, idempotency_key="k", now=T0)
+    assert secondary.attempts == 0
+
+
+def test_a_rejection_is_not_an_outage() -> None:
+    """Bad files do not take a healthy clearinghouse out of service: no
+    failover, no strike against the circuit."""
+    primary, secondary = MockAdapter("primary", rejecting=True), MockAdapter("secondary")
+    r = router(primary, secondary)
+    for i in range(5):
+        with pytest.raises(ExternalSystemRejectedError):
+            r.submit_837(PAYLOAD, idempotency_key=f"bad{i}", now=T0)
+    assert secondary.attempts == 0
+    primary.rejecting = False
+    assert r.submit_837(PAYLOAD, idempotency_key="good", now=T0).adapter == "primary"

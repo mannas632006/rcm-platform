@@ -34,6 +34,11 @@ from rcm.platform.db import Base
 class OutboxStatus(StrEnum):
     PENDING = "PENDING"
     SENT = "SENT"
+    #: The clearinghouse received the file and refused it.
+    REJECTED = "REJECTED"
+    #: Not sent automatically again: the outcome of an attempt is unknown,
+    #: or retries ran out. A person decides (PD-18).
+    NEEDS_REVIEW = "NEEDS_REVIEW"
 
 
 class SubmissionOutbox(Base):
@@ -74,7 +79,10 @@ class SubmissionOutbox(Base):
 
     __table_args__ = (
         UniqueConstraint("client_id", "idempotency_key", name="uq_outbox_idempotency_key"),
-        CheckConstraint("status IN ('PENDING','SENT')", name="outbox_status_is_known"),
+        CheckConstraint(
+            "status IN ('PENDING','SENT','REJECTED','NEEDS_REVIEW')",
+            name="outbox_status_is_known",
+        ),
         # A sent row says when, how and with what receipt; a pending one
         # says none of it.
         CheckConstraint(
