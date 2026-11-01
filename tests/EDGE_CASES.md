@@ -64,14 +64,14 @@ DOC-02 — see [ADR-0002](../docs/decisions/ADR-0002-edge-case-priority-discrepa
 | EC-43 | M8 | Attachment required | Med | — | — | NOT_STARTED |
 | EC-44 | M8 | Partial batch acceptance | Med | — | — | NOT_STARTED |
 | EC-45 | M8 | Misrouted by payer ID ambiguity | Med | — | — | NOT_STARTED |
-| EC-46 | M9 | Bulk 835 across many claims | High | — | — | NOT_STARTED |
-| EC-47 | M9 | Recoupment against current payment | High | — | — | NOT_STARTED |
+| EC-46 | M9 | Bulk 835 across many claims | High | M1.2 | `integration/test_remittance_loading.py::test_two_transaction_sets_in_one_file_load_as_two_remittances`; full-corpus load in `integration/test_corpus_load.py` | COVERED |
+| EC-47 | M9 | Recoupment against current payment | High | M1.10 | `integration/test_reversals.py::test_a_recoupment_links_to_the_payment_it_claws_back`, `::test_a_recoupment_creates_no_claim_and_no_negative_claim` | COVERED |
 | EC-48 | M9 | Payment without 835 | Med | — | — | NOT_STARTED |
 | EC-49 | M9 | 835 without payment | Med | — | — | NOT_STARTED |
-| EC-50 | M9 | Interest payment | Low | — | — | NOT_STARTED |
+| EC-50 | M9 | Interest payment | Low | M1.10 | `integration/test_reversals.py::test_an_interest_payment_is_not_a_recoupment` | COVERED |
 | EC-51 | M9 | Capitated zero-payment lines | Med | — | — | NOT_STARTED |
 | EC-52 | M9 | Paper EOB requiring OCR | Med | — | — | NOT_STARTED |
-| EC-53 | M9 | Control number reuse → misposting | High | — | — | NOT_STARTED |
+| EC-53 | M9 | Control number reuse → misposting | High | M1.3 | `integration/test_remittance_loading.py::test_a_repeated_transaction_control_number_is_quarantined` | COVERED |
 | EC-54 | M10 | 277 says paid, no funds | High | — | — | NOT_STARTED |
 | EC-55 | M10 | Not on file despite 277CA acceptance | High | — | — | NOT_STARTED |
 | EC-56 | M10 | Repeated pending without reason | Med | — | — | NOT_STARTED |

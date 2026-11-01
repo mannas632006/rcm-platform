@@ -208,7 +208,7 @@ def reset_database() -> None:
 #: `.github/workflows/ci.yml`.
 STAGES: list[tuple[str, list[str]]] = [
     ("lint", ["-m", "ruff", "check", "src", "tests", "tools", "migrations"]),
-    ("format", ["-m", "ruff", "format", "--check", "src", "tests", "tools"]),
+    ("format", ["-m", "ruff", "format", "--check", "src", "tests", "tools", "migrations"]),
     ("import boundaries", ["-m", "importlinter.cli", "--config", ".importlinter"]),
     # Bare `mypy`, because that is what CI and the Makefile run:
     # `[tool.mypy] packages = ["rcm"]` decides the scope. Passing paths here

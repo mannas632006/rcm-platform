@@ -129,9 +129,16 @@ def transition(
             reason="BR-STATE-04: a claim in this state needs a scheduled next action",
         )
 
-    # A resting state has nothing pending. Carrying a stale date forward
-    # would leave closed claims appearing on work queues forever.
-    resolved_due = None if not requires_next_action(target) else next_action_due
+    # A resting state has nothing pending, so a date offered for one is a
+    # caller that misunderstands where the claim is going. Refused rather
+    # than dropped (PD-18): silently discarding input hides the mistake.
+    if not requires_next_action(target) and next_action_due is not None:
+        raise StateTransitionError(
+            source=str(source),
+            target=str(target),
+            reason="BR-STATE-04: a claim at rest has no next action to schedule",
+        )
+    resolved_due = next_action_due
 
     claim.state = str(target)
     claim.next_action_due = resolved_due
@@ -181,7 +188,9 @@ def transition(
         target=target,
         reason=defined.reason,
         next_action_due=resolved_due,
-        recorded_at=record.occurred_at or datetime.now(tz=None).astimezone(),
+        # The database's clock, not the app's: after the flush SQLAlchemy has
+        # the server default, so this is never None here.
+        recorded_at=record.occurred_at,
     )
 
 

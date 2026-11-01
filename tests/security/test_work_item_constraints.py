@@ -10,12 +10,17 @@ identity the platform runs as.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Iterator
+from enum import StrEnum
 
 import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
+
+from rcm.work.models import WorkItemKind
+from rcm.work.state import WorkItemOutcome, WorkItemState
 
 pytestmark = pytest.mark.security
 
@@ -197,3 +202,72 @@ def test_a_priority_outside_the_scale_is_refused(app_engine: Engine, score: int)
         app_engine.begin() as conn,
     ):
         _insert(conn, score=score)
+
+
+# ---------------------------------------------------------------------------
+# The lists in the database agree with the enums in the code
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("constraint", "enum"),
+    [
+        ("ck_work_item_work_item_state_is_known", WorkItemState),
+        ("ck_work_item_work_item_kind_is_known", WorkItemKind),
+        ("ck_work_item_work_item_outcome_is_known", WorkItemOutcome),
+    ],
+)
+def test_the_migration_and_the_enums_agree(
+    owner_engine: Engine, constraint: str, enum: type[StrEnum]
+) -> None:
+    """Each list lives in a migration and in an enum, and a list in two
+    places drifts unless something compares them. Read from the live
+    constraint, so a database migrated before a value was added fails too."""
+    with owner_engine.begin() as conn:
+        definition = conn.execute(
+            text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = :name"),
+            {"name": constraint},
+        ).scalar_one()
+
+    in_database = set(re.findall(r"'([^']+)'", definition))
+    in_code = {str(value) for value in enum}
+    assert in_database == in_code, {
+        "only in the database": sorted(in_database - in_code),
+        "only in the code": sorted(in_code - in_database),
+    }
+
+
+def test_free_text_is_not_an_outcome(app_engine: Engine) -> None:
+    """FR-WORK-04: "fixed it" is not a value any query can group."""
+    with (
+        pytest.raises(IntegrityError, match="work_item_outcome_is_known"),
+        app_engine.begin() as conn,
+    ):
+        _insert(conn, state="Resolved", outcome="fixed it")
+
+
+def test_an_unknown_kind_is_refused(app_engine: Engine) -> None:
+    with (
+        pytest.raises(IntegrityError, match="work_item_kind_is_known"),
+        app_engine.begin() as conn,
+    ):
+        _insert(conn, kind="MISC")
+
+
+@pytest.mark.invariant
+def test_an_item_a_human_held_cannot_be_auto_resolved(app_engine: Engine) -> None:
+    """FR-WORK-03 at the schema level: automation coverage counts only
+    items no person ever held, whatever path a row arrived by."""
+    with (
+        pytest.raises(IntegrityError, match="auto_resolved_was_never_held"),
+        app_engine.begin() as conn,
+    ):
+        conn.execute(
+            text(
+                "INSERT INTO work_item (work_item_id, client_id, kind, state, title, "
+                "owner_role, priority_score, outcome, first_claimed_at) "
+                "VALUES (:id, :client, 'DENIAL', 'AutoResolved', 'CO-50 on CLM-001', "
+                "'denials_specialist', 0, 'NO_ACTION_NEEDED', '2026-06-01 12:00+00')"
+            ),
+            {"id": uuid.uuid4(), "client": CLIENT},
+        )

@@ -23,8 +23,15 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import Engine, select, text
 
+from rcm.platform.audit import AuditEvent
+from rcm.platform.config import get_settings
 from rcm.platform.db import reset_engines, session_factory, session_scope
-from rcm.platform.errors import ResourceNotFoundError, WorkItemLockedError
+from rcm.platform.errors import (
+    ResourceNotFoundError,
+    StateTransitionError,
+    ValidationFailedError,
+    WorkItemLockedError,
+)
 from rcm.work import queue
 from rcm.work.models import WorkItem, WorkItemKind
 from rcm.work.state import WorkItemOutcome, WorkItemState
@@ -349,8 +356,6 @@ def test_an_item_a_human_touched_cannot_be_auto_resolved(item_id: uuid.UUID) -> 
     with session_scope() as session:
         queue.claim(session, work_item_id=item_id, client_id=CLIENT, operator="alice", now=NOON)
 
-    from rcm.platform.errors import StateTransitionError
-
     with pytest.raises(StateTransitionError), session_scope() as session:
         queue.auto_resolve(
             session,
@@ -359,3 +364,163 @@ def test_an_item_a_human_touched_cannot_be_auto_resolved(item_id: uuid.UUID) -> 
             outcome=WorkItemOutcome.NO_ACTION_NEEDED,
             now=NOON,
         )
+
+
+@pytest.mark.invariant
+def test_a_released_item_cannot_be_auto_resolved(item_id: uuid.UUID) -> None:
+    """FR-WORK-03. A released item is back in `Queued`, the one state
+    `AutoResolved` is reachable from -- so the state alone would let a
+    human's work be counted as automation. `first_claimed_at` remembers."""
+    with session_scope() as session:
+        queue.claim(session, work_item_id=item_id, client_id=CLIENT, operator="alice", now=NOON)
+    with session_scope() as session:
+        queue.release(session, work_item_id=item_id, client_id=CLIENT, operator="alice", now=NOON)
+    assert state_of(item_id) is WorkItemState.QUEUED
+
+    with pytest.raises(StateTransitionError) as raised, session_scope() as session:
+        queue.auto_resolve(
+            session,
+            work_item_id=item_id,
+            client_id=CLIENT,
+            outcome=WorkItemOutcome.NO_ACTION_NEEDED,
+            now=NOON,
+        )
+    assert "FR-WORK-03" in raised.value.context["reason"]
+    assert state_of(item_id) is WorkItemState.QUEUED
+
+
+# ---------------------------------------------------------------------------
+# [TBD-57] and the audit trail
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def lease_setting(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("RCM_WORK_ITEM_LOCK_EXPIRY_MINUTES", "7")
+    get_settings.cache_clear()
+    yield
+    monkeypatch.delenv("RCM_WORK_ITEM_LOCK_EXPIRY_MINUTES")
+    get_settings.cache_clear()
+
+
+def test_the_lease_length_comes_from_settings(item_id: uuid.UUID, lease_setting: None) -> None:
+    """[TBD-57] is a placeholder the report says can be set. Setting it has
+    to change the lease, or the report is lying."""
+    with session_scope() as session:
+        lease = queue.claim(
+            session, work_item_id=item_id, client_id=CLIENT, operator="alice", now=NOON
+        )
+    assert lease.expires_at == NOON + timedelta(minutes=7)
+
+
+@pytest.mark.parametrize("minutes", [0, -5])
+def test_a_lease_must_last_at_least_a_minute(item_id: uuid.UUID, minutes: int) -> None:
+    """A lease that is already over when granted is a lock that does nothing."""
+    with pytest.raises(ValidationFailedError), session_scope() as session:
+        queue.claim(
+            session,
+            work_item_id=item_id,
+            client_id=CLIENT,
+            operator="alice",
+            now=NOON,
+            lock_minutes=minutes,
+        )
+    assert state_of(item_id) is WorkItemState.QUEUED
+
+
+def audit_actions(item_id: uuid.UUID) -> list[str]:
+    with session_scope() as session:
+        return list(
+            session.scalars(
+                select(AuditEvent.action)
+                .where(AuditEvent.entity_id == item_id)
+                .order_by(AuditEvent.occurred_at, AuditEvent.action)
+            ).all()
+        )
+
+
+def test_every_change_to_an_item_is_audited(item_id: uuid.UUID) -> None:
+    """Who held an item, when, and what they did with it is the record a
+    dispute is settled from. A release with no audit row is a gap in it."""
+    later = NOON + timedelta(minutes=5)
+    with session_scope() as session:
+        queue.claim(session, work_item_id=item_id, client_id=CLIENT, operator="alice", now=NOON)
+    with session_scope() as session:
+        queue.release(session, work_item_id=item_id, client_id=CLIENT, operator="alice", now=NOON)
+    with session_scope() as session:
+        queue.claim(session, work_item_id=item_id, client_id=CLIENT, operator="bob", now=NOON)
+    with session_scope() as session:
+        queue.renew(session, work_item_id=item_id, client_id=CLIENT, operator="bob", now=later)
+    with session_scope() as session:
+        queue.open_item(session, work_item_id=item_id, client_id=CLIENT, operator="bob", now=later)
+    with session_scope() as session:
+        queue.resolve(
+            session,
+            work_item_id=item_id,
+            client_id=CLIENT,
+            operator="bob",
+            outcome=WorkItemOutcome.APPEALED,
+            now=later,
+        )
+
+    assert sorted(audit_actions(item_id)) == sorted(
+        [
+            "work_item.created",
+            "work_item.claimed",
+            "work_item.released",
+            "work_item.claimed",
+            "work_item.lease_renewed",
+            "work_item.opened",
+            "work_item.resolved",
+        ]
+    )
+
+
+def test_taking_over_an_expired_lease_records_the_expiry(item_id: uuid.UUID) -> None:
+    """Without this the audit says bob took the item from the queue, and
+    nothing shows alice had been holding it."""
+    with session_scope() as session:
+        queue.claim(session, work_item_id=item_id, client_id=CLIENT, operator="alice", now=NOON)
+    with session_scope() as session:
+        queue.claim(
+            session,
+            work_item_id=item_id,
+            client_id=CLIENT,
+            operator="bob",
+            now=NOON + timedelta(minutes=31),
+        )
+
+    with session_scope() as session:
+        expiry = session.scalars(
+            select(AuditEvent).where(
+                AuditEvent.entity_id == item_id, AuditEvent.action == "work_item.lease_expired"
+            )
+        ).all()
+    assert len(expiry) == 1
+    assert expiry[0].before_state == {"assigned_to": "alice"}
+    # bob's claim is what ended alice's lease, so the record names bob.
+    assert expiry[0].actor_id == "bob"
+
+
+def test_a_holder_whose_lease_ran_out_cannot_keep_working(item_id: uuid.UUID) -> None:
+    """FR-WORK-02. Before the sweep runs, the row still names alice. Her late
+    renew, open or resolve must be refused, or work lands on an item the
+    queue already treats as free."""
+    with session_scope() as session:
+        queue.claim(session, work_item_id=item_id, client_id=CLIENT, operator="alice", now=NOON)
+    late = NOON + timedelta(minutes=31)
+
+    for action in (queue.renew, queue.open_item):
+        with pytest.raises(WorkItemLockedError), session_scope() as session:
+            action(session, work_item_id=item_id, client_id=CLIENT, operator="alice", now=late)
+
+    with pytest.raises(WorkItemLockedError), session_scope() as session:
+        queue.resolve(
+            session,
+            work_item_id=item_id,
+            client_id=CLIENT,
+            operator="alice",
+            outcome=WorkItemOutcome.APPEALED,
+            now=late,
+        )
+    assert state_of(item_id) is WorkItemState.ASSIGNED

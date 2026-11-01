@@ -106,7 +106,7 @@ class DenialRate:
         return ((Decimal(numerator) / Decimal(denominator)) * _HUNDRED).quantize(_PERCENT_PLACES)
 
 
-def _denied_submitter_claim_ids(client_id: uuid.UUID) -> Select[str]:
+def _denied_submitter_claim_ids(client_id: uuid.UUID) -> Select[tuple[str]]:
     """CLM01s whose remittance shows a refusal to pay with a reason.
 
     Returned as a subquery over `claim_payment.claim_id` because that is the

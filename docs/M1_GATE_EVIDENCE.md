@@ -186,7 +186,7 @@ worse than a rejection, because the rows that did land look like facts.
 `RawFileStatus` has three members and deliberately lacks a fourth:
 
 ```python
-ARCHIVED / LOADED / QUARANTINED      # and no PARTIALLY_LOADED
+ARCHIVED / LOADED / QUARANTINED  # and no PARTIALLY_LOADED
 ```
 
 There is no status for a half-loaded file because there is no code path that can
@@ -1216,7 +1216,7 @@ The 999 error loop dropped every IK4 after the first:
 ```python
 # before
 current.errors.append(SegmentError(...))
-current.pending_segment = None      # <- the next IK4 fails its own guard
+current.pending_segment = None  # <- the next IK4 fails its own guard
 ```
 
 The guard on the IK4 branch is `current.pending_segment is not None`, so
@@ -1233,6 +1233,7 @@ no IK4 is still kept on its own and an IK3 with several is not duplicated:
 
 ```python
 pending_refined: bool = False
+
 
 def close_segment(self) -> None:
     if self.pending_segment is not None and not self.pending_refined:
@@ -1341,7 +1342,7 @@ PD-4 at full volume, which is the measurement M1.6 adds to the gate:
 
 ```
 277CA rejections        1355 claims
-denials                 6366 claims
+denials                 6366 submissions (5690 claims)
 both                       0
 999 rejections            69
 277CA acceptances      32738
@@ -1506,4 +1507,3 @@ left the platform in.
   implementation guide rather than by ST01, so telling them apart means
   reading GS08 — which matters only once there is a status-enquiry path to
   send, in M3.
-

@@ -58,7 +58,7 @@ jobs:
       - name: ruff check
         run: ruff check src tests tools migrations
       - name: ruff format --check
-        run: ruff format --check src tests tools
+        run: ruff format --check src tests tools migrations
       - name: import boundaries (M0.9)
         run: lint-imports --config .importlinter
 
@@ -269,14 +269,17 @@ jobs:
         # A committed schema that disagrees with the code means the generated
         # frontend client is wrong. M5.1 makes the client itself a CI artifact;
         # until then this catches the server half.
+        #
+        # A missing schema fails rather than being created here: a contract
+        # job that writes its own baseline compares the code with itself and
+        # always passes. Regenerate with `make openapi` and commit it.
         run: |
           python tools/export_openapi.py openapi.generated.json
-          if [ -f openapi.json ]; then
-            diff -u openapi.json openapi.generated.json
-          else
-            cp openapi.generated.json openapi.json
-            echo "::notice::openapi.json created; commit it to lock the contract"
+          if [ ! -f openapi.json ]; then
+            echo "::error::openapi.json is not committed; run 'make openapi' and commit it"
+            exit 1
           fi
+          diff -u openapi.json openapi.generated.json
 
   # ------------------------------------------------- stage 5b: coverage floor
   coverage-floor:
@@ -312,7 +315,7 @@ jobs:
           fi
           ls -la .coverage.*
       - name: combine
-        run: coverage combine --keep .coverage.unit .coverage.property .coverage.integration .coverage.security
+        run: coverage combine --keep .coverage.unit .coverage.property .coverage.integration .coverage.security .coverage.leakage
       - name: coverage floor on the high-care packages
         # CLAUDE.md section 7.1: 90% line coverage on decision, ingestion.x12 and
         # domain. Enforced only once those packages contain code -- an empty

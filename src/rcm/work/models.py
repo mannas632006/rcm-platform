@@ -25,7 +25,6 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import StrEnum
-from typing import Final
 
 from sqlalchemy import (
     Boolean,
@@ -49,15 +48,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 # contract, so this direction is the permitted one.
 from rcm.domain.claim import Claim as _Claim  # noqa: F401 - registers the FK target
 from rcm.platform.db import Base
-
-#: [TBD-57] How long an assignment lock survives without activity.
-#:
-#: FR-WORK-02 leaves the number to the sponsor and it is a real trade: too
-#: short and an operator reading a chart loses the item mid-thought; too
-#: long and an item sits locked for an afternoon after somebody went home.
-#: Thirty minutes is a placeholder chosen to be obviously provisional, not
-#: a measurement of how long this work takes.
-DEFAULT_LOCK_MINUTES: Final = 30
+from rcm.work.state import WorkItemOutcome, WorkItemState
 
 
 class WorkItemKind(StrEnum):
@@ -76,6 +67,17 @@ class WorkItemKind(StrEnum):
     AUTH_PROBLEM = "AUTH_PROBLEM"
     PAYER_MATCH_REVIEW = "PAYER_MATCH_REVIEW"
     DATA_QUALITY = "DATA_QUALITY"
+
+
+def _one_of(column: str, values: type[StrEnum]) -> str:
+    """`column IN (...)` over an enum, so the CHECK cannot drift from it.
+
+    Migration 0011 writes the same lists out by hand (Alembic does not
+    autogenerate CHECKs), and `tests/security/test_work_item_constraints.py`
+    compares the live constraints with these enums.
+    """
+    quoted = ",".join(f"'{v}'" for v in values)
+    return f"{column} IN ({quoted})"
 
 
 class WorkItem(Base):
@@ -120,6 +122,13 @@ class WorkItem(Base):
     assigned_to: Mapped[str | None] = mapped_column(String(128), nullable=True)
     #: FR-WORK-02. When the lease ends. Null whenever nobody holds the item.
     lock_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: FR-WORK-03. When a human first took the item; never cleared. Released
+    #: and reopened items go back to `Queued`, so the state alone cannot say
+    #: whether a person ever worked it -- and an item a person worked must
+    #: not be counted as automation.
+    first_claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     #: FR-WORK-04: structured, not free text. Null until resolved.
     outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -164,6 +173,18 @@ class WorkItem(Base):
         # BR-EXC-02: an owner, always.
         CheckConstraint("length(owner_role) > 0", name="work_item_names_its_owner"),
         CheckConstraint("priority_score BETWEEN 0 AND 100", name="priority_score_is_a_percentage"),
+        # FR-WORK-04 at the schema level: an outcome is one of the structured
+        # values or nothing. Free text here is the training signal lost.
+        CheckConstraint(
+            f"outcome IS NULL OR {_one_of('outcome', WorkItemOutcome)}",
+            name="work_item_outcome_is_known",
+        ),
+        CheckConstraint(_one_of("kind", WorkItemKind), name="work_item_kind_is_known"),
+        # FR-WORK-03: automation coverage counts only items no human held.
+        CheckConstraint(
+            f"state <> '{WorkItemState.AUTO_RESOLVED}' OR first_claimed_at IS NULL",
+            name="auto_resolved_was_never_held",
+        ),
         # The queue read: open items for one client, best first.
         Index("ix_work_item_queue", "client_id", "state", "priority_score"),
         # The expiry sweep (FR-WORK-02).

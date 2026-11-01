@@ -1,0 +1,35 @@
+{
+  "info": {
+    "title": "RCM Automation Platform",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "description": "Liveness. Deliberately does not touch the database.\n\nA health check that fails when Postgres is briefly unavailable causes the\norchestrator to kill an application that would otherwise have recovered.\nDependency status belongs in a separate readiness probe.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "platform"
+        ]
+      }
+    }
+  }
+}
