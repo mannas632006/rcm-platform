@@ -33,7 +33,7 @@ from rcm.platform.errors import (
     WorkItemLockedError,
 )
 from rcm.work import queue
-from rcm.work.models import WorkItem, WorkItemKind
+from rcm.work.models import ExceptionCategory, WorkItem, WorkItemKind
 from rcm.work.state import WorkItemOutcome, WorkItemState
 
 pytestmark = pytest.mark.integration
@@ -62,8 +62,11 @@ def item_id() -> uuid.UUID:
             session,
             client_id=CLIENT,
             kind=WorkItemKind.DENIAL,
-            title="CO-50 medical necessity on CLM-001 line 1",
+            category=ExceptionCategory.OPERATIONAL,
+            title="CO-50 medical necessity on claim 3f2a91c0 line 1",
             owner_role="denials_specialist",
+            sla_due_at=NOON + timedelta(days=3),
+            now=NOON,
             priority_score=40,
         )
         return item.work_item_id

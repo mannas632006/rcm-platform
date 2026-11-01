@@ -90,6 +90,21 @@ class Settings(BaseSettings):
     outcome_maturity_days: int = Field(default=180)
     timely_filing_escalation_days: int = Field(default=14)
     preventable_denial_defect_threshold: int = Field(default=3)
+    # M3.5. No specification gives exception SLAs or a trend threshold;
+    # these are labelled placeholders, keyed by ExceptionCategory.
+    exception_sla_hours: dict[str, int] = Field(
+        default_factory=lambda: {
+            "COMPLIANCE": 4,
+            "DEADLINE_RISK": 24,
+            "EXTERNAL_SYSTEM": 8,
+            "DATA_QUALITY": 72,
+            "RULE_CONFLICT": 120,
+            "MODEL_LOW_CONFIDENCE": 48,
+            "OPERATIONAL": 72,
+        }
+    )
+    exception_trend_ratio: float = Field(default=1.5)
+    exception_trend_min_count: int = Field(default=10)
 
     def validate_for_environment(self) -> None:
         """Refuse configurations that are unsafe for the environment they name.

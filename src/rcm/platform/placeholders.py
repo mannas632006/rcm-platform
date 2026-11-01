@@ -106,4 +106,31 @@ REGISTRY: Final[dict[str, Placeholder]] = {
         provisional=3,
         source="DOC-02 Appendix A",
     ),
+    # No register declares these. They were raised at M3.5, where BR-EXC-02
+    # and BR-EXC-04 need numbers the specifications never give.
+    "exception_sla_hours": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Hours until an exception breaches its SLA, per category "
+        "(BR-EXC-02). Compliance 4, deadline risk 24, external system 8, data "
+        "quality 72, rule conflict 120, model low confidence 48, operational 72.",
+        owner="Muhammad Anas",
+        provisional="see description",
+        source="none -- raised at M3.5",
+    ),
+    "exception_trend_ratio": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Exception volume in the latest window this many times the "
+        "previous window is a rising trend (BR-EXC-04).",
+        owner="Muhammad Anas",
+        provisional=1.5,
+        source="none -- raised at M3.5",
+    ),
+    "exception_trend_min_count": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Minimum exceptions in the latest window before a trend can "
+        "be called rising, so three-versus-one is not an alarm (BR-EXC-04).",
+        owner="Muhammad Anas",
+        provisional=10,
+        source="none -- raised at M3.5",
+    ),
 }
