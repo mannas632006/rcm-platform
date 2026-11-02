@@ -34,6 +34,7 @@ automation path pending human review (FR-BE-07).
 | `stale-payer-rule` | 409 | Payer rule is stale | yes | A payer registry entry too old to drive a BLOCKING decision (BR-REG-02). |
 | `work-item-locked` | 409 | Work item already assigned | — | M3.3: two operators cannot hold one item. |
 | `payload-too-large` | 413 | Payload too large | — | The request body exceeds the configured maximum. |
+| `external-system-rejected` | 422 | External system rejected the request | — | The external system received this request and refused it (M3.7). |
 | `file-does-not-balance` | 422 | Remittance file does not balance | yes | An 835's amounts do not reconcile (IR-02, M1.3). |
 | `file-quarantined` | 422 | Inbound file quarantined | yes | A file failed a data quality gate and was quarantined (DR-10). |
 | `leakage-refused` | 422 | Refused: would leak | yes | PD-11/PD-12: a dataset operation that would invalidate the model. |
@@ -45,6 +46,7 @@ automation path pending human review (FR-BE-07).
 | `compliance-violation` | 500 | Compliance violation | yes | A compliance-class failure. Suspends the affected automation path (FR-BE-07). |
 | `internal-error` | 500 | Internal error | — | Base for every error this platform raises deliberately. |
 | `external-system-error` | 502 | External system error | — | An external system returned an error. |
+| `external-system-outcome-unknown` | 502 | External system outcome unknown | — | The request may or may not have been accepted (M3.7). |
 | `external-system-unavailable` | 503 | External system unavailable | yes | Both primary and secondary failed (M3.7). Named, and no data lost. |
 
 ## Response shape

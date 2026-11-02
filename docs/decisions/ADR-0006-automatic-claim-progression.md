@@ -1,0 +1,169 @@
+# ADR-0006: Claims move on their own; the submitter approves each step
+
+**Status:** Accepted · **Date:** 2026-11-02 · **Milestone:** M3 (GATE M3)
+
+## Context
+
+GATE M3 asks for the full lifecycle end to end: created → scrubbed →
+submitted → acknowledged → remitted → posted or denied, with no claim resting
+in a non-terminal state without a next action date (BR-STATE-04).
+
+Up to M3.7, every loaded claim sat in `Registered` with no next action date.
+The state machine existed, but nothing moved claims through it.
+
+Owner decision (2026-11-01): *"everything done automatically but visible to
+the user who submitted the claim, so that he can review it and approve the
+system's steps."*
+
+## Decision 1: progression runs on evidence already on file
+
+`rcm.work.progression.advance_all` moves each claim of one client as far as
+its evidence goes, and no further:
+
+| Evidence | Steps |
+|---|---|
+| An 837 we hold | `Registered` → … → `Submitted`, each step noted as *inferred from the 837, not observed*. The auth branch is taken when the 837 carries a prior-auth number. |
+| 277CA accepted | `Submitted` → `InAdjudication` |
+| 277CA rejected | `Submitted` → `Rejected` (PD-4: never a denial) |
+| 835, no 277CA | `Submitted` → `InAdjudication`, noted as *inferred from the 835* |
+| One live 835 posting | All lines denied → `Denied`; some → `PartiallyPaid`; none → `Paid`. Uses the same denied-line rule as `rcm.analytics.denials`. |
+| A later claim chained by REF*F8, which the payer has taken | → `Replaced` (Decision 2) |
+
+These raise a named `DATA_QUALITY` exception instead, and the claim waits
+where it is, with its next action date (PD-18):
+
+| Evidence | Problem |
+|---|---|
+| 277CA rejected, and an 835 exists (a replacement does not settle it) | `rejected-but-adjudicated` |
+| A `Rejected` claim whose latest 277CA accepts | `accepted-after-rejection` |
+| A claim the payer accepted (`InAdjudication` or an outcome) whose latest 277CA rejects | `rejected-after-acceptance` |
+| The submission is itself a void (frequency 8): walked to `Submitted`, no further | `void-submission` |
+| Two or more live 835 postings (split claim, secondary payer) | `several-835-postings` |
+| An 835 with no service lines | `835-without-service-lines` |
+| A line paid nothing whose only reasons are patient responsibility (PR) | `835-patient-share-only-line` |
+| A void (frequency 8) chained to the claim | `void-received` |
+
+CLP02 is not used to tell primary from secondary 835s: the synthetic
+generator writes `2` on primary claims that carry a patient share. The PR
+rule is held, not decided, because the denied-line rule also lives in two
+dbt models. Settling it in all three places is M4.8's job.
+
+Evidence is matched on CLM01 alone, since `uq_claim_client_submitter_id`
+allows one claim per CLM01 per client. It is never limited by load time,
+because a 277CA or 835 can arrive before the 837 it answers.
+
+A 999 moves nothing (BR-M8-02). Everything after an outcome (appeal,
+correction, write-off, secondary or patient billing) is a person's decision
+and stays one.
+
+Each step writes a `decision_record` (`DecisionType.PROGRESS`, logic version
+`progression-v1`) with the evidence counts and states. No PHI is recorded
+(PD-1, PD-13). Every step goes through `claim_lifecycle.transition`, so the
+row lock, the audit event and the next-action rule all still apply.
+
+When the evidence contradicts itself (a 277CA rejection followed by an
+835), no claim is moved. A `DATA_QUALITY` exception is raised instead
+(PD-18). Each hold also writes a `decision_record` (output `held`) when its
+item is raised, and not again on later runs that find it still open (PD-1).
+
+A compliance suspension of `CLAIM_PROGRESSION` stops the whole run
+(BR-EXC-03).
+
+## Decision 2: a new final state, `Replaced`
+
+DOC-02 §7.1 has no state for a submission that a corrected one supersedes.
+BR-DATA-03 keeps one claim across its submissions, but each submission row
+still needs an end, or the old row waits for a next action forever.
+
+`Replaced` is final and resting. It can be reached from `Submitted`,
+`Rejected`, `InAdjudication`, `Denied`, `PartiallyPaid`, `Paid` and
+`Correcting`. The claim's follow-up continues on the replacing submission.
+
+An original becomes `Replaced` only once the payer has taken the replacing
+submission (`InAdjudication` or later). Until then the original is still
+the live claim, and ending it would lose it if the replacement is rejected.
+Progression walks newest claims first, so a replacement moves before its
+original in the same run.
+
+A void (frequency 8) does not make a claim `Replaced`. It is held for a
+person until M4 handles voids and the recoupments that follow them.
+
+## Decision 3: every system step waits for review
+
+- `claim_state_transition` gains a `review_status`:
+  - `NOT_REQUIRED`: a person took the step, or the step predates review
+  - `PENDING`
+  - `APPROVED`
+  - `SENT_BACK`
+
+  Each reviewed step also records the reviewer, the time and a note. CHECK
+  constraints require a reviewed step to name its reviewer, and a sent-back
+  step to say why.
+- Each claim with pending steps has one `CLAIM_STEP_REVIEW` work item, routed
+  to `claim_submitter`.
+- `approve_steps` approves the steps the submitter names: the ones they were
+  shown. A step taken while the review was open stays pending and keeps the
+  item open. The item resolves once nothing is pending.
+- `send_back_step` marks one step and raises a `DATA_QUALITY` exception.
+  Progression skips that claim until the exception is closed (PD-18). The
+  check runs under the claim lock, so a send-back that lands mid-run still
+  stops it.
+- Step-review and data-quality items are never routed to bulk handling,
+  whatever the balance (`prioritisation-heuristic-v2`). A paid claim's
+  balance is 0, and bulk routing would hide its review.
+
+Review does not hold the claim back while it waits: the claim keeps moving,
+and review is how the submitter sees and disputes each step. That is the
+owner's "done automatically but visible".
+
+## Decision 4: a `sequence` column on `claim_state_transition`
+
+`occurred_at` defaults to the transaction's start time, so steps taken in one
+run share it, and history was ordered by a random UUID. `sequence` (an
+identity column) fixes the order. History now orders by `occurred_at`, then
+`sequence`.
+
+## Next-action dates
+
+BR-STATE-04 needs a date, and no specification gives one per state. They are
+set in `Settings.next_action_days` and registered in
+`rcm.platform.placeholders` as an Ops placeholder to confirm:
+
+| States | Days |
+|---|---|
+| Pre-submission (default) | 1 |
+| `Submitted`, `Rejected`, `Reopened` | 2 |
+| `Correcting`, `SecondaryBilling` | 3 |
+| `Paid`, `PartiallyPaid`, `Denied` | 7 |
+| `InAdjudication`, `Appealing`, `PatientBalance` | 30 |
+
+## Consequences
+
+- Migration 0015 adds `Replaced`, the review columns, `sequence` and the
+  `CLAIM_STEP_REVIEW` kind. The downgrade refuses while any `Replaced` claim
+  or step review exists. On a large populated table, adding `sequence`
+  rewrites `claim_state_transition` and the CHECKs validate under an
+  exclusive lock. That is acceptable before the first deployment. After it,
+  this kind of change needs a maintenance window or `NOT VALID` plus
+  `VALIDATE`.
+- Migration 0016 indexes `claim (client_id, original_claim_id)`. Without the
+  index, the "what replaces this claim" lookup scanned the client's claims
+  once per claim.
+- Progression, approval and send-back each lock the claim row first. They
+  take turns, and each works from the claim's current state.
+- Still a person's job, until an API exists: checking that the operator who
+  approves steps is allowed to.
+- A reversed payment is not progression's to act on. Reopening the claim
+  (BR-STATE-03) stays a person's decision.
+- Tests: `tests/integration/test_claim_progression.py` (GATE M3 path,
+  idempotency, BR-STATE-04, review flow, suspension) and
+  `tests/unit/test_claim_state.py` (`Replaced` edges).
+- Gate measurements on the full corpus: `docs/M3_GATE_EVIDENCE.md`.
+- A frequency-7 replacement that reuses its original's CLM01 is skipped by
+  the claim loader as a resend. That is left to M4 (see the evidence file).
+
+## Rollback
+
+Stop calling `advance_all`. The claims it moved keep their recorded history.
+To roll back the schema, run `alembic downgrade 0014` once no `Replaced`
+claims or step reviews remain.

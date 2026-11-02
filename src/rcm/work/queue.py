@@ -42,7 +42,7 @@ from rcm.platform.errors import (
     WorkItemLockedError,
 )
 from rcm.platform.logging import get_logger
-from rcm.work.models import WorkItem, WorkItemKind
+from rcm.work.models import ExceptionCategory, WorkItem, WorkItemKind
 from rcm.work.state import (
     WorkItemOutcome,
     WorkItemState,
@@ -83,13 +83,16 @@ def create(
     *,
     client_id: uuid.UUID,
     kind: WorkItemKind,
+    category: ExceptionCategory,
     title: str,
     owner_role: str,
+    sla_due_at: datetime,
+    now: datetime,
     claim_id: uuid.UUID | None = None,
     detail: str = "",
     priority_score: int = 0,
     deadline_pinned: bool = False,
-    sla_due_at: datetime | None = None,
+    source_key: str | None = None,
 ) -> WorkItem:
     """Raise a work item, queued and ready to be claimed.
 
@@ -102,6 +105,8 @@ def create(
         client_id=client_id,
         claim_id=claim_id,
         kind=str(kind),
+        category=str(category),
+        source_key=source_key,
         state=str(WorkItemState.QUEUED),
         title=title,
         detail=detail,
@@ -109,6 +114,9 @@ def create(
         deadline_pinned=deadline_pinned,
         owner_role=owner_role,
         sla_due_at=sla_due_at,
+        # The caller's clock, so SLA ages and BR-EXC-04's windows are
+        # computed against the same time the item was raised at.
+        created_at=now,
     )
     session.add(item)
     session.flush()
@@ -458,6 +466,45 @@ def resolve(
     )
     session.flush()
     log.info("work_item.resolved", outcome=str(outcome))
+
+
+def reopen(
+    session: Session,
+    *,
+    work_item_id: uuid.UUID,
+    client_id: uuid.UUID,
+    operator: str,
+    now: datetime,
+    reason: str,
+) -> WorkItem:
+    """Resolved -> Reopened -> Queued: the outcome was reversed.
+
+    `Resolved` is not final (FR-WORK-04's outcomes are reversible). The old
+    outcome is cleared because an open item has none (the outcome CHECK),
+    and kept in the audit record so the reversal is explainable.
+    """
+    del now
+    item = _locked(session, work_item_id=work_item_id, client_id=client_id)
+    previous = item.outcome
+    check(WorkItemState(item.state), WorkItemState.REOPENED)
+    check(WorkItemState.REOPENED, WorkItemState.QUEUED)
+    item.state = str(WorkItemState.QUEUED)
+    item.outcome = None
+    item.resolved_at = None
+
+    record_audit_event(
+        session,
+        actor_type=ActorType.USER,
+        actor_id=operator,
+        action="work_item.reopened",
+        entity_type="work_item",
+        entity_id=work_item_id,
+        before_state={"state": str(WorkItemState.RESOLVED), "outcome": previous},
+        after_state={"state": str(WorkItemState.QUEUED), "reason": reason},
+    )
+    session.flush()
+    log.info("work_item.reopened", work_item_id=str(work_item_id))
+    return item
 
 
 def auto_resolve(

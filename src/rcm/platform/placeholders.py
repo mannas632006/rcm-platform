@@ -106,4 +106,87 @@ REGISTRY: Final[dict[str, Placeholder]] = {
         provisional=3,
         source="DOC-02 Appendix A",
     ),
+    "bulk_handling_threshold": Placeholder(
+        tbd_id="TBD-46",
+        description="Expected recovery below which a work item is routed to bulk "
+        "handling rather than individual work (BR-M10-06, M3.6).",
+        owner="Muhammad Anas",
+        provisional="25.00",
+        source="DOC-02 Appendix A",
+    ),
+    "clearinghouse_breaker_failures": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Consecutive clearinghouse failures that open its circuit breaker "
+        "and fail over to the secondary (IR-09, M3.7).",
+        owner="Eng 1",
+        provisional=5,
+        source="none -- raised at M3.7",
+    ),
+    "clearinghouse_breaker_open_seconds": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Seconds a tripped breaker stays open before one probe is allowed.",
+        owner="Eng 1",
+        provisional=60,
+        source="none -- raised at M3.7",
+    ),
+    "outbox_retry_seconds": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Seconds before an unsent submission is retried when no "
+        "clearinghouse was available (IR-06).",
+        owner="Eng 1",
+        provisional=300,
+        source="none -- raised at M3.7",
+    ),
+    "outbox_max_attempts": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Failed delivery attempts after which an unsent submission stops "
+        "retrying and goes to a person (M3.7).",
+        owner="Eng 1",
+        provisional=12,
+        source="none -- raised at M3.7",
+    ),
+    "next_action_days": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Days until a claim's next action, by state (BR-STATE-04, BR-M10-01; "
+        "BR-M10-04 wants payer-specific cadence later). Pre-submission states 1, "
+        "Submitted 2, InAdjudication 30, Paid/PartiallyPaid/Denied 7.",
+        owner="Ops",
+        provisional="see description",
+        source="none -- raised at GATE M3",
+    ),
+    "submission_ack_followup_days": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Days after submission before a claim with no 999/277CA "
+        "acknowledgement needs a person (BR-STATE-04).",
+        owner="Ops",
+        provisional=2,
+        source="none -- raised at M3.7",
+    ),
+    # No register declares these. They were raised at M3.5, where BR-EXC-02
+    # and BR-EXC-04 need numbers the specifications never give.
+    "exception_sla_hours": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Hours until an exception breaches its SLA, per category "
+        "(BR-EXC-02). Compliance 4, deadline risk 24, external system 8, data "
+        "quality 72, rule conflict 120, model low confidence 48, operational 72.",
+        owner="Muhammad Anas",
+        provisional="see description",
+        source="none -- raised at M3.5",
+    ),
+    "exception_trend_ratio": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Exception volume in the latest window this many times the "
+        "previous window is a rising trend (BR-EXC-04).",
+        owner="Muhammad Anas",
+        provisional=1.5,
+        source="none -- raised at M3.5",
+    ),
+    "exception_trend_min_count": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Minimum exceptions in the latest window before a trend can "
+        "be called rising, so three-versus-one is not an alarm (BR-EXC-04).",
+        owner="Muhammad Anas",
+        provisional=10,
+        source="none -- raised at M3.5",
+    ),
 }

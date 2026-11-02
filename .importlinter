@@ -17,6 +17,7 @@ name = Module layers
 type = layers
 layers =
     rcm.api | rcm.workers
+    rcm.submission
     rcm.work
     rcm.decision
     rcm.analytics

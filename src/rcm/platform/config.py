@@ -12,6 +12,7 @@ CLAUDE.md section 12.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
@@ -90,6 +91,46 @@ class Settings(BaseSettings):
     outcome_maturity_days: int = Field(default=180)
     timely_filing_escalation_days: int = Field(default=14)
     preventable_denial_defect_threshold: int = Field(default=3)
+    # M3.5. No specification gives exception SLAs or a trend threshold;
+    # these are labelled placeholders, keyed by ExceptionCategory.
+    exception_sla_hours: dict[str, int] = Field(
+        default_factory=lambda: {
+            "COMPLIANCE": 4,
+            "DEADLINE_RISK": 24,
+            "EXTERNAL_SYSTEM": 8,
+            "DATA_QUALITY": 72,
+            "RULE_CONFLICT": 120,
+            "MODEL_LOW_CONFIDENCE": 48,
+            "OPERATIONAL": 72,
+        }
+    )
+    exception_trend_ratio: float = Field(default=1.5)
+    exception_trend_min_count: int = Field(default=10)
+    bulk_handling_threshold: Decimal = Field(default=Decimal("25.00"))
+    # M3.7. Clearinghouse resilience; no specification gives these numbers.
+    clearinghouse_breaker_failures: int = Field(default=5)
+    clearinghouse_breaker_open_seconds: int = Field(default=60)
+    outbox_retry_seconds: int = Field(default=300)
+    outbox_max_attempts: int = Field(default=12)
+    submission_ack_followup_days: int = Field(default=2)
+    # ADR-0006. Days until the next action, by claim state; "*" for any
+    # state not listed. BR-STATE-04 needs a date; no specification gives one.
+    next_action_days: dict[str, int] = Field(
+        default_factory=lambda: {
+            "*": 1,
+            "Submitted": 2,
+            "Rejected": 2,
+            "InAdjudication": 30,
+            "Paid": 7,
+            "PartiallyPaid": 7,
+            "Denied": 7,
+            "Correcting": 3,
+            "Appealing": 30,
+            "SecondaryBilling": 3,
+            "PatientBalance": 30,
+            "Reopened": 2,
+        }
+    )
 
     def validate_for_environment(self) -> None:
         """Refuse configurations that are unsafe for the environment they name.
