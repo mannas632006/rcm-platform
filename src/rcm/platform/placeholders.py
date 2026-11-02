@@ -145,6 +145,15 @@ REGISTRY: Final[dict[str, Placeholder]] = {
         provisional=12,
         source="none -- raised at M3.7",
     ),
+    "next_action_days": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Days until a claim's next action, by state (BR-STATE-04, BR-M10-01; "
+        "BR-M10-04 wants payer-specific cadence later). Pre-submission states 1, "
+        "Submitted 2, InAdjudication 30, Paid/PartiallyPaid/Denied 7.",
+        owner="Ops",
+        provisional="see description",
+        source="none -- raised at GATE M3",
+    ),
     "submission_ack_followup_days": Placeholder(
         tbd_id="UNREGISTERED",
         description="Days after submission before a claim with no 999/277CA "

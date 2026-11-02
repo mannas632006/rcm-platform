@@ -51,7 +51,7 @@ from rcm.domain.claim_state import (
     is_final,
     requires_next_action,
 )
-from rcm.domain.claim_state_log import ClaimStateTransition
+from rcm.domain.claim_state_log import ClaimStateTransition, ReviewStatus
 from rcm.platform.audit import ActorType, record_audit_event
 from rcm.platform.errors import ResourceNotFoundError, StateTransitionError
 from rcm.platform.logging import get_logger
@@ -97,8 +97,12 @@ def transition(
     facts: dict[str, bool] | None = None,
     next_action_due: date | None = None,
     note: str = "",
+    needs_review: bool = False,
 ) -> TransitionResult:
     """Move one claim to `target`, or refuse and explain why.
+
+    `needs_review` marks an automatic step for the submitter's approval
+    (ADR-0006).
 
     The whole operation happens in the caller's transaction: lock, validate,
     apply, record, audit. A caller that commits gets all of it; a caller
@@ -157,6 +161,7 @@ def transition(
         actor_id=actor_id,
         guard=str(defined.guard) if defined.guard else "",
         next_action_due=resolved_due,
+        review_status=str(ReviewStatus.PENDING if needs_review else ReviewStatus.NOT_REQUIRED),
     )
     session.add(record)
 
@@ -209,7 +214,7 @@ def history(
                 ClaimStateTransition.claim_id == claim_id,
                 ClaimStateTransition.client_id == client_id,
             )
-            .order_by(ClaimStateTransition.occurred_at, ClaimStateTransition.transition_id)
+            .order_by(ClaimStateTransition.occurred_at, ClaimStateTransition.sequence)
         ).all()
     )
 

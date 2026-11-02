@@ -232,7 +232,7 @@ class Claim(Base):
             "'ServiceRendered','Coded','Charged','Scrubbing','ScrubFailed','ReadyToSubmit',"
             "'Submitted','Rejected','InAdjudication','Paid','PartiallyPaid','Denied',"
             "'Appealing','Correcting','WrittenOff','SecondaryBilling','PatientBalance',"
-            "'Closed','Reopened','Cancelled')",
+            "'Closed','Reopened','Cancelled','Replaced')",
             name="state_is_known",
         ),
     )

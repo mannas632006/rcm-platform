@@ -55,6 +55,7 @@ P_RECOVERY: Final[dict[str, float]] = {
     "COMPLIANCE_CONCERN": 0.50,
     "DEADLINE_RISK": 0.50,
     "MISSING_FILING_DEADLINE": 0.50,
+    "CLAIM_STEP_REVIEW": 0.50,
 }
 
 #: Estimated hours of human effort per kind. A rejection is a field fixed and
@@ -74,6 +75,7 @@ EFFORT_HOURS: Final[dict[str, float]] = {
     "COMPLIANCE_CONCERN": 1.0,
     "DEADLINE_RISK": 0.5,
     "MISSING_FILING_DEADLINE": 0.25,
+    "CLAIM_STEP_REVIEW": 0.1,
 }
 
 #: Recovery odds halve every this many days an item has waited.

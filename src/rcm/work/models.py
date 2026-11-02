@@ -78,6 +78,8 @@ class WorkItemKind(StrEnum):
     #: A payer with no recorded timely-filing term. Asks the user for it;
     #: until it is given the claim is urgent (owner decision, 2026-11-01).
     MISSING_FILING_DEADLINE = "MISSING_FILING_DEADLINE"
+    #: ADR-0006: automatic steps on a claim waiting for the submitter.
+    CLAIM_STEP_REVIEW = "CLAIM_STEP_REVIEW"
 
 
 class ExceptionCategory(StrEnum):

@@ -113,6 +113,24 @@ class Settings(BaseSettings):
     outbox_retry_seconds: int = Field(default=300)
     outbox_max_attempts: int = Field(default=12)
     submission_ack_followup_days: int = Field(default=2)
+    # ADR-0006. Days until the next action, by claim state; "*" for any
+    # state not listed. BR-STATE-04 needs a date; no specification gives one.
+    next_action_days: dict[str, int] = Field(
+        default_factory=lambda: {
+            "*": 1,
+            "Submitted": 2,
+            "Rejected": 2,
+            "InAdjudication": 30,
+            "Paid": 7,
+            "PartiallyPaid": 7,
+            "Denied": 7,
+            "Correcting": 3,
+            "Appealing": 30,
+            "SecondaryBilling": 3,
+            "PatientBalance": 30,
+            "Reopened": 2,
+        }
+    )
 
     def validate_for_environment(self) -> None:
         """Refuse configurations that are unsafe for the environment they name.

@@ -109,6 +109,7 @@ ROUTES: Final[dict[WorkItemKind, Route]] = {
         ExceptionCategory.OPERATIONAL, "eligibility_specialist"
     ),
     WorkItemKind.AUTH_PROBLEM: Route(ExceptionCategory.OPERATIONAL, "auth_specialist"),
+    WorkItemKind.CLAIM_STEP_REVIEW: Route(ExceptionCategory.OPERATIONAL, "claim_submitter"),
 }
 
 #: What the user is told when a payer's filing deadline is unknown. Owner
