@@ -24,7 +24,11 @@ from rcm.domain.claim_state import ClaimState, Guard
 from rcm.ingestion.claim_loader import load_claim_file
 from rcm.platform.audit import ActorType
 from rcm.platform.db import reset_engines, session_scope
-from rcm.platform.errors import ComplianceError, StateTransitionError
+from rcm.platform.errors import (
+    ComplianceError,
+    ExternalSystemUnavailableError,
+    StateTransitionError,
+)
 from rcm.submission import outbox
 from rcm.submission.adapters import MockAdapter
 from rcm.submission.models import OutboxStatus, SubmissionOutbox
@@ -456,6 +460,29 @@ def test_retries_stop_after_the_maximum(
     (row,) = rows()
     assert row.status == str(OutboxStatus.NEEDS_REVIEW)
     assert row.attempts == 2
+
+
+def test_an_outage_with_every_circuit_open_does_not_count_an_attempt(
+    ready_claim: uuid.UUID,
+) -> None:
+    """No clearinghouse was called, so nothing was tried. Counting it would
+    send a never-tried claim to a person as "failed after repeated
+    attempts"."""
+    primary = MockAdapter("p", failing=True)
+    secondary = MockAdapter("s", failing=True)
+    r = router(primary, secondary)
+    for _ in range(2):  # trips both breakers (failure_threshold=2)
+        with pytest.raises(ExternalSystemUnavailableError):
+            r.submit_837(b"x", idempotency_key="trip", now=NOW)
+    called = primary.attempts + secondary.attempts
+
+    enqueue(ready_claim)
+    report = dispatch(r)
+    assert report.outage is True
+    assert primary.attempts + secondary.attempts == called
+    (row,) = rows()
+    assert row.attempts == 0
+    assert row.status == str(OutboxStatus.PENDING)
 
 
 def test_rows_not_tried_in_an_outage_keep_their_attempt_count(

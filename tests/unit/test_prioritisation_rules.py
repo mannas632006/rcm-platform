@@ -126,6 +126,19 @@ def test_small_balances_go_to_bulk_handling() -> None:
     assert result.bulk is True
 
 
+@pytest.mark.parametrize("kind", ["CLAIM_STEP_REVIEW", "DATA_QUALITY"])
+def test_review_work_is_never_bulk_however_small_the_balance(kind: str) -> None:
+    """ADR-0006: every automatic step is visible to the submitter, and a held
+    claim is in front of a person (PD-18). A paid claim's balance is 0, so
+    money alone would hide both in bulk handling."""
+    result = prioritise(
+        inputs(kind=kind, balance=Decimal("0.00")),
+        escalation_days=ESCALATION_DAYS,
+        bulk_threshold=BULK,
+    )
+    assert result.bulk is False
+
+
 def test_a_pinned_item_is_never_bulk() -> None:
     result = prioritise(
         inputs(balance=Decimal("1.00"), days_to_deadline=1),

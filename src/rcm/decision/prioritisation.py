@@ -35,7 +35,7 @@ from rcm.platform.errors import ValidationFailedError
 
 #: Bump on any change to the constants or the arithmetic below. Recorded on
 #: every decision so a past ranking can be reproduced exactly.
-LOGIC_VERSION: Final = "prioritisation-heuristic-v1"
+LOGIC_VERSION: Final = "prioritisation-heuristic-v2"
 
 #: P(recovery) by work kind. Heuristic priors until M6 learns them from
 #: CORE outcomes. Keyed by kind name: `rcm.decision` sits below `rcm.work`
@@ -90,6 +90,12 @@ HALF_SCALE_VALUE: Final = 200.0
 #: queue "overrides all"). Pinned whatever else is known, so re-scoring one
 #: -- including the question asking for a missing deadline -- cannot sink it.
 PINNED_KINDS: Final[frozenset[str]] = frozenset({"DEADLINE_RISK", "MISSING_FILING_DEADLINE"})
+
+#: Kinds a person must see whatever the money. A step review is how the
+#: submitter sees each automatic step (ADR-0006), and a data-quality item is a
+#: claim held instead of guessed (PD-18). A paid claim's balance is 0, so
+#: bulk routing on value alone would hide exactly those.
+NEVER_BULK_KINDS: Final[frozenset[str]] = frozenset({"CLAIM_STEP_REVIEW", "DATA_QUALITY"})
 
 _PINNED_SCORE: Final = 100
 _TOP_SCORE: Final = 99
@@ -152,7 +158,7 @@ def prioritise(
 
     score, components = _score(inputs)
     expected = Decimal(components["expected_value"])
-    bulk = inputs.has_claim and expected < bulk_threshold
+    bulk = inputs.has_claim and expected < bulk_threshold and inputs.kind not in NEVER_BULK_KINDS
     reason = (
         f"expected recovery {components['expected_value']} over "
         f"{components['effort_hours']}h of work"

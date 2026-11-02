@@ -60,10 +60,12 @@ class ClearinghouseRouter:
     def submit_837(
         self, payload: bytes, *, idempotency_key: str, now: datetime
     ) -> SubmissionReceipt:
+        attempted = False
         for adapter, breaker in self._routes:
             if not breaker.allows(now):
                 log.warning("clearinghouse.circuit_open", adapter=adapter.name)
                 continue
+            attempted = True
             try:
                 receipt = adapter.submit_837(payload, idempotency_key=idempotency_key)
             except ExternalSystemRejectedError:
@@ -93,4 +95,6 @@ class ClearinghouseRouter:
                 ) from err
             breaker.record_success()
             return receipt
-        raise ExternalSystemUnavailableError(operation="submit_837")
+        # `attempted` False: every circuit was open and nothing was sent, so
+        # the caller must not count this as a try.
+        raise ExternalSystemUnavailableError(operation="submit_837", attempted=attempted)

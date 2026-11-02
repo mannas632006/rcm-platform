@@ -32,7 +32,7 @@ dealt with it (PD-18).
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Final
@@ -159,6 +159,24 @@ PATIENT_SHARE_ONLY: Final = Problem(
 )
 VOIDED: Final = Problem(
     "void-received", "A void was sent for this claim; a person handles voids until M4"
+)
+VOID_SUBMISSION: Final = Problem(
+    "void-submission", "This submission is a void; a person handles voids until M4"
+)
+REJECTED_AFTER_ACCEPTANCE: Final = Problem(
+    "rejected-after-acceptance",
+    "A 277CA rejected a claim the payer had already accepted",
+)
+
+#: States a claim reaches only once the payer has accepted it. A later 277CA
+#: rejection contradicts every one of them.
+_ACCEPTED: Final[frozenset[ClaimState]] = frozenset(
+    {
+        ClaimState.IN_ADJUDICATION,
+        ClaimState.PAID,
+        ClaimState.PARTIALLY_PAID,
+        ClaimState.DENIED,
+    }
 )
 
 
@@ -315,15 +333,23 @@ def _plan(
         steps.extend((s, "inferred from the 837 on file, not observed") for s in path[start:])
         state = ClaimState.SUBMITTED
 
-    if (
-        evidence.acknowledgement is AcknowledgementOutcome.REJECTED
-        and evidence.adjudicated
-        and not evidence.replaced
-        and state in (ClaimState.SUBMITTED, ClaimState.REJECTED, ClaimState.IN_ADJUDICATION)
-    ):
-        # The 277CA said rejected and an 835 says adjudicated. One of them is
-        # wrong; guessing which would be a silent decision (PD-18).
-        return steps, [REJECTED_BUT_ADJUDICATED]
+    if claim.claim_frequency_code == _VOID:
+        # Sent, so walked to Submitted, and no further: a void is not a claim
+        # to adjudicate, and an 835 on its CLM01 must not make it Paid.
+        return steps, [VOID_SUBMISSION]
+
+    if evidence.acknowledgement is AcknowledgementOutcome.REJECTED:
+        if evidence.adjudicated and state in (
+            ClaimState.SUBMITTED,
+            ClaimState.REJECTED,
+            ClaimState.IN_ADJUDICATION,
+        ):
+            # The 277CA said rejected and an 835 says adjudicated. One of
+            # them is wrong; guessing which would be a silent decision
+            # (PD-18). A replacement does not settle it either.
+            return steps, [REJECTED_BUT_ADJUDICATED]
+        if state in _ACCEPTED:
+            return steps, [REJECTED_AFTER_ACCEPTANCE]
 
     if state is ClaimState.REJECTED and evidence.acknowledgement is AcknowledgementOutcome.ACCEPTED:
         # No automatic way back from Rejected: a person resent it, and a
@@ -424,12 +450,37 @@ def _lock_claim(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) 
     return claim
 
 
-def advance_claim(session: Session, *, claim: Claim, now: datetime) -> tuple[int, int]:
-    """Take every step the evidence supports for one claim.
+@dataclass(frozen=True, slots=True)
+class Advanced:
+    steps: int = 0
+    problems: int = 0
+    #: A step was sent back and nobody has dealt with it: left alone.
+    held: bool = False
 
-    Returns the steps taken and the problems raised.
-    """
+
+def _problem_open(session: Session, claim: Claim, problem: Problem) -> bool:
+    return (
+        session.scalar(
+            select(WorkItem.work_item_id)
+            .where(
+                WorkItem.client_id == claim.client_id,
+                WorkItem.kind == str(WorkItemKind.DATA_QUALITY),
+                WorkItem.source_key == f"{problem.key}:{claim.claim_id}",
+                WorkItem.state.in_([str(s) for s in OPEN_STATES]),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def advance_claim(session: Session, *, claim: Claim, now: datetime) -> Advanced:
+    """Take every step the evidence supports for one claim."""
     claim = _lock_claim(session, claim_id=claim.claim_id, client_id=claim.client_id)
+    # Under the lock: a send-back that landed after the claim was listed
+    # must still stop it (PD-18).
+    if _held_by_a_person(session, claim):
+        return Advanced(held=True)
     state = ClaimState(claim.state)
     evidence = _evidence(session, claim)
     steps, problems = _plan(claim, state, evidence)
@@ -477,6 +528,19 @@ def advance_claim(session: Session, *, claim: Claim, now: datetime) -> tuple[int
         state = target
 
     for problem in problems:
+        if not _problem_open(session, claim, problem):
+            # A hold is a decision like a step (PD-1). Recorded when the item
+            # is raised, not again on every run that finds it still open.
+            record_decision(
+                session,
+                entity_type="claim",
+                entity_id=claim.claim_id,
+                decision_type=DecisionType.PROGRESS,
+                decided_by=ACTOR,
+                logic_version=LOGIC_VERSION,
+                input_snapshot={"from_state": str(state), **evidence.snapshot()},
+                output={"held": problem.key, "state": str(state)},
+            )
         exceptions.raise_exception(
             session,
             client_id=claim.client_id,
@@ -490,7 +554,7 @@ def advance_claim(session: Session, *, claim: Claim, now: datetime) -> tuple[int
 
     if steps:
         _open_review(session, claim, now)
-    return len(steps), len(problems)
+    return Advanced(steps=len(steps), problems=len(problems))
 
 
 def advance_all(session: Session, *, client_id: uuid.UUID, now: datetime) -> ProgressionReport:
@@ -519,13 +583,12 @@ def advance_all(session: Session, *, client_id: uuid.UUID, now: datetime) -> Pro
     ).all()
     for claim in claims:
         report.claims_seen += 1
-        if _held_by_a_person(session, claim):
+        outcome = advance_claim(session, claim=claim, now=now)
+        if outcome.held:
             report.held.append(claim.claim_id)
-            continue
-        taken, raised = advance_claim(session, claim=claim, now=now)
-        report.transitions += taken
-        report.problems_raised += raised
-        if taken:
+        report.transitions += outcome.steps
+        report.problems_raised += outcome.problems
+        if outcome.steps:
             report.reviews_opened += 1
 
     log.info(
@@ -538,7 +601,7 @@ def advance_all(session: Session, *, client_id: uuid.UUID, now: datetime) -> Pro
     return report
 
 
-def _pending_steps(
+def _steps_of(
     session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID
 ) -> list[ClaimStateTransition]:
     return list(
@@ -547,7 +610,6 @@ def _pending_steps(
             .where(
                 ClaimStateTransition.client_id == client_id,
                 ClaimStateTransition.claim_id == claim_id,
-                ClaimStateTransition.review_status == str(ReviewStatus.PENDING),
             )
             .with_for_update()
         ).all()
@@ -559,16 +621,25 @@ def approve_steps(
     *,
     claim_id: uuid.UUID,
     client_id: uuid.UUID,
+    step_ids: Collection[uuid.UUID],
     operator: str,
     now: datetime,
 ) -> int:
-    """The submitter approves every step waiting on this claim.
+    """The submitter approves the steps they were shown.
 
-    Returns how many were approved. A retry finds none and changes nothing
-    (PD-14). Steps taken after this call wait for their own approval.
+    Only `step_ids`: a step taken while the review was open was never seen,
+    so it is not approved under their name, and the review stays open for
+    it. Returns how many were approved. A retry finds them approved already
+    and changes nothing (PD-14).
     """
+    if not step_ids:
+        raise ValidationFailedError(field="step_ids", reason="name the steps being approved")
     _lock_claim(session, claim_id=claim_id, client_id=client_id)
-    steps = _pending_steps(session, claim_id=claim_id, client_id=client_id)
+    on_claim = _steps_of(session, claim_id=claim_id, client_id=client_id)
+    if not set(step_ids) <= {s.transition_id for s in on_claim}:
+        raise ValidationFailedError(field="step_ids", reason="a step named is not on this claim")
+    pending = [s for s in on_claim if s.review_status == str(ReviewStatus.PENDING)]
+    steps = [s for s in pending if s.transition_id in step_ids]
     for step in steps:
         step.review_status = str(ReviewStatus.APPROVED)
         step.reviewed_by = operator
@@ -592,7 +663,7 @@ def approve_steps(
             WorkItem.state.in_([str(s) for s in OPEN_STATES]),
         )
     )
-    if review is not None:
+    if review is not None and len(steps) == len(pending):
         # Approving is working the item: take it, open it, record the outcome.
         # Held by someone else, `claim` refuses by name rather than taking it.
         item_id = review.work_item_id

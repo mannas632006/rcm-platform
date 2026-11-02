@@ -34,8 +34,10 @@ where it is, with its next action date (PD-18):
 
 | Evidence | Problem |
 |---|---|
-| 277CA rejected, and an 835 exists | `rejected-but-adjudicated` |
+| 277CA rejected, and an 835 exists (a replacement does not settle it) | `rejected-but-adjudicated` |
 | A `Rejected` claim whose latest 277CA accepts | `accepted-after-rejection` |
+| A claim the payer accepted (`InAdjudication` or an outcome) whose latest 277CA rejects | `rejected-after-acceptance` |
+| The submission is itself a void (frequency 8): walked to `Submitted`, no further | `void-submission` |
 | Two or more live 835 postings (split claim, secondary payer) | `several-835-postings` |
 | An 835 with no service lines | `835-without-service-lines` |
 | A line paid nothing whose only reasons are patient responsibility (PR) | `835-patient-share-only-line` |
@@ -61,7 +63,8 @@ row lock, the audit event and the next-action rule all still apply.
 
 When the evidence contradicts itself (a 277CA rejection followed by an
 835), no claim is moved. A `DATA_QUALITY` exception is raised instead
-(PD-18).
+(PD-18). Each hold also writes a `decision_record` (output `held`) when its
+item is raised, and not again on later runs that find it still open (PD-1).
 
 A compliance suspension of `CLAIM_PROGRESSION` stops the whole run
 (BR-EXC-03).
@@ -98,10 +101,16 @@ person until M4 handles voids and the recoupments that follow them.
   step to say why.
 - Each claim with pending steps has one `CLAIM_STEP_REVIEW` work item, routed
   to `claim_submitter`.
-- `approve_steps` approves every pending step and resolves the item. Steps
-  taken later raise a new item.
+- `approve_steps` approves the steps the submitter names: the ones they were
+  shown. A step taken while the review was open stays pending and keeps the
+  item open. The item resolves once nothing is pending.
 - `send_back_step` marks one step and raises a `DATA_QUALITY` exception.
-  Progression skips that claim until the exception is closed (PD-18).
+  Progression skips that claim until the exception is closed (PD-18). The
+  check runs under the claim lock, so a send-back that lands mid-run still
+  stops it.
+- Step-review and data-quality items are never routed to bulk handling,
+  whatever the balance (`prioritisation-heuristic-v2`). A paid claim's
+  balance is 0, and bulk routing would hide its review.
 
 Review does not hold the claim back while it waits: the claim keeps moving,
 and review is how the submitter sees and disputes each step. That is the

@@ -228,6 +228,10 @@ def test_a_void_is_held_for_a_person_not_called_a_replacement(root: Path) -> Non
     advance()
     assert state_of("CLM-VO") is ClaimState.PAID
     assert problems_on("CLM-VO") == ["void-received"]
+    # The void itself is no claim to adjudicate: it must not reach Paid or
+    # Denied and land in payment or denial work.
+    assert state_of("CLM-VO8") is ClaimState.SUBMITTED
+    assert problems_on("CLM-VO8") == ["void-submission"]
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +249,59 @@ def test_a_rejection_then_an_835_is_held_even_before_the_claim_moved(root: Path)
     advance()
     assert state_of("CLM-RX") is ClaimState.SUBMITTED
     assert problems_on("CLM-RX") == ["rejected-but-adjudicated"]
+
+
+@pytest.mark.invariant
+def test_a_rejection_and_an_835_are_held_even_when_a_replacement_exists(root: Path) -> None:
+    """A replacement the payer took does not settle which of the original's
+    own files is wrong. The original must not be walked through
+    adjudication on a note saying no 277CA verdict came."""
+    submit("CLM-RR", root, control="0001")
+    acknowledge(ack_277ca(("CLM-RR", "A3:21")), root, name="277ca.edi")
+    remit(payment_for("CLM-RR", control="0001"), root, name="835.edi")
+    resubmit("CLM-RR2", "CLM-RR", root, frequency="7")
+    acknowledge(ack_277ca(("CLM-RR2", "A2:20"), control="0002"), root, name="277ca-2.edi")
+    advance()
+    assert state_of("CLM-RR2") is ClaimState.IN_ADJUDICATION
+    assert state_of("CLM-RR") is ClaimState.SUBMITTED
+    assert "InAdjudication" not in targets_of("CLM-RR")
+    assert problems_on("CLM-RR") == ["rejected-but-adjudicated"]
+
+
+def test_a_rejection_after_an_acceptance_goes_to_a_person(root: Path) -> None:
+    """The latest 277CA contradicts the state the claim is in. Leaving it in
+    adjudication for 30 days says nothing is wrong."""
+    submit("CLM-AR", root, control="0001")
+    acknowledge(ack_277ca(("CLM-AR", "A2:20")), root, name="277ca.edi")
+    advance()
+    assert state_of("CLM-AR") is ClaimState.IN_ADJUDICATION
+    acknowledge(ack_277ca(("CLM-AR", "A3:21"), control="0002"), root, name="277ca-2.edi")
+    advance()
+    assert state_of("CLM-AR") is ClaimState.IN_ADJUDICATION
+    assert problems_on("CLM-AR") == ["rejected-after-acceptance"]
+
+
+def test_a_hold_is_a_recorded_decision_written_once(root: Path) -> None:
+    """PD-1: why a claim waits is a decision like any step, with its version
+    and evidence. Run again, the same hold is not recorded again."""
+    from rcm.platform.audit import DecisionRecord
+
+    submit("CLM-HD", root, control="0001")
+    acknowledge(ack_277ca(("CLM-HD", "A2:20")), root, name="277ca.edi")
+    remit(payment_for("CLM-HD", control="0001"), root, name="835-a.edi")
+    remit(denial_for("CLM-HD", control="0002"), root, name="835-b.edi")
+    advance()
+    advance()
+    with session_scope() as session:
+        holds = session.scalars(
+            select(DecisionRecord).where(
+                DecisionRecord.entity_id == claim_named("CLM-HD"),
+                DecisionRecord.output["held"].astext == "several-835-postings",
+            )
+        ).all()
+    assert len(holds) == 1
+    assert holds[0].logic_version == progression.LOGIC_VERSION
+    assert holds[0].input_snapshot["postings_835"] == 2
 
 
 def test_an_acceptance_after_a_rejection_goes_to_a_person(root: Path) -> None:
@@ -407,14 +464,30 @@ def test_every_system_step_waits_for_the_submitter_to_approve(root: Path) -> Non
         assert items[0].owner_role == "claim_submitter"
 
 
+def step_ids(submitter_id: str) -> list[uuid.UUID]:
+    """The steps the submitter has in front of them."""
+    with session_scope() as session:
+        rows = history(session, claim_id=claim_named(submitter_id), client_id=CLIENT_A)
+        return [r.transition_id for r in rows]
+
+
+def approve(submitter_id: str, steps: list[uuid.UUID], operator: str = "submitter-1") -> int:
+    with session_scope() as session:
+        return progression.approve_steps(
+            session,
+            claim_id=claim_named(submitter_id),
+            client_id=CLIENT_A,
+            step_ids=steps,
+            operator=operator,
+            now=NOW,
+        )
+
+
 def test_approving_marks_every_step_and_closes_the_review(root: Path) -> None:
     submit("CLM-OK", root, control="0001")
     advance()
     claim_id = claim_named("CLM-OK")
-    with session_scope() as session:
-        progression.approve_steps(
-            session, claim_id=claim_id, client_id=CLIENT_A, operator="submitter-1", now=NOW
-        )
+    approve("CLM-OK", step_ids("CLM-OK"))
     with session_scope() as session:
         rows = history(session, claim_id=claim_id, client_id=CLIENT_A)
         assert all(r.review_status == str(ReviewStatus.APPROVED) for r in rows)
@@ -457,10 +530,7 @@ def test_new_steps_after_approval_ask_again(root: Path) -> None:
     submit("CLM-AGAIN", root, control="0001")
     advance()
     claim_id = claim_named("CLM-AGAIN")
-    with session_scope() as session:
-        progression.approve_steps(
-            session, claim_id=claim_id, client_id=CLIENT_A, operator="s", now=NOW
-        )
+    approve("CLM-AGAIN", step_ids("CLM-AGAIN"), operator="s")
     acknowledge(ack_277ca(("CLM-AGAIN", "A2:20")), root, name="277ca.edi")
     advance()
     with session_scope() as session:
@@ -473,6 +543,63 @@ def test_new_steps_after_approval_ask_again(root: Path) -> None:
             )
         ).all()
         assert len(open_reviews) == 1
+
+
+@pytest.mark.invariant
+def test_approval_covers_only_the_steps_the_submitter_saw(root: Path) -> None:
+    """A step taken while the review was open was never seen, so it cannot
+    be approved under the submitter's name; the review stays open for it."""
+    submit("CLM-SEEN", root, control="0001")
+    advance()
+    seen = step_ids("CLM-SEEN")
+    acknowledge(ack_277ca(("CLM-SEEN", "A2:20")), root, name="277ca.edi")
+    advance()
+    assert approve("CLM-SEEN", seen) == len(seen)
+    with session_scope() as session:
+        rows = history(session, claim_id=claim_named("CLM-SEEN"), client_id=CLIENT_A)
+        assert rows[-1].target_state == "InAdjudication"
+        assert rows[-1].review_status == str(ReviewStatus.PENDING)
+        review = session.scalar(
+            select(WorkItem).where(WorkItem.kind == str(WorkItemKind.CLAIM_STEP_REVIEW))
+        )
+        assert review is not None
+        assert review.state != str(WorkItemState.RESOLVED)
+    # A retry of the same approval changes nothing (PD-14).
+    assert approve("CLM-SEEN", seen) == 0
+
+
+def test_a_step_of_another_claim_cannot_be_approved_here(root: Path) -> None:
+    from rcm.platform.errors import ValidationFailedError
+
+    submit("CLM-X1", root, control="0001")
+    submit("CLM-X2", root, control="0002")
+    advance()
+    with pytest.raises(ValidationFailedError):
+        approve("CLM-X1", step_ids("CLM-X2"))
+
+
+@pytest.mark.invariant
+def test_a_sent_back_claim_is_not_moved_whoever_calls(root: Path) -> None:
+    """PD-18: the check belongs under the claim lock. A send-back that lands
+    between listing claims and advancing one must still stop it."""
+    submit("CLM-SB", root, control="0001")
+    advance()
+    with session_scope() as session:
+        progression.send_back_step(
+            session,
+            transition_id=step_ids("CLM-SB")[0],
+            client_id=CLIENT_A,
+            operator="submitter-1",
+            reason="Eligibility was never checked",
+            now=NOW,
+        )
+    acknowledge(ack_277ca(("CLM-SB", "A2:20")), root, name="277ca.edi")
+    with session_scope() as session:
+        found = session.get(Claim, claim_named("CLM-SB"))
+        assert found is not None
+        outcome = progression.advance_claim(session, claim=found, now=NOW)
+    assert outcome.held is True
+    assert state_of("CLM-SB") is ClaimState.SUBMITTED
 
 
 def test_a_suspended_progression_path_does_not_move_claims(root: Path) -> None:

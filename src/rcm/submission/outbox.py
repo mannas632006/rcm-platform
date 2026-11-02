@@ -230,11 +230,14 @@ def dispatch(
             review += 1
         except ExternalSystemUnavailableError as err:
             outage = True
-            # This row was tried; the rest of the batch was not, so only its
-            # attempt count moves. All wait for the breakers to close.
-            row.attempts += 1
+            # Only a row a clearinghouse was actually called for counts a try;
+            # with every circuit open nothing was. The rest of the batch was
+            # not tried either. All wait for the breakers to close.
+            tried = err.context["attempted"] is True
+            if tried:
+                row.attempts += 1
             row.last_error = err.code
-            if row.attempts >= settings.outbox_max_attempts:
+            if tried and row.attempts >= settings.outbox_max_attempts:
                 row.status = str(OutboxStatus.NEEDS_REVIEW)
                 _raise_for_row(
                     session,
