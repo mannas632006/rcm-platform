@@ -23,7 +23,8 @@ items by kind, and claims that `claims_needing_action` reports with no next
 action date. It exits non-zero unless the second run took 0 steps and no
 claim is unscheduled.
 
-Run on 2026-11-02 against a clean database. Exit code 0.
+Run on 2026-11-02 against a clean database, after the review fixes in
+ADR-0006 (commit `c09ac01`). Exit code 0.
 
 ### Corpus loaded
 
@@ -35,35 +36,62 @@ Run on 2026-11-02 against a clean database. Exit code 0.
 | 835 | 1,451 |
 | **Total** | **12,173**, 1 quarantined (the deliberately unbalanced 835) |
 
-Claims in the database: **34,773**. Load time: 14m45s.
+Claims in the database: **34,773**. Load time: 13m53s.
 
 ### Progression
 
 | Measure | Value |
 |---|---|
 | Claims seen | 34,773 |
-| Steps, first run | 335,089 |
+| Steps, first run | 334,900 |
 | Steps, second run | **0** |
-| Steps on record | 335,089 (one per step, none duplicated) |
+| Steps on record | 334,900 (one per step, none duplicated) |
 | Held for a person | 0 |
+| Problems raised (`DATA_QUALITY`) | 135 |
 | Claims with no next action date | **0** |
-| Run time (both runs) | 75m16s |
+| Run time (both runs) | 65m20s (75m16s before the 0016 index) |
 
-On the second run, 34,000 claims were seen. The 773 `Replaced` claims are
-final, so it skips them.
+On the second run, 34,054 claims were seen. The 719 `Replaced` claims are
+final, so it skips them. It found 110 of the problems again and raised no new
+work item for them: the count stayed at 135.
 
 ### Where the claims ended
 
 | State | Claims | Kind | What brought it there |
 |---|---|---|---|
 | `Paid` | 25,983 | resting, 7-day follow-up | 835, no line denied |
-| `PartiallyPaid` | 3,843 | resting, 7 days | 835, some lines denied |
-| `Denied` | 1,738 | resting, 7 days | 835, every line denied |
-| `Rejected` | 1,324 | 2 days | 277CA rejection (PD-4: not a denial) |
-| `Replaced` | 773 | final | a later submission chains to it by REF*F8 |
-| `Submitted` | 664 | 2 days | 837 only, no payer reply yet |
-| `InAdjudication` | 448 | 30 days | 277CA accepted, no 835 yet |
+| `PartiallyPaid` | 3,769 | resting, 7 days | 835, some lines denied |
+| `Denied` | 1,752 | resting, 7 days | 835, every line denied |
+| `Rejected` | 1,327 | 2 days | 277CA rejection (PD-4: not a denial) |
+| `Replaced` | 719 | final | a later submission the payer took chains to it by REF*F8 |
+| `Submitted` | 665 | 2 days | 837 only, no payer reply yet |
+| `InAdjudication` | 558 | 30 days | 277CA accepted, no 835 yet, or held on a problem below |
 | **Total** | **34,773** | | |
+
+### Problems held for a person
+
+| Problem | Claims |
+|---|---|
+| `835-patient-share-only-line` | 135 |
+| every other problem in ADR-0006 | 0 |
+
+All 135 are lines paid nothing whose only reasons are patient
+responsibility (PR). Before the review they were counted as denials. Whether
+they are denials is M4.8's call, made in the analytics code and both dbt
+models together. Until then each claim waits in `InAdjudication` with its
+next action date.
+
+### Compared with the first run
+
+The review changed four rules, and the counts moved with them:
+
+- `Replaced` 773 → 719: an original is replaced only once the payer takes
+  the replacement. The other 54 stay live until it does.
+- `InAdjudication` 448 → 558, `PartiallyPaid` 3,843 → 3,769: the
+  patient-share-only claims above are held instead of decided.
+- `Denied` 1,738 → 1,752, `Rejected` 1,324 → 1,327, `Submitted` 664 → 665:
+  originals that are no longer `Replaced` rest where their own evidence
+  puts them.
 
 Every lifecycle stage named by the gate is reached: created (`Registered`),
 scrubbed (`Scrubbing` → `ReadyToSubmit`), submitted, acknowledged
@@ -75,7 +103,7 @@ scrubbed (`Scrubbing` → `ReadyToSubmit`), submitted, acknowledged
 Every claim that moved has one open `CLAIM_STEP_REVIEW` work item for the
 submitter, **34,773** in all. That is the owner's "done automatically but
 visible" (ADR-0006 Decision 3). Every step also wrote a `decision_record`
-(`PROGRESS`, `progression-v1`), 335,089 in all (PD-1).
+(`PROGRESS`, `progression-v1`), 334,900 in all (PD-1).
 
 ---
 
@@ -100,6 +128,12 @@ E       AssertionError: assert <ClaimState.SUBMITTED: 'Submitted'> is <ClaimStat
 CLM01 is skipped by the claim loader as a resend (`claim_loader.py`, the
 `_find_claim` check). Real practices do send these. Handling them needs a
 change to the claim key, so it belongs with M4.
+
+**Open, outside M3:** the synthetic generator writes CLP02 `2` ("processed
+as secondary") on primary claims that carry a patient share
+(`tools/synthetic/generate.py`). Progression does not read CLP02, so this
+does not touch the numbers above. It should be fixed before anything relies
+on CLP02.
 
 ---
 
