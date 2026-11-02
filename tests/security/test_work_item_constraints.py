@@ -10,12 +10,17 @@ identity the platform runs as.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Iterator
+from enum import StrEnum
 
 import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
+
+from rcm.work.models import AutomationPath, ExceptionCategory, WorkItemKind
+from rcm.work.state import WorkItemOutcome, WorkItemState
 
 pytestmark = pytest.mark.security
 
@@ -45,14 +50,17 @@ def _insert(conn: object, **overrides: object) -> None:
         "assigned_to": None,
         "lock_expires_at": None,
         "outcome": None,
+        "category": "OPERATIONAL",
+        "sla_due_at": "2026-06-04 12:00+00",
     }
     values.update(overrides)
     conn.execute(  # type: ignore[attr-defined]
         text(
             "INSERT INTO work_item (work_item_id, client_id, kind, state, title, "
-            "owner_role, priority_score, assigned_to, lock_expires_at, outcome) "
+            "owner_role, priority_score, assigned_to, lock_expires_at, outcome, "
+            "category, sla_due_at) "
             "VALUES (:id, :client, :kind, :state, :title, :owner_role, :score, "
-            ":assigned_to, :lock_expires_at, :outcome)"
+            ":assigned_to, :lock_expires_at, :outcome, :category, :sla_due_at)"
         ),
         values,
     )
@@ -197,3 +205,118 @@ def test_a_priority_outside_the_scale_is_refused(app_engine: Engine, score: int)
         app_engine.begin() as conn,
     ):
         _insert(conn, score=score)
+
+
+# ---------------------------------------------------------------------------
+# The lists in the database agree with the enums in the code
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("constraint", "enum"),
+    [
+        ("ck_work_item_work_item_state_is_known", WorkItemState),
+        ("ck_work_item_work_item_kind_is_known", WorkItemKind),
+        ("ck_work_item_work_item_outcome_is_known", WorkItemOutcome),
+        ("ck_work_item_work_item_category_is_known", ExceptionCategory),
+        ("ck_automation_suspension_suspension_path_is_known", AutomationPath),
+    ],
+)
+def test_the_migration_and_the_enums_agree(
+    owner_engine: Engine, constraint: str, enum: type[StrEnum]
+) -> None:
+    """Each list lives in a migration and in an enum, and a list in two
+    places drifts unless something compares them. Read from the live
+    constraint, so a database migrated before a value was added fails too."""
+    with owner_engine.begin() as conn:
+        definition = conn.execute(
+            text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = :name"),
+            {"name": constraint},
+        ).scalar_one()
+
+    in_database = set(re.findall(r"'([^']+)'", definition))
+    in_code = {str(value) for value in enum}
+    assert in_database == in_code, {
+        "only in the database": sorted(in_database - in_code),
+        "only in the code": sorted(in_code - in_database),
+    }
+
+
+def test_free_text_is_not_an_outcome(app_engine: Engine) -> None:
+    """FR-WORK-04: "fixed it" is not a value any query can group."""
+    with (
+        pytest.raises(IntegrityError, match="work_item_outcome_is_known"),
+        app_engine.begin() as conn,
+    ):
+        _insert(conn, state="Resolved", outcome="fixed it")
+
+
+def test_an_unknown_kind_is_refused(app_engine: Engine) -> None:
+    with (
+        pytest.raises(IntegrityError, match="work_item_kind_is_known"),
+        app_engine.begin() as conn,
+    ):
+        _insert(conn, kind="MISC")
+
+
+@pytest.mark.invariant
+def test_an_item_a_human_held_cannot_be_auto_resolved(app_engine: Engine) -> None:
+    """FR-WORK-03 at the schema level: automation coverage counts only
+    items no person ever held, whatever path a row arrived by."""
+    with (
+        pytest.raises(IntegrityError, match="auto_resolved_was_never_held"),
+        app_engine.begin() as conn,
+    ):
+        conn.execute(
+            text(
+                "INSERT INTO work_item (work_item_id, client_id, kind, state, title, "
+                "owner_role, priority_score, outcome, first_claimed_at, category, "
+                "sla_due_at) "
+                "VALUES (:id, :client, 'DENIAL', 'AutoResolved', 'CO-50 on claim 3f2a', "
+                "'denials_specialist', 0, 'NO_ACTION_NEEDED', '2026-06-01 12:00+00', "
+                "'OPERATIONAL', '2026-06-04 12:00+00')"
+            ),
+            {"id": uuid.uuid4(), "client": CLIENT},
+        )
+
+
+# ---------------------------------------------------------------------------
+# PD-15 at the schema level (M3.6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.invariant
+@pytest.mark.parametrize(("pinned", "score"), [(True, 99), (False, 100)])
+def test_only_a_pinned_item_scores_100(app_engine: Engine, pinned: bool, score: int) -> None:
+    """A pinned item cannot carry a demotable score, and nothing scored can
+    quietly take the top of the queue (FR-WORK-05)."""
+    with (
+        pytest.raises(IntegrityError, match="only_a_pinned_item_scores_100"),
+        app_engine.begin() as conn,
+    ):
+        conn.execute(
+            text(
+                "INSERT INTO work_item (work_item_id, client_id, kind, state, title, "
+                "owner_role, priority_score, deadline_pinned, category, sla_due_at) "
+                "VALUES (:id, :client, 'DENIAL', 'Queued', 'CO-50 on claim 3f2a', "
+                "'denials_specialist', :score, :pinned, 'OPERATIONAL', '2026-06-04 12:00+00')"
+            ),
+            {"id": uuid.uuid4(), "client": CLIENT, "score": score, "pinned": pinned},
+        )
+
+
+def test_a_pinned_item_is_never_bulk(app_engine: Engine) -> None:
+    """An urgent claim stays in a person's queue, whatever its balance."""
+    with (
+        pytest.raises(IntegrityError, match="a_pinned_item_is_not_bulk"),
+        app_engine.begin() as conn,
+    ):
+        conn.execute(
+            text(
+                "INSERT INTO work_item (work_item_id, client_id, kind, state, title, "
+                "owner_role, priority_score, deadline_pinned, bulk_handling, category, "
+                "sla_due_at) VALUES (:id, :client, 'DENIAL', 'Queued', 'CO-50 on claim 3f2a', "
+                "'denials_specialist', 100, true, true, 'OPERATIONAL', '2026-06-04 12:00+00')"
+            ),
+            {"id": uuid.uuid4(), "client": CLIENT},
+        )

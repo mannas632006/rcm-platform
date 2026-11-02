@@ -68,15 +68,14 @@ seed-smoke: ## Generate the small corpus the tests use
 	$(PYTHON) -m tools.synthetic --config tools/synthetic/config/smoke.yaml
 	$(PYTHON) -m tools.synthetic.validate
 
-openapi: ## Regenerate the OpenAPI schema and the frontend client
-	$(PYTHON) -m rcm.api.export_openapi > frontend/src/api/openapi.json
-	cd frontend && npm run generate:api
+openapi: ## Regenerate the committed OpenAPI schema (the frontend client joins in M5.1)
+	$(PYTHON) tools/export_openapi.py openapi.json
 
 # --- quality gates ----------------------------------------------------------
 
 lint: ## Ruff, import boundaries, frontend lint
 	$(BIN)/ruff check src tests tools migrations
-	$(BIN)/ruff format --check src tests tools
+	$(BIN)/ruff format --check src tests tools migrations
 	$(BIN)/lint-imports --config .importlinter
 
 typecheck: ## mypy strict

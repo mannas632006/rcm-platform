@@ -111,9 +111,37 @@ def test_closed_is_not_final() -> None:
     assert check(ClaimState.CLOSED, ClaimState.REOPENED) is not None
 
 
-def test_cancelled_is_the_only_final_state() -> None:
-    assert {ClaimState.CANCELLED} == FINAL_STATES
+def test_cancelled_and_replaced_are_the_only_final_states() -> None:
+    """ADR-0006 adds `Replaced`: a submission superseded by a corrected one.
+    The claim carries on in the new submission; the old one never moves
+    again."""
+    assert {ClaimState.CANCELLED, ClaimState.REPLACED} == FINAL_STATES
     assert transitions_from(ClaimState.CANCELLED) == ()
+    assert transitions_from(ClaimState.REPLACED) == ()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        ClaimState.SUBMITTED,
+        ClaimState.REJECTED,
+        ClaimState.IN_ADJUDICATION,
+        ClaimState.DENIED,
+        ClaimState.PARTIALLY_PAID,
+        ClaimState.PAID,
+        ClaimState.CORRECTING,
+    ],
+)
+def test_a_sent_submission_can_be_replaced(source: ClaimState) -> None:
+    """BR-M8-06: a replacement (frequency 7) can follow any submission the
+    payer has seen, whatever came back."""
+    assert check(source, ClaimState.REPLACED).reason
+
+
+def test_a_replaced_submission_needs_no_next_action() -> None:
+    """Its follow-up lives on the submission that replaced it."""
+    assert ClaimState.REPLACED in RESTING_STATES
+    assert not requires_next_action(ClaimState.REPLACED)
 
 
 @pytest.mark.invariant
@@ -239,10 +267,15 @@ def test_opposed_guards_split_a_state_exhaustively(yes: Guard, no: Guard) -> Non
     for source in sources:
         for answer in (True, False):
             facts = {str(yes): answer, str(no): not answer}
+            # `-> Replaced` is excluded by name: it is taken when a corrected
+            # submission arrives (ADR-0006), a different event from the
+            # question this fork answers. Every other unguarded edge still
+            # counts as competing with the fork.
             open_edges = [
                 t
                 for t in transitions_from(source)
-                if t.guard is None or facts.get(str(t.guard), False)
+                if t.target is not ClaimState.REPLACED
+                and (t.guard is None or facts.get(str(t.guard), False))
             ]
             assert len(open_edges) == 1, (
                 f"{source} with {yes}={answer} has {len(open_edges)} open edges"

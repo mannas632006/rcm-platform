@@ -51,7 +51,7 @@ from rcm.domain.claim_state import (
     is_final,
     requires_next_action,
 )
-from rcm.domain.claim_state_log import ClaimStateTransition
+from rcm.domain.claim_state_log import ClaimStateTransition, ReviewStatus
 from rcm.platform.audit import ActorType, record_audit_event
 from rcm.platform.errors import ResourceNotFoundError, StateTransitionError
 from rcm.platform.logging import get_logger
@@ -97,8 +97,12 @@ def transition(
     facts: dict[str, bool] | None = None,
     next_action_due: date | None = None,
     note: str = "",
+    needs_review: bool = False,
 ) -> TransitionResult:
     """Move one claim to `target`, or refuse and explain why.
+
+    `needs_review` marks an automatic step for the submitter's approval
+    (ADR-0006).
 
     The whole operation happens in the caller's transaction: lock, validate,
     apply, record, audit. A caller that commits gets all of it; a caller
@@ -129,9 +133,16 @@ def transition(
             reason="BR-STATE-04: a claim in this state needs a scheduled next action",
         )
 
-    # A resting state has nothing pending. Carrying a stale date forward
-    # would leave closed claims appearing on work queues forever.
-    resolved_due = None if not requires_next_action(target) else next_action_due
+    # A resting state has nothing pending, so a date offered for one is a
+    # caller that misunderstands where the claim is going. Refused rather
+    # than dropped (PD-18): silently discarding input hides the mistake.
+    if not requires_next_action(target) and next_action_due is not None:
+        raise StateTransitionError(
+            source=str(source),
+            target=str(target),
+            reason="BR-STATE-04: a claim at rest has no next action to schedule",
+        )
+    resolved_due = next_action_due
 
     claim.state = str(target)
     claim.next_action_due = resolved_due
@@ -150,6 +161,7 @@ def transition(
         actor_id=actor_id,
         guard=str(defined.guard) if defined.guard else "",
         next_action_due=resolved_due,
+        review_status=str(ReviewStatus.PENDING if needs_review else ReviewStatus.NOT_REQUIRED),
     )
     session.add(record)
 
@@ -181,7 +193,9 @@ def transition(
         target=target,
         reason=defined.reason,
         next_action_due=resolved_due,
-        recorded_at=record.occurred_at or datetime.now(tz=None).astimezone(),
+        # The database's clock, not the app's: after the flush SQLAlchemy has
+        # the server default, so this is never None here.
+        recorded_at=record.occurred_at,
     )
 
 
@@ -200,7 +214,7 @@ def history(
                 ClaimStateTransition.claim_id == claim_id,
                 ClaimStateTransition.client_id == client_id,
             )
-            .order_by(ClaimStateTransition.occurred_at, ClaimStateTransition.transition_id)
+            .order_by(ClaimStateTransition.occurred_at, ClaimStateTransition.sequence)
         ).all()
     )
 

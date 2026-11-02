@@ -215,6 +215,27 @@ def test_a_resting_state_needs_no_next_action(loaded_claim: uuid.UUID) -> None:
         assert found.next_action_due is None
 
 
+def test_a_date_offered_for_a_resting_state_is_refused(loaded_claim: uuid.UUID) -> None:
+    """PD-18. A caller scheduling a follow-up on a claim it is closing has
+    misunderstood where the claim is going; dropping the date would hide
+    that."""
+    for target, facts in (
+        (ClaimState.ELIGIBILITY_VERIFIED, None),
+        (ClaimState.AUTH_PENDING, {str(Guard.AUTH_REQUIRED): True}),
+        (ClaimState.AUTH_DENIED, None),
+    ):
+        move(loaded_claim, target, facts=facts, next_action_due=SOON)
+
+    with pytest.raises(StateTransitionError) as raised:
+        move(loaded_claim, ClaimState.CANCELLED, next_action_due=SOON)
+    assert "BR-STATE-04" in raised.value.context["reason"]
+
+    with session_scope() as session:
+        assert current_state(session, claim_id=loaded_claim, client_id=CLIENT) is (
+            ClaimState.AUTH_DENIED
+        )
+
+
 def test_claims_needing_action_finds_the_unscheduled_ones(loaded_claim: uuid.UUID) -> None:
     """The half of BR-STATE-04 that matters: a claim with no due date in a
     state that requires one has fallen out of the process, and nothing else

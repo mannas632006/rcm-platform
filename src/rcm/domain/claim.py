@@ -51,6 +51,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -142,18 +143,6 @@ class Claim(Base):
     place_of_service: Mapped[str] = mapped_column(
         String(4), nullable=False, default="", server_default=""
     )
-    #: BHT04, the date the submitter stated it created the transaction. This
-    #: is the *business* submission date, and it is not the same thing as
-    #: `raw_file.received_at`, which is when this platform archived the file.
-    #:
-    #: The difference only matters when they diverge, and they diverge exactly
-    #: when it is most expensive: replaying a year of history in an afternoon
-    #: gives every claim the same `received_at`. Any trailing-window feature
-    #: computed as-of that timestamp then has no history behind it and comes
-    #: back empty, which is DR-07 failing silently rather than loudly.
-    #:
-    #: Nullable because a file may omit BHT04; the loader falls back to the
-    #: archival date and the mart records which it used.
     #: M3.1/M3.2. Where the claim is in DOC-02 section 7.1's machine.
     #: Text rather than a native enum: the state list changes with the
     #: business, and an ALTER TYPE is a migration that locks the table
@@ -166,6 +155,18 @@ class Claim(Base):
     #: lifecycle service refuses a transition into any other state without
     #: one.
     next_action_due: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: BHT04, the date the submitter stated it created the transaction. This
+    #: is the *business* submission date, and it is not the same thing as
+    #: `raw_file.received_at`, which is when this platform archived the file.
+    #:
+    #: The difference only matters when they diverge, and they diverge exactly
+    #: when it is most expensive: replaying a year of history in an afternoon
+    #: gives every claim the same `received_at`. Any trailing-window feature
+    #: computed as-of that timestamp then has no history behind it and comes
+    #: back empty, which is DR-07 failing silently rather than loudly.
+    #:
+    #: Nullable because a file may omit BHT04; the loader falls back to the
+    #: archival date and the mart records which it used.
     submitted_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     date_of_service: Mapped[date | None] = mapped_column(Date, nullable=True)
     total_charge: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
@@ -214,6 +215,14 @@ class Claim(Base):
         # The counting index. Every "how many claims" question groups by this.
         Index("ix_claim_root", "client_id", "root_claim_id"),
         Index("ix_claim_payer", "client_id", "payer_id"),
+        # Claim progression asks "what replaces this claim" once per claim per
+        # run (ADR-0006); without this each ask scans the client's claims.
+        Index(
+            "ix_claim_original",
+            "client_id",
+            "original_claim_id",
+            postgresql_where=text("original_claim_id IS NOT NULL"),
+        ),
         # Every trailing-window feature orders by the submission date within
         # a client, and M2.5's temporal split cuts on it.
         Index("ix_claim_submitted_on", "client_id", "submitted_on"),
@@ -232,7 +241,7 @@ class Claim(Base):
             "'ServiceRendered','Coded','Charged','Scrubbing','ScrubFailed','ReadyToSubmit',"
             "'Submitted','Rejected','InAdjudication','Paid','PartiallyPaid','Denied',"
             "'Appealing','Correcting','WrittenOff','SecondaryBilling','PatientBalance',"
-            "'Closed','Reopened','Cancelled')",
+            "'Closed','Reopened','Cancelled','Replaced')",
             name="state_is_known",
         ),
     )

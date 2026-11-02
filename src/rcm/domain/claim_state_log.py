@@ -19,12 +19,15 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from enum import StrEnum
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
     String,
     Text,
@@ -34,6 +37,21 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from rcm.platform.db import Base
+
+
+class ReviewStatus(StrEnum):
+    """Whether a person has looked at an automatic step (ADR-0006).
+
+    Owner decision (2026-11-01): the system moves claims on its own, and the
+    submitter sees every step it took and approves it or sends it back.
+    """
+
+    #: Taken by a person, or not subject to review.
+    NOT_REQUIRED = "NOT_REQUIRED"
+    #: Taken by the system; waiting for the submitter.
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    SENT_BACK = "SENT_BACK"
 
 
 class ClaimStateTransition(Base):
@@ -75,6 +93,18 @@ class ClaimStateTransition(Base):
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    #: Order within one transaction. `occurred_at` is the transaction's start
+    #: time, so steps taken together share it, and a random UUID cannot say
+    #: which came first (ADR-0006).
+    sequence: Mapped[int] = mapped_column(BigInteger, Identity(always=True), nullable=False)
+
+    #: ADR-0006: an automatic step waits for the submitter's review.
+    review_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="NOT_REQUIRED", server_default="NOT_REQUIRED"
+    )
+    reviewed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
 
     __table_args__ = (
         # A transition from a state to itself is legitimate -- a 276/277
@@ -87,6 +117,22 @@ class ClaimStateTransition(Base):
         # that something happened and refuses to say what.
         CheckConstraint("length(reason) > 0", name="transition_states_a_reason"),
         CheckConstraint("length(actor_id) > 0", name="transition_names_its_actor"),
+        CheckConstraint(
+            "review_status IN ('NOT_REQUIRED','PENDING','APPROVED','SENT_BACK')",
+            name="transition_review_status_is_known",
+        ),
+        # A reviewed step says who reviewed it and when; an unreviewed one
+        # says neither.
+        CheckConstraint(
+            "(review_status IN ('APPROVED','SENT_BACK')) = "
+            "(reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL)",
+            name="a_reviewed_step_names_its_reviewer",
+        ),
+        # Sending a step back says why.
+        CheckConstraint(
+            "review_status <> 'SENT_BACK' OR length(review_note) > 0",
+            name="a_step_sent_back_says_why",
+        ),
         Index("ix_claim_transition_claim", "client_id", "claim_id", "occurred_at"),
         Index("ix_claim_transition_target", "client_id", "target_state"),
     )

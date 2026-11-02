@@ -65,6 +65,8 @@ class DecisionType(StrEnum):
     SUBMIT = "SUBMIT"
     APPEAL = "APPEAL"
     PAYER_MATCH = "PAYER_MATCH"
+    #: ADR-0006: the system moved a claim on evidence already on file.
+    PROGRESS = "PROGRESS"
 
 
 class DecisionRecord(Base):

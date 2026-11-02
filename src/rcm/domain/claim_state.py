@@ -91,6 +91,9 @@ class ClaimState(StrEnum):
     #: BR-STATE-03: what `Closed` becomes when money moves backwards.
     REOPENED = "Reopened"
     CANCELLED = "Cancelled"
+    #: ADR-0006: a submission superseded by a corrected one (REF*F8). The
+    #: claim carries on in the new submission; this one is finished.
+    REPLACED = "Replaced"
 
 
 class Guard(StrEnum):
@@ -220,11 +223,26 @@ TRANSITIONS: Final[tuple[Transition, ...]] = (
     #: BR-STATE-03. The transition that makes `Closed` not final.
     Transition(ClaimState.CLOSED, ClaimState.REOPENED, "reversal or recoupment"),
     Transition(ClaimState.REOPENED, ClaimState.IN_ADJUDICATION, "re-adjudicated"),
+    # --- superseded (ADR-0006) ------------------------------------------------
+    #: BR-DATA-03 keeps one claim across its submissions; each submission row
+    #: still needs an end. A replacement can follow anything the payer saw.
+    *(
+        Transition(source, ClaimState.REPLACED, "superseded by a corrected submission")
+        for source in (
+            ClaimState.SUBMITTED,
+            ClaimState.REJECTED,
+            ClaimState.IN_ADJUDICATION,
+            ClaimState.DENIED,
+            ClaimState.PARTIALLY_PAID,
+            ClaimState.PAID,
+            ClaimState.CORRECTING,
+        )
+    ),
 )
 
 #: The one state a claim never leaves. `Closed` is deliberately absent
 #: (BR-STATE-03).
-FINAL_STATES: Final[frozenset[ClaimState]] = frozenset({ClaimState.CANCELLED})
+FINAL_STATES: Final[frozenset[ClaimState]] = frozenset({ClaimState.CANCELLED, ClaimState.REPLACED})
 
 #: States a claim may sit in without a scheduled next action (BR-STATE-04).
 #:
@@ -232,7 +250,9 @@ FINAL_STATES: Final[frozenset[ClaimState]] = frozenset({ClaimState.CANCELLED})
 #: follow-up, and can still be reopened months later when money moves
 #: backwards. Conflating the two would either demand a next action date for
 #: every closed claim forever, or let a reopened one disappear.
-RESTING_STATES: Final[frozenset[ClaimState]] = frozenset({ClaimState.CLOSED, ClaimState.CANCELLED})
+RESTING_STATES: Final[frozenset[ClaimState]] = frozenset(
+    {ClaimState.CLOSED, ClaimState.CANCELLED, ClaimState.REPLACED}
+)
 
 #: Where a claim begins.
 INITIAL_STATE: Final = ClaimState.REGISTERED

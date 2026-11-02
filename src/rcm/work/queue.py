@@ -34,9 +34,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from rcm.platform.audit import ActorType, record_audit_event
-from rcm.platform.errors import ResourceNotFoundError, WorkItemLockedError
+from rcm.platform.config import get_settings
+from rcm.platform.errors import (
+    ResourceNotFoundError,
+    StateTransitionError,
+    ValidationFailedError,
+    WorkItemLockedError,
+)
 from rcm.platform.logging import get_logger
-from rcm.work.models import DEFAULT_LOCK_MINUTES, WorkItem, WorkItemKind
+from rcm.work.models import ExceptionCategory, WorkItem, WorkItemKind
 from rcm.work.state import (
     WorkItemOutcome,
     WorkItemState,
@@ -45,6 +51,22 @@ from rcm.work.state import (
 )
 
 log = get_logger(__name__)
+
+
+def _lease_minutes(lock_minutes: int | None) -> int:
+    """The lease length: the caller's, or `[TBD-57]` from settings.
+
+    Read from `Settings` rather than a module constant, so setting
+    `RCM_WORK_ITEM_LOCK_EXPIRY_MINUTES` actually changes the lease -- the
+    placeholder report says it does. A lease of zero or less is already
+    expired when granted, which is a lock that does nothing.
+    """
+    minutes = get_settings().work_item_lock_expiry_minutes if lock_minutes is None else lock_minutes
+    if minutes <= 0:
+        raise ValidationFailedError(
+            field="lock_minutes", reason="a lease must last at least one minute"
+        )
+    return minutes
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,13 +83,16 @@ def create(
     *,
     client_id: uuid.UUID,
     kind: WorkItemKind,
+    category: ExceptionCategory,
     title: str,
     owner_role: str,
+    sla_due_at: datetime,
+    now: datetime,
     claim_id: uuid.UUID | None = None,
     detail: str = "",
     priority_score: int = 0,
     deadline_pinned: bool = False,
-    sla_due_at: datetime | None = None,
+    source_key: str | None = None,
 ) -> WorkItem:
     """Raise a work item, queued and ready to be claimed.
 
@@ -80,6 +105,8 @@ def create(
         client_id=client_id,
         claim_id=claim_id,
         kind=str(kind),
+        category=str(category),
+        source_key=source_key,
         state=str(WorkItemState.QUEUED),
         title=title,
         detail=detail,
@@ -87,9 +114,22 @@ def create(
         deadline_pinned=deadline_pinned,
         owner_role=owner_role,
         sla_due_at=sla_due_at,
+        # The caller's clock, so SLA ages and BR-EXC-04's windows are
+        # computed against the same time the item was raised at.
+        created_at=now,
     )
     session.add(item)
     session.flush()
+
+    record_audit_event(
+        session,
+        actor_type=ActorType.SYSTEM,
+        actor_id="system:work_queue",
+        action="work_item.created",
+        entity_type="work_item",
+        entity_id=item.work_item_id,
+        after_state={"state": item.state, "kind": str(kind), "owner_role": owner_role},
+    )
 
     log.info(
         "work_item.created",
@@ -122,7 +162,7 @@ def claim(
     client_id: uuid.UUID,
     operator: str,
     now: datetime,
-    lock_minutes: int = DEFAULT_LOCK_MINUTES,
+    lock_minutes: int | None = None,
 ) -> Lease:
     """Take exclusive hold of an item (FR-WORK-01).
 
@@ -130,6 +170,7 @@ def claim(
     claims cannot both see an unheld item. The loser waits, re-reads, finds
     a holder, and is refused by name rather than silently overwriting.
     """
+    minutes = _lease_minutes(lock_minutes)
     item = _locked(session, work_item_id=work_item_id, client_id=client_id)
     state = WorkItemState(item.state)
 
@@ -138,7 +179,15 @@ def claim(
         # operator taking an item whose previous holder went home does not
         # have to wait for a background job to notice.
         if item.lock_expires_at is not None and item.lock_expires_at <= now:
+            previous_holder = item.assigned_to
             _release(session, item, now=now, reason="lease expired")
+            _audit_expiry(
+                session,
+                item,
+                previous_holder=previous_holder,
+                actor_type=ActorType.USER,
+                actor_id=operator,
+            )
             state = WorkItemState(item.state)
         else:
             raise WorkItemLockedError(
@@ -149,10 +198,12 @@ def claim(
 
     check(state, WorkItemState.ASSIGNED)
 
-    expires_at = now + timedelta(minutes=lock_minutes)
+    expires_at = now + timedelta(minutes=minutes)
     item.state = str(WorkItemState.ASSIGNED)
     item.assigned_to = operator
     item.lock_expires_at = expires_at
+    if item.first_claimed_at is None:
+        item.first_claimed_at = now
 
     record_audit_event(
         session,
@@ -166,7 +217,7 @@ def claim(
     )
     session.flush()
 
-    log.info("work_item.claimed", work_item_id=str(work_item_id), lock_minutes=lock_minutes)
+    log.info("work_item.claimed", work_item_id=str(work_item_id), lock_minutes=minutes)
     return Lease(work_item_id=work_item_id, operator=operator, expires_at=expires_at)
 
 
@@ -177,7 +228,7 @@ def renew(
     client_id: uuid.UUID,
     operator: str,
     now: datetime,
-    lock_minutes: int = DEFAULT_LOCK_MINUTES,
+    lock_minutes: int | None = None,
 ) -> Lease:
     """Extend the lease. Working on something is what keeps it held.
 
@@ -185,6 +236,7 @@ def renew(
     operator would be a silent transfer of the lock, which is FR-WORK-01
     broken by a different route than a double claim.
     """
+    minutes = _lease_minutes(lock_minutes)
     item = _locked(session, work_item_id=work_item_id, client_id=client_id)
 
     if item.assigned_to != operator:
@@ -193,11 +245,36 @@ def renew(
             held_by=item.assigned_to or "nobody",
             reason="only the current holder may renew the lease",
         )
+    _refuse_if_lapsed(item, now=now, action="renew the lease")
 
-    expires_at = now + timedelta(minutes=lock_minutes)
+    expires_at = now + timedelta(minutes=minutes)
     item.lock_expires_at = expires_at
+    record_audit_event(
+        session,
+        actor_type=ActorType.USER,
+        actor_id=operator,
+        action="work_item.lease_renewed",
+        entity_type="work_item",
+        entity_id=work_item_id,
+        after_state={"lock_expires_at": expires_at.isoformat()},
+    )
     session.flush()
     return Lease(work_item_id=work_item_id, operator=operator, expires_at=expires_at)
+
+
+def _refuse_if_lapsed(item: WorkItem, *, now: datetime, action: str) -> None:
+    """Refuse a holder whose lease has already run out (FR-WORK-02).
+
+    The sweep may not have run yet, so the row can still name them. Letting
+    the write through would mean work saved on an item the queue already
+    considers free -- and another operator may be about to take it.
+    """
+    if item.lock_expires_at is not None and item.lock_expires_at <= now:
+        raise WorkItemLockedError(
+            work_item_id=str(item.work_item_id),
+            held_by=item.assigned_to or "nobody",
+            reason=f"the lease expired; claim the item again to {action}",
+        )
 
 
 def _release(session: Session, item: WorkItem, *, now: datetime, reason: str) -> None:
@@ -217,6 +294,31 @@ def _release(session: Session, item: WorkItem, *, now: datetime, reason: str) ->
     log.info("work_item.released", work_item_id=str(item.work_item_id), reason=reason)
 
 
+def _audit_expiry(
+    session: Session,
+    item: WorkItem,
+    *,
+    previous_holder: str | None,
+    actor_type: ActorType = ActorType.SYSTEM,
+    actor_id: str = "system:lease_sweeper",
+) -> None:
+    """Record that a lease ran out, whoever noticed -- the sweep or a claim.
+
+    A takeover that skipped this would leave the audit saying the item was
+    claimed from the queue, with no trace that somebody else had held it.
+    """
+    record_audit_event(
+        session,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        action="work_item.lease_expired",
+        entity_type="work_item",
+        entity_id=item.work_item_id,
+        before_state={"assigned_to": previous_holder},
+        after_state={"state": str(WorkItemState.QUEUED)},
+    )
+
+
 def release(
     session: Session,
     *,
@@ -234,6 +336,16 @@ def release(
             reason="only the current holder may release the item",
         )
     _release(session, item, now=now, reason="released by the operator")
+    record_audit_event(
+        session,
+        actor_type=ActorType.USER,
+        actor_id=operator,
+        action="work_item.released",
+        entity_type="work_item",
+        entity_id=work_item_id,
+        before_state={"assigned_to": operator},
+        after_state={"state": str(WorkItemState.QUEUED)},
+    )
     session.flush()
 
 
@@ -266,16 +378,7 @@ def expire_leases(session: Session, *, client_id: uuid.UUID, now: datetime) -> l
         previous_holder = item.assigned_to
         _release(session, item, now=now, reason="lease expired")
         released.append(item.work_item_id)
-        record_audit_event(
-            session,
-            actor_type=ActorType.SYSTEM,
-            actor_id="system:lease_sweeper",
-            action="work_item.lease_expired",
-            entity_type="work_item",
-            entity_id=item.work_item_id,
-            before_state={"assigned_to": previous_holder},
-            after_state={"state": str(WorkItemState.QUEUED)},
-        )
+        _audit_expiry(session, item, previous_holder=previous_holder)
 
     if released:
         session.flush()
@@ -290,9 +393,10 @@ def open_item(
     client_id: uuid.UUID,
     operator: str,
     now: datetime,
-    lock_minutes: int = DEFAULT_LOCK_MINUTES,
+    lock_minutes: int | None = None,
 ) -> None:
     """Assigned -> InProgress. Opening the item renews the lease."""
+    minutes = _lease_minutes(lock_minutes)
     item = _locked(session, work_item_id=work_item_id, client_id=client_id)
     if item.assigned_to != operator:
         raise WorkItemLockedError(
@@ -300,9 +404,20 @@ def open_item(
             held_by=item.assigned_to or "nobody",
             reason="only the current holder may open the item",
         )
+    _refuse_if_lapsed(item, now=now, action="open the item")
     check(WorkItemState(item.state), WorkItemState.IN_PROGRESS)
     item.state = str(WorkItemState.IN_PROGRESS)
-    item.lock_expires_at = now + timedelta(minutes=lock_minutes)
+    item.lock_expires_at = now + timedelta(minutes=minutes)
+    record_audit_event(
+        session,
+        actor_type=ActorType.USER,
+        actor_id=operator,
+        action="work_item.opened",
+        entity_type="work_item",
+        entity_id=work_item_id,
+        before_state={"state": str(WorkItemState.ASSIGNED)},
+        after_state={"state": str(WorkItemState.IN_PROGRESS)},
+    )
     session.flush()
 
 
@@ -328,8 +443,10 @@ def resolve(
             held_by=item.assigned_to or "nobody",
             reason="only the current holder may resolve the item",
         )
+    _refuse_if_lapsed(item, now=now, action="resolve the item")
 
-    check(WorkItemState(item.state), WorkItemState.RESOLVED)
+    source = WorkItemState(item.state)
+    check(source, WorkItemState.RESOLVED)
     item.state = str(WorkItemState.RESOLVED)
     item.outcome = str(outcome)
     item.resolution_note = note
@@ -344,10 +461,50 @@ def resolve(
         action="work_item.resolved",
         entity_type="work_item",
         entity_id=work_item_id,
-        after_state={"outcome": str(outcome)},
+        before_state={"state": str(source), "assigned_to": operator},
+        after_state={"state": str(WorkItemState.RESOLVED), "outcome": str(outcome)},
     )
     session.flush()
     log.info("work_item.resolved", outcome=str(outcome))
+
+
+def reopen(
+    session: Session,
+    *,
+    work_item_id: uuid.UUID,
+    client_id: uuid.UUID,
+    operator: str,
+    now: datetime,
+    reason: str,
+) -> WorkItem:
+    """Resolved -> Reopened -> Queued: the outcome was reversed.
+
+    `Resolved` is not final (FR-WORK-04's outcomes are reversible). The old
+    outcome is cleared because an open item has none (the outcome CHECK),
+    and kept in the audit record so the reversal is explainable.
+    """
+    del now
+    item = _locked(session, work_item_id=work_item_id, client_id=client_id)
+    previous = item.outcome
+    check(WorkItemState(item.state), WorkItemState.REOPENED)
+    check(WorkItemState.REOPENED, WorkItemState.QUEUED)
+    item.state = str(WorkItemState.QUEUED)
+    item.outcome = None
+    item.resolved_at = None
+
+    record_audit_event(
+        session,
+        actor_type=ActorType.USER,
+        actor_id=operator,
+        action="work_item.reopened",
+        entity_type="work_item",
+        entity_id=work_item_id,
+        before_state={"state": str(WorkItemState.RESOLVED), "outcome": previous},
+        after_state={"state": str(WorkItemState.QUEUED), "reason": reason},
+    )
+    session.flush()
+    log.info("work_item.reopened", work_item_id=str(work_item_id))
+    return item
 
 
 def auto_resolve(
@@ -369,6 +526,14 @@ def auto_resolve(
     """
     item = _locked(session, work_item_id=work_item_id, client_id=client_id)
     check(WorkItemState(item.state), WorkItemState.AUTO_RESOLVED)
+    # `Queued` is also where a released, expired or reopened item lands, so
+    # the state alone does not prove nobody worked it.
+    if item.first_claimed_at is not None:
+        raise StateTransitionError(
+            source=item.state,
+            target=str(WorkItemState.AUTO_RESOLVED),
+            reason="FR-WORK-03: a human has held this item, so its resolution is not automation",
+        )
 
     item.state = str(WorkItemState.AUTO_RESOLVED)
     item.outcome = str(outcome)

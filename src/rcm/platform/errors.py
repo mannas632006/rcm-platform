@@ -365,6 +365,34 @@ class ExternalSystemError(PlatformError):
     detail = "An external system returned an error."
 
 
+class ExternalSystemRejectedError(ExternalSystemError):
+    """The external system received this request and refused it (M3.7).
+
+    A verdict on the payload, not an outage: failing over would only be
+    refused again, and counting it against the circuit would let a few bad
+    files take a healthy clearinghouse out of service.
+    """
+
+    code = "external-system-rejected"
+    title = "External system rejected the request"
+    status = HTTPStatus.UNPROCESSABLE_ENTITY
+    detail = "The external system received the request and refused it."
+
+
+class ExternalSystemOutcomeUnknownError(ExternalSystemError):
+    """The request may or may not have been accepted (M3.7).
+
+    A timeout or a lost response. Resending -- above all to a different
+    system, which has never seen the idempotency key -- could submit a
+    claim twice, so a person confirms with the clearinghouse first (PD-18).
+    """
+
+    code = "external-system-outcome-unknown"
+    title = "External system outcome unknown"
+    status = HTTPStatus.BAD_GATEWAY
+    detail = "It is not known whether the external system accepted the request."
+
+
 class ExternalSystemUnavailableError(ExternalSystemError):
     """Both primary and secondary failed (M3.7). Named, and no data lost."""
 
