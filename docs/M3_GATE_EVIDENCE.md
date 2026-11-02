@@ -26,6 +26,12 @@ claim is unscheduled.
 Run on 2026-11-02 against a clean database, after the review fixes in
 ADR-0006 (commit `c09ac01`). Exit code 0.
 
+Run again on 2026-11-03 after the PR #13 review fixes (commit `21283e8`):
+every number below is the same, and exit code 0. The new holds
+(`rejected-after-acceptance`, `void-submission`, a rejection plus an 835 on
+a replaced claim) found nothing in this corpus; their tests cover them.
+Progression took 77m50s that time.
+
 ### Corpus loaded
 
 | File kind | Files |
