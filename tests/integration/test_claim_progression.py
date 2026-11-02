@@ -185,6 +185,17 @@ def test_a_resubmission_replaces_the_original(root: Path) -> None:
     assert targets_of("CLM-O")[-2:] == ["Denied", "Replaced"]
 
 
+def test_evidence_that_arrives_before_the_claim_still_counts(root: Path) -> None:
+    """Files arrive out of order. A 277CA and 835 loaded before their 837
+    still move the claim once it is loaded -- they are not lost."""
+    acknowledge(ack_277ca(("CLM-EARLY", "A2:20")), root, name="277ca.edi")
+    remit(denial_for("CLM-EARLY", control="0001"), root, name="835.edi")
+    submit("CLM-EARLY", root, control="0001")
+    advance()
+    assert state_of("CLM-EARLY") is ClaimState.DENIED
+    assert targets_of("CLM-EARLY")[-2:] == ["InAdjudication", "Denied"]
+
+
 # ---------------------------------------------------------------------------
 # BR-STATE-04 and idempotency
 # ---------------------------------------------------------------------------

@@ -124,34 +124,15 @@ def _next_action_days(state: ClaimState) -> int:
     return days.get(str(state), days["*"])
 
 
-def _window(session: Session, claim: Claim) -> tuple[datetime, datetime | None]:
-    """The span of time this submission's evidence falls in.
-
-    A resubmission can reuse the CLM01 of the claim it replaces, and the
-    277CA and 835 echo only that number. Evidence loaded after the next
-    submission with the same number belongs to that one, not this one.
-    """
-    later = session.scalar(
-        select(func.min(Claim.created_at)).where(
-            Claim.client_id == claim.client_id,
-            Claim.submitter_claim_id == claim.submitter_claim_id,
-            Claim.created_at > claim.created_at,
-        )
-    )
-    return claim.created_at, later
-
-
 def _evidence(session: Session, claim: Claim) -> Evidence:
-    start, end = _window(session, claim)
-
+    # Matched on CLM01 alone. uq_claim_client_submitter_id makes that one
+    # submission per client, and evidence is never limited by load time:
+    # a 277CA or 835 can arrive before the 837 it answers.
     ack_query = select(ClaimAcknowledgement.outcome).where(
         ClaimAcknowledgement.client_id == claim.client_id,
         ClaimAcknowledgement.claim_id == claim.submitter_claim_id,
         ClaimAcknowledgement.source == str(AcknowledgementSource.CLAIM_277CA),
-        ClaimAcknowledgement.created_at >= start,
     )
-    if end is not None:
-        ack_query = ack_query.where(ClaimAcknowledgement.created_at < end)
     latest_ack = session.scalar(
         ack_query.order_by(
             ClaimAcknowledgement.received_at.desc(), ClaimAcknowledgement.created_at.desc()
@@ -169,10 +150,7 @@ def _evidence(session: Session, claim: Claim) -> Evidence:
         ClaimPayment.claim_id == claim.submitter_claim_id,
         ClaimPayment.is_reversal.is_(False),
         ClaimPayment.claim_payment_id.not_in(reversed_ids),
-        ClaimPayment.created_at >= start,
     )
-    if end is not None:
-        payment_query = payment_query.where(ClaimPayment.created_at < end)
     payment_id = session.scalar(payment_query.order_by(ClaimPayment.created_at.desc()).limit(1))
 
     lines = denied = 0

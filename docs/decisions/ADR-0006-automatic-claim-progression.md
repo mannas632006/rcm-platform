@@ -29,6 +29,10 @@ its evidence goes, and no further:
 | 835 lines | All denied → `Denied`; some → `PartiallyPaid`; none → `Paid`. Uses the same denied-line rule as `rcm.analytics.denials`. |
 | A later claim chained by REF*F8 | → `Replaced` (Decision 2) |
 
+Evidence is matched on CLM01 alone, since `uq_claim_client_submitter_id`
+allows one claim per CLM01 per client. It is never limited by load time,
+because a 277CA or 835 can arrive before the 837 it answers.
+
 A 999 moves nothing (BR-M8-02). Everything after an outcome (appeal,
 correction, write-off, secondary or patient billing) is a person's decision
 and stays one.
@@ -111,6 +115,9 @@ set in `Settings.next_action_days` and registered in
 - Tests: `tests/integration/test_claim_progression.py` (GATE M3 path,
   idempotency, BR-STATE-04, review flow, suspension) and
   `tests/unit/test_claim_state.py` (`Replaced` edges).
+- Gate measurements on the full corpus: `docs/M3_GATE_EVIDENCE.md`.
+- A frequency-7 replacement that reuses its original's CLM01 is skipped by
+  the claim loader as a resend. That is left to M4 (see the evidence file).
 
 ## Rollback
 
