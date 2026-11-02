@@ -6,12 +6,18 @@ system's steps." ADR-0006.
 
 **What moves a claim.** Only evidence already on file:
 
-- an 837 we hold was sent, so every step before `Submitted` happened;
+- an 837 we hold was sent, so every step before `Submitted` is inferred,
+  and recorded as inferred;
 - a 277CA verdict accepts (`InAdjudication`) or rejects (`Rejected`, PD-4);
 - an 835 adjudicated it, so it was accepted even without a 277CA -- and
   the history says the acceptance was inferred rather than pretending a
   277CA arrived;
-- a later submission chained to it by REF*F8 replaces it.
+- a later submission chained to it by REF*F8 replaces it, once the payer
+  has taken that submission.
+
+Evidence that contradicts itself, or that this module will not read (two
+835 postings, a line paid nothing for patient-responsibility reasons only,
+a void), raises a named DATA_QUALITY exception and the claim waits (PD-18).
 
 A 999 moves nothing (BR-M8-02: syntax, not acceptance). Every step after an
 outcome -- appeal, write-off, secondary billing -- is a person's decision and
@@ -32,7 +38,7 @@ from datetime import datetime, timedelta
 from typing import Final
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from rcm.domain.acknowledgement import (
     AcknowledgementOutcome,
@@ -57,10 +63,13 @@ log = get_logger(__name__)
 LOGIC_VERSION: Final = "progression-v1"
 ACTOR: Final = "system:claim_progression"
 _SENT_BACK_KEY: Final = "step-sent-back:"
+#: CAS group PR: the patient owes it; the payer did not refuse it.
+_PATIENT_GROUP: Final = "PR"
 
-#: Before the payer: an 837 on file proves each of these happened. The
-#: authorisation branch is taken when the 837 carries a prior-auth number
-#: (REF*G1), because a payer only issues one when authorisation was required.
+#: Before the payer: an 837 on file is what these steps leave behind, so they
+#: are inferred from it and recorded as inferred. The authorisation branch is
+#: taken when the 837 carries a prior-auth number (REF*G1), because a payer
+#: only issues one when authorisation was required.
 _PRE_SUBMISSION_NO_AUTH: Final[tuple[ClaimState, ...]] = (
     ClaimState.ELIGIBILITY_VERIFIED,
     ClaimState.SERVICE_RENDERED,
@@ -91,23 +100,93 @@ _REPLACEABLE: Final[frozenset[ClaimState]] = frozenset(
 )
 
 
+#: A replacement replaces only once the payer has taken it. Until then the
+#: original is still the live claim at the payer, and ending its follow-up
+#: would lose it if the replacement is rejected.
+_TAKEN_BY_PAYER: Final[frozenset[ClaimState]] = frozenset(
+    {
+        ClaimState.IN_ADJUDICATION,
+        ClaimState.PAID,
+        ClaimState.PARTIALLY_PAID,
+        ClaimState.DENIED,
+        ClaimState.APPEALING,
+        ClaimState.CORRECTING,
+        ClaimState.WRITTEN_OFF,
+        ClaimState.SECONDARY_BILLING,
+        ClaimState.PATIENT_BALANCE,
+        ClaimState.CLOSED,
+        ClaimState.REOPENED,
+        ClaimState.REPLACED,
+    }
+)
+
+#: CLM05-3 frequency 8: void. A void ends the claim at the payer and may bring
+#: a recoupment; telling it apart from a replacement is M4's (ADR-0006).
+_VOID: Final = "8"
+
+
+@dataclass(frozen=True, slots=True)
+class Problem:
+    """Evidence that contradicts itself, or that this module will not read.
+
+    Raised as a named DATA_QUALITY exception, never guessed past (PD-18).
+    """
+
+    key: str
+    text: str
+
+
+REJECTED_BUT_ADJUDICATED: Final = Problem(
+    "rejected-but-adjudicated", "An 835 arrived for a claim the 277CA rejected"
+)
+ACCEPTED_AFTER_REJECTION: Final = Problem(
+    "accepted-after-rejection",
+    "A 277CA accepted a claim it rejected earlier; confirm the claim was resent",
+)
+SEVERAL_POSTINGS: Final = Problem(
+    "several-835-postings",
+    "More than one 835 posting is on file for this claim (split or secondary); "
+    "a person sets the outcome",
+)
+NO_SERVICE_LINES: Final = Problem(
+    "835-without-service-lines",
+    "The 835 for this claim has no service lines, so the outcome cannot be read per line",
+)
+PATIENT_SHARE_ONLY: Final = Problem(
+    "835-patient-share-only-line",
+    "An 835 line was paid nothing with only patient-responsibility reasons; "
+    "a person decides whether it is a denial",
+)
+VOIDED: Final = Problem(
+    "void-received", "A void was sent for this claim; a person handles voids until M4"
+)
+
+
 @dataclass(frozen=True, slots=True)
 class Evidence:
     """What is on file for one submission. No PHI: outcomes and counts."""
 
     acknowledgement: AcknowledgementOutcome | None
-    adjudicated: bool
+    postings: int
     lines: int
     denied_lines: int
+    patient_share_only_lines: int
     replaced: bool
+    voided: bool
+
+    @property
+    def adjudicated(self) -> bool:
+        return self.postings > 0
 
     def snapshot(self) -> dict[str, object]:
         return {
             "acknowledgement_277ca": str(self.acknowledgement) if self.acknowledgement else None,
-            "adjudicated": self.adjudicated,
+            "postings_835": self.postings,
             "service_lines": self.lines,
             "denied_lines": self.denied_lines,
+            "patient_share_only_lines": self.patient_share_only_lines,
             "replaced": self.replaced,
+            "voided": self.voided,
         }
 
 
@@ -116,6 +195,7 @@ class ProgressionReport:
     claims_seen: int = 0
     transitions: int = 0
     reviews_opened: int = 0
+    problems_raised: int = 0
     held: list[uuid.UUID] = field(default_factory=list)
 
 
@@ -128,36 +208,49 @@ def _evidence(session: Session, claim: Claim) -> Evidence:
     # Matched on CLM01 alone. uq_claim_client_submitter_id makes that one
     # submission per client, and evidence is never limited by load time:
     # a 277CA or 835 can arrive before the 837 it answers.
-    ack_query = select(ClaimAcknowledgement.outcome).where(
-        ClaimAcknowledgement.client_id == claim.client_id,
-        ClaimAcknowledgement.claim_id == claim.submitter_claim_id,
-        ClaimAcknowledgement.source == str(AcknowledgementSource.CLAIM_277CA),
-    )
     latest_ack = session.scalar(
-        ack_query.order_by(
-            ClaimAcknowledgement.received_at.desc(), ClaimAcknowledgement.created_at.desc()
-        ).limit(1)
+        select(ClaimAcknowledgement.outcome)
+        .where(
+            ClaimAcknowledgement.client_id == claim.client_id,
+            ClaimAcknowledgement.claim_id == claim.submitter_claim_id,
+            ClaimAcknowledgement.source == str(AcknowledgementSource.CLAIM_277CA),
+        )
+        .order_by(ClaimAcknowledgement.received_at.desc(), ClaimAcknowledgement.created_at.desc())
+        .limit(1)
     )
 
-    # The latest posting that is not a reversal and has not been reversed.
-    # A reversed payment reopens a claim (BR-STATE-03) -- a person's call.
-    reversed_ids = select(ClaimPayment.reverses_claim_payment_id).where(
-        ClaimPayment.client_id == claim.client_id,
-        ClaimPayment.reverses_claim_payment_id.is_not(None),
-    )
-    payment_query = select(ClaimPayment.claim_payment_id).where(
-        ClaimPayment.client_id == claim.client_id,
-        ClaimPayment.claim_id == claim.submitter_claim_id,
-        ClaimPayment.is_reversal.is_(False),
-        ClaimPayment.claim_payment_id.not_in(reversed_ids),
-    )
-    payment_id = session.scalar(payment_query.order_by(ClaimPayment.created_at.desc()).limit(1))
+    # Postings that are not reversals and have not been reversed. A reversed
+    # payment reopens a claim (BR-STATE-03) -- a person's call. Two or more
+    # live postings (a split claim, or a secondary payer's 835 for the same
+    # CLM01) are not summed or picked between: the outcome is held. CLP02
+    # cannot separate primary from secondary yet, because the synthetic
+    # generator writes 2 on primary claims that carry a patient share.
+    reversal = aliased(ClaimPayment)
+    postings = session.scalars(
+        select(ClaimPayment.claim_payment_id)
+        .where(
+            ClaimPayment.client_id == claim.client_id,
+            ClaimPayment.claim_id == claim.submitter_claim_id,
+            ClaimPayment.is_reversal.is_(False),
+            ~select(reversal.claim_payment_id)
+            .where(
+                reversal.client_id == claim.client_id,
+                reversal.reverses_claim_payment_id == ClaimPayment.claim_payment_id,
+            )
+            .exists(),
+        )
+        .limit(2)
+    ).all()
 
-    lines = denied = 0
-    if payment_id is not None:
+    lines = denied = patient_share_only = 0
+    if len(postings) == 1:
         # The denial rate's definition (rcm.analytics.denials): a line is
-        # denied when the payer paid nothing on it and gave a reason.
-        has_reason = (
+        # denied when the payer paid nothing on it and gave a reason. A line
+        # whose only reasons are patient responsibility (a deductible, say)
+        # meets that rule but is not a refusal, so it is counted apart and
+        # held rather than called a denial. Settling the rule in all three
+        # places it lives is M4.8's.
+        any_reason = (
             select(RemittanceAdjustment.adjustment_id)
             .where(
                 RemittanceAdjustment.service_line_id == RemittanceServiceLine.service_line_id,
@@ -165,41 +258,77 @@ def _evidence(session: Session, claim: Claim) -> Evidence:
             )
             .exists()
         )
+        payer_reason = (
+            select(RemittanceAdjustment.adjustment_id)
+            .where(
+                RemittanceAdjustment.service_line_id == RemittanceServiceLine.service_line_id,
+                RemittanceAdjustment.client_id == claim.client_id,
+                RemittanceAdjustment.cas_group_code != _PATIENT_GROUP,
+            )
+            .exists()
+        )
+        zero_paid = RemittanceServiceLine.paid_amount == 0
         row = session.execute(
             select(
                 func.count(),
-                func.count().filter(RemittanceServiceLine.paid_amount == 0, has_reason),
+                func.count().filter(zero_paid, payer_reason),
+                func.count().filter(zero_paid, any_reason, ~payer_reason),
             ).where(
                 RemittanceServiceLine.client_id == claim.client_id,
-                RemittanceServiceLine.claim_payment_id == payment_id,
+                RemittanceServiceLine.claim_payment_id == postings[0],
             )
         ).one()
-        lines, denied = int(row[0]), int(row[1])
+        lines, denied, patient_share_only = int(row[0]), int(row[1]), int(row[2])
 
-    replacements = session.scalar(
-        select(func.count()).where(
+    replacements = session.execute(
+        select(Claim.state, Claim.claim_frequency_code).where(
             Claim.client_id == claim.client_id, Claim.original_claim_id == claim.claim_id
         )
-    )
+    ).all()
 
     return Evidence(
         acknowledgement=AcknowledgementOutcome(latest_ack) if latest_ack else None,
-        adjudicated=payment_id is not None,
+        postings=len(postings),
         lines=lines,
         denied_lines=denied,
-        replaced=bool(replacements),
+        patient_share_only_lines=patient_share_only,
+        replaced=any(
+            ClaimState(state) in _TAKEN_BY_PAYER and frequency != _VOID
+            for state, frequency in replacements
+        ),
+        voided=any(frequency == _VOID for _, frequency in replacements),
     )
 
 
-def _plan(claim: Claim, state: ClaimState, evidence: Evidence) -> list[tuple[ClaimState, str]]:
-    """The steps the evidence supports from `state`, each with a note."""
+def _plan(
+    claim: Claim, state: ClaimState, evidence: Evidence
+) -> tuple[list[tuple[ClaimState, str]], list[Problem]]:
+    """The steps the evidence supports from `state`, and what stops it."""
     steps: list[tuple[ClaimState, str]] = []
+    problems: list[Problem] = []
 
     path = _PRE_SUBMISSION_AUTH if claim.prior_auth_number else _PRE_SUBMISSION_NO_AUTH
     if state is ClaimState.REGISTERED or state in path[:-1]:
+        # Inferred, not observed: an 837 is what these steps leave behind,
+        # not a record of them, and the note says so (PD-1).
         start = 0 if state is ClaimState.REGISTERED else path.index(state) + 1
-        steps.extend((s, "the 837 on file shows this step was done") for s in path[start:])
+        steps.extend((s, "inferred from the 837 on file, not observed") for s in path[start:])
         state = ClaimState.SUBMITTED
+
+    if (
+        evidence.acknowledgement is AcknowledgementOutcome.REJECTED
+        and evidence.adjudicated
+        and not evidence.replaced
+        and state in (ClaimState.SUBMITTED, ClaimState.REJECTED, ClaimState.IN_ADJUDICATION)
+    ):
+        # The 277CA said rejected and an 835 says adjudicated. One of them is
+        # wrong; guessing which would be a silent decision (PD-18).
+        return steps, [REJECTED_BUT_ADJUDICATED]
+
+    if state is ClaimState.REJECTED and evidence.acknowledgement is AcknowledgementOutcome.ACCEPTED:
+        # No automatic way back from Rejected: a person resent it, and a
+        # person says so.
+        problems.append(ACCEPTED_AFTER_REJECTION)
 
     if state is ClaimState.SUBMITTED:
         if evidence.adjudicated:
@@ -207,7 +336,7 @@ def _plan(claim: Claim, state: ClaimState, evidence: Evidence) -> list[tuple[Cla
             note = (
                 "277CA accepted the claim"
                 if accepted
-                else "inferred from the 835: no 277CA acceptance is on file"
+                else "inferred from the 835: no 277CA verdict is on file"
             )
             steps.append((ClaimState.IN_ADJUDICATION, note))
             state = ClaimState.IN_ADJUDICATION
@@ -218,22 +347,33 @@ def _plan(claim: Claim, state: ClaimState, evidence: Evidence) -> list[tuple[Cla
             steps.append((ClaimState.REJECTED, "277CA rejected the claim"))
             state = ClaimState.REJECTED
 
-    # An 835 with no service lines says nothing line-level; the claim waits
-    # in adjudication with its next action date rather than being guessed.
-    if state is ClaimState.IN_ADJUDICATION and evidence.adjudicated and evidence.lines:
-        if evidence.denied_lines == evidence.lines:
-            outcome = ClaimState.DENIED
-        elif evidence.denied_lines:
-            outcome = ClaimState.PARTIALLY_PAID
+    if state is ClaimState.IN_ADJUDICATION and evidence.adjudicated:
+        # Each problem leaves the claim in adjudication, with its next action
+        # date, and puts the 835 in front of a person.
+        if evidence.postings > 1:
+            problems.append(SEVERAL_POSTINGS)
+        elif not evidence.lines:
+            problems.append(NO_SERVICE_LINES)
+        elif evidence.patient_share_only_lines:
+            problems.append(PATIENT_SHARE_ONLY)
         else:
-            outcome = ClaimState.PAID
-        steps.append((outcome, f"835: {evidence.denied_lines} of {evidence.lines} lines denied"))
-        state = outcome
+            if evidence.denied_lines == evidence.lines:
+                outcome = ClaimState.DENIED
+            elif evidence.denied_lines:
+                outcome = ClaimState.PARTIALLY_PAID
+            else:
+                outcome = ClaimState.PAID
+            steps.append(
+                (outcome, f"835: {evidence.denied_lines} of {evidence.lines} lines denied")
+            )
+            state = outcome
 
-    if evidence.replaced and state in _REPLACEABLE:
-        steps.append((ClaimState.REPLACED, "a corrected submission references this one"))
+    if evidence.voided:
+        problems.append(VOIDED)
+    elif evidence.replaced and state in _REPLACEABLE:
+        steps.append((ClaimState.REPLACED, "a corrected submission the payer took replaces it"))
 
-    return steps
+    return steps, problems
 
 
 def _held_by_a_person(session: Session, claim: Claim) -> bool:
@@ -267,30 +407,38 @@ def _open_review(session: Session, claim: Claim, now: datetime) -> WorkItem:
     )
 
 
-def advance_claim(session: Session, *, claim: Claim, now: datetime) -> int:
-    """Take every step the evidence supports for one claim. Returns the count."""
+def _lock_claim(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) -> Claim:
+    """The claim, locked and re-read.
+
+    Progression, approval and send-back on one claim take turns, and each
+    works from the state as it is now rather than as it was when listed.
+    """
+    claim = session.scalar(
+        select(Claim)
+        .where(Claim.claim_id == claim_id, Claim.client_id == client_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if claim is None:
+        raise ValidationFailedError(field="claim_id", reason="no such claim for this client")
+    return claim
+
+
+def advance_claim(session: Session, *, claim: Claim, now: datetime) -> tuple[int, int]:
+    """Take every step the evidence supports for one claim.
+
+    Returns the steps taken and the problems raised.
+    """
+    claim = _lock_claim(session, claim_id=claim.claim_id, client_id=claim.client_id)
     state = ClaimState(claim.state)
     evidence = _evidence(session, claim)
+    steps, problems = _plan(claim, state, evidence)
 
-    if state is ClaimState.REJECTED and evidence.adjudicated and not evidence.replaced:
-        # The 277CA said rejected and an 835 says adjudicated. One of them is
-        # wrong; guessing which would be a silent decision (PD-18).
-        exceptions.raise_exception(
-            session,
-            client_id=claim.client_id,
-            kind=WorkItemKind.DATA_QUALITY,
-            problem="An 835 arrived for a claim the 277CA rejected",
-            record=exceptions.RecordRef("claim", claim.claim_id),
-            source_key=f"rejected-but-adjudicated:{claim.claim_id}",
-            now=now,
-            claim_id=claim.claim_id,
-        )
-        return 0
-
-    steps = _plan(claim, state, evidence)
     for target, note in steps:
         facts = None
         if target is ClaimState.SERVICE_RENDERED and state is ClaimState.ELIGIBILITY_VERIFIED:
+            # The machine needs the guard. The 837 carrying no prior-auth
+            # number is all it rests on, and the decision record says so.
             facts = {str(Guard.AUTH_NOT_REQUIRED): True}
         elif target is ClaimState.AUTH_PENDING:
             facts = {str(Guard.AUTH_REQUIRED): True}
@@ -318,14 +466,31 @@ def advance_claim(session: Session, *, claim: Claim, now: datetime) -> int:
             decision_type=DecisionType.PROGRESS,
             decided_by=ACTOR,
             logic_version=LOGIC_VERSION,
-            input_snapshot={"from_state": str(state), **evidence.snapshot()},
+            input_snapshot={
+                "from_state": str(state),
+                "inferred": note.startswith("inferred"),
+                "prior_auth_number_on_837": bool(claim.prior_auth_number),
+                **evidence.snapshot(),
+            },
             output={"to_state": str(target), "note": note},
         )
         state = target
 
+    for problem in problems:
+        exceptions.raise_exception(
+            session,
+            client_id=claim.client_id,
+            kind=WorkItemKind.DATA_QUALITY,
+            problem=problem.text,
+            record=exceptions.RecordRef("claim", claim.claim_id),
+            source_key=f"{problem.key}:{claim.claim_id}",
+            now=now,
+            claim_id=claim.claim_id,
+        )
+
     if steps:
         _open_review(session, claim, now)
-    return len(steps)
+    return len(steps), len(problems)
 
 
 def advance_all(session: Session, *, client_id: uuid.UUID, now: datetime) -> ProgressionReport:
@@ -347,16 +512,19 @@ def advance_all(session: Session, *, client_id: uuid.UUID, now: datetime) -> Pro
             Claim.client_id == client_id,
             Claim.state.not_in([str(s) for s in FINAL_STATES]),
         )
-        # Originals before the submissions that replace them.
-        .order_by(Claim.created_at, Claim.claim_id)
+        # Replacements before the claims they replace: an original is only
+        # Replaced once the payer has taken its replacement, so that one must
+        # move first for a single run to be enough.
+        .order_by(Claim.created_at.desc(), Claim.claim_id.desc())
     ).all()
     for claim in claims:
         report.claims_seen += 1
         if _held_by_a_person(session, claim):
             report.held.append(claim.claim_id)
             continue
-        taken = advance_claim(session, claim=claim, now=now)
+        taken, raised = advance_claim(session, claim=claim, now=now)
         report.transitions += taken
+        report.problems_raised += raised
         if taken:
             report.reviews_opened += 1
 
@@ -364,6 +532,7 @@ def advance_all(session: Session, *, client_id: uuid.UUID, now: datetime) -> Pro
         "claim_progression.advanced",
         claims_seen=report.claims_seen,
         transitions=report.transitions,
+        problems=report.problems_raised,
         held=len(report.held),
     )
     return report
@@ -398,6 +567,7 @@ def approve_steps(
     Returns how many were approved. A retry finds none and changes nothing
     (PD-14). Steps taken after this call wait for their own approval.
     """
+    _lock_claim(session, claim_id=claim_id, client_id=client_id)
     steps = _pending_steps(session, claim_id=claim_id, client_id=client_id)
     for step in steps:
         step.review_status = str(ReviewStatus.APPROVED)
@@ -463,6 +633,17 @@ def send_back_step(
     """
     if not reason.strip():
         raise ValidationFailedError(field="reason", reason="say why the step is wrong")
+    # The claim before the step, the order progression and approval lock in,
+    # so the three never wait on each other in a circle.
+    claim_id = session.scalar(
+        select(ClaimStateTransition.claim_id).where(
+            ClaimStateTransition.transition_id == transition_id,
+            ClaimStateTransition.client_id == client_id,
+        )
+    )
+    if claim_id is None:
+        raise ValidationFailedError(field="transition_id", reason="no such step for this client")
+    _lock_claim(session, claim_id=claim_id, client_id=client_id)
     step = session.scalar(
         select(ClaimStateTransition)
         .where(

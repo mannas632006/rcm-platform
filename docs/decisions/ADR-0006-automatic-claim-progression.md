@@ -22,12 +22,29 @@ its evidence goes, and no further:
 
 | Evidence | Steps |
 |---|---|
-| An 837 we hold | `Registered` → … → `Submitted`. The auth branch is taken when the 837 carries a prior-auth number. |
+| An 837 we hold | `Registered` → … → `Submitted`, each step noted as *inferred from the 837, not observed*. The auth branch is taken when the 837 carries a prior-auth number. |
 | 277CA accepted | `Submitted` → `InAdjudication` |
 | 277CA rejected | `Submitted` → `Rejected` (PD-4: never a denial) |
 | 835, no 277CA | `Submitted` → `InAdjudication`, noted as *inferred from the 835* |
-| 835 lines | All denied → `Denied`; some → `PartiallyPaid`; none → `Paid`. Uses the same denied-line rule as `rcm.analytics.denials`. |
-| A later claim chained by REF*F8 | → `Replaced` (Decision 2) |
+| One live 835 posting | All lines denied → `Denied`; some → `PartiallyPaid`; none → `Paid`. Uses the same denied-line rule as `rcm.analytics.denials`. |
+| A later claim chained by REF*F8, which the payer has taken | → `Replaced` (Decision 2) |
+
+These raise a named `DATA_QUALITY` exception instead, and the claim waits
+where it is, with its next action date (PD-18):
+
+| Evidence | Problem |
+|---|---|
+| 277CA rejected, and an 835 exists | `rejected-but-adjudicated` |
+| A `Rejected` claim whose latest 277CA accepts | `accepted-after-rejection` |
+| Two or more live 835 postings (split claim, secondary payer) | `several-835-postings` |
+| An 835 with no service lines | `835-without-service-lines` |
+| A line paid nothing whose only reasons are patient responsibility (PR) | `835-patient-share-only-line` |
+| A void (frequency 8) chained to the claim | `void-received` |
+
+CLP02 is not used to tell primary from secondary 835s: the synthetic
+generator writes `2` on primary claims that carry a patient share. The PR
+rule is held, not decided, because the denied-line rule also lives in two
+dbt models. Settling it in all three places is M4.8's job.
 
 Evidence is matched on CLM01 alone, since `uq_claim_client_submitter_id`
 allows one claim per CLM01 per client. It is never limited by load time,
@@ -59,8 +76,14 @@ still needs an end, or the old row waits for a next action forever.
 `Rejected`, `InAdjudication`, `Denied`, `PartiallyPaid`, `Paid` and
 `Correcting`. The claim's follow-up continues on the replacing submission.
 
-A void (frequency 8) is treated the same way for now. Telling a void apart
-from a replacement is left to M4.
+An original becomes `Replaced` only once the payer has taken the replacing
+submission (`InAdjudication` or later). Until then the original is still
+the live claim, and ending it would lose it if the replacement is rejected.
+Progression walks newest claims first, so a replacement moves before its
+original in the same run.
+
+A void (frequency 8) does not make a claim `Replaced`. It is held for a
+person until M4 handles voids and the recoupments that follow them.
 
 ## Decision 3: every system step waits for review
 
@@ -109,7 +132,18 @@ set in `Settings.next_action_days` and registered in
 
 - Migration 0015 adds `Replaced`, the review columns, `sequence` and the
   `CLAIM_STEP_REVIEW` kind. The downgrade refuses while any `Replaced` claim
-  or step review exists.
+  or step review exists. On a large populated table, adding `sequence`
+  rewrites `claim_state_transition` and the CHECKs validate under an
+  exclusive lock. That is acceptable before the first deployment. After it,
+  this kind of change needs a maintenance window or `NOT VALID` plus
+  `VALIDATE`.
+- Migration 0016 indexes `claim (client_id, original_claim_id)`. Without the
+  index, the "what replaces this claim" lookup scanned the client's claims
+  once per claim.
+- Progression, approval and send-back each lock the claim row first. They
+  take turns, and each works from the claim's current state.
+- Still a person's job, until an API exists: checking that the operator who
+  approves steps is allowed to.
 - A reversed payment is not progression's to act on. Reopening the claim
   (BR-STATE-03) stays a person's decision.
 - Tests: `tests/integration/test_claim_progression.py` (GATE M3 path,

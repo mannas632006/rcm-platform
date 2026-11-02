@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -29,7 +31,10 @@ from rcm.work import progression
 from rcm.work.models import WorkItem, WorkItemKind
 from rcm.work.state import WorkItemState
 from tests.integration.test_acknowledgement_loading import (
+    CHARGE,
     CLIENT_A,
+    PAID,
+    _remittance,
     ack_277ca,
     acknowledge,
     denial_for,
@@ -38,6 +43,7 @@ from tests.integration.test_acknowledgement_loading import (
     submit,
 )
 from tests.integration.test_claim_loading import claim, file_for
+from tests.integration.test_reversals import reversal_for
 
 pytestmark = pytest.mark.integration
 
@@ -165,24 +171,169 @@ def test_an_835_without_a_277ca_is_inferred_and_says_so(root: Path) -> None:
         assert "inferred" in accepted.note
 
 
-def test_a_resubmission_replaces_the_original(root: Path) -> None:
-    """ADR-0006: the denied original ends Replaced; the claim carries on."""
-    submit("CLM-O", root, control="0001")
-    acknowledge(ack_277ca(("CLM-O", "A2:20")), root, name="277ca.edi")
-    remit(denial_for("CLM-O", control="0001"), root, name="835.edi")
+def resubmit(claim_id: str, original: str, root: Path, *, frequency: str) -> None:
     with session_scope() as session:
         load_claim_file(
             session,
-            file_for(claim("CLM-O2", original="CLM-O", frequency="7"), control="0002"),
+            file_for(claim(claim_id, original=original, frequency=frequency), control="0002"),
             client_id=CLIENT_A,
-            original_filename="re.edi",
+            original_filename=f"{claim_id}.edi",
+            archive_root=root,
+        )
+
+
+def problems_on(submitter_id: str) -> list[str]:
+    """The DATA_QUALITY problems raised on a claim, by the kind of problem."""
+    with session_scope() as session:
+        keys = session.scalars(
+            select(WorkItem.source_key).where(
+                WorkItem.kind == str(WorkItemKind.DATA_QUALITY),
+                WorkItem.claim_id == claim_named(submitter_id),
+            )
+        ).all()
+    return sorted(k.rsplit(":", 1)[0] for k in keys)
+
+
+def test_a_resubmission_replaces_the_original_once_the_payer_takes_it(root: Path) -> None:
+    """ADR-0006: the denied original ends Replaced and the claim carries on --
+    but only once the payer has taken the replacement. Until then the
+    original is the live claim, and ending it would lose it if the
+    replacement is rejected."""
+    submit("CLM-O", root, control="0001")
+    acknowledge(ack_277ca(("CLM-O", "A2:20")), root, name="277ca.edi")
+    remit(denial_for("CLM-O", control="0001"), root, name="835.edi")
+    resubmit("CLM-O2", "CLM-O", root, frequency="7")
+    advance()
+    assert state_of("CLM-O") is ClaimState.DENIED
+    assert state_of("CLM-O2") is ClaimState.SUBMITTED
+
+    acknowledge(ack_277ca(("CLM-O2", "A2:20"), control="0002"), root, name="277ca-2.edi")
+    report = advance()
+    assert state_of("CLM-O2") is ClaimState.IN_ADJUDICATION
+    assert state_of("CLM-O") is ClaimState.REPLACED
+    # The denial is in its history before the replacement, not skipped.
+    assert targets_of("CLM-O")[-2:] == ["Denied", "Replaced"]
+    # Replacement first, then original: one run was enough.
+    assert report.transitions == 2
+
+
+def test_a_void_is_held_for_a_person_not_called_a_replacement(root: Path) -> None:
+    """A void (frequency 8) ends the claim at the payer and may bring a
+    recoupment. Until M4 tells it apart, a person handles it."""
+    submit("CLM-VO", root, control="0001")
+    acknowledge(ack_277ca(("CLM-VO", "A2:20")), root, name="277ca.edi")
+    remit(payment_for("CLM-VO", control="0001"), root, name="835.edi")
+    resubmit("CLM-VO8", "CLM-VO", root, frequency="8")
+    acknowledge(ack_277ca(("CLM-VO8", "A2:20"), control="0002"), root, name="277ca-2.edi")
+    advance()
+    assert state_of("CLM-VO") is ClaimState.PAID
+    assert problems_on("CLM-VO") == ["void-received"]
+
+
+# ---------------------------------------------------------------------------
+# Evidence the module will not guess past (PD-18)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.invariant
+def test_a_rejection_then_an_835_is_held_even_before_the_claim_moved(root: Path) -> None:
+    """Both files are on file before the first run. The 835 must not quietly
+    win over the rejection, and the history must not say no verdict came."""
+    submit("CLM-RX", root, control="0001")
+    acknowledge(ack_277ca(("CLM-RX", "A3:21")), root, name="277ca.edi")
+    remit(payment_for("CLM-RX", control="0001"), root, name="835.edi")
+    advance()
+    assert state_of("CLM-RX") is ClaimState.SUBMITTED
+    assert problems_on("CLM-RX") == ["rejected-but-adjudicated"]
+
+
+def test_an_acceptance_after_a_rejection_goes_to_a_person(root: Path) -> None:
+    submit("CLM-RA", root, control="0001")
+    acknowledge(ack_277ca(("CLM-RA", "A3:21")), root, name="277ca.edi")
+    advance()
+    assert state_of("CLM-RA") is ClaimState.REJECTED
+    acknowledge(ack_277ca(("CLM-RA", "A2:20"), control="0002"), root, name="277ca-2.edi")
+    advance()
+    assert state_of("CLM-RA") is ClaimState.REJECTED
+    assert problems_on("CLM-RA") == ["accepted-after-rejection"]
+
+
+def test_two_live_835_postings_are_not_picked_between(root: Path) -> None:
+    """A split claim or a secondary payer's 835 for the same CLM01: reading
+    one and ignoring the other could call a denied claim paid."""
+    submit("CLM-2X", root, control="0001")
+    acknowledge(ack_277ca(("CLM-2X", "A2:20")), root, name="277ca.edi")
+    remit(payment_for("CLM-2X", control="0001"), root, name="835-a.edi")
+    remit(denial_for("CLM-2X", control="0002"), root, name="835-b.edi")
+    advance()
+    assert state_of("CLM-2X") is ClaimState.IN_ADJUDICATION
+    assert problems_on("CLM-2X") == ["several-835-postings"]
+
+
+def test_a_line_paid_nothing_for_the_patient_share_is_not_a_denial(root: Path) -> None:
+    """Deductible not met: the payer approved the line and the patient owes
+    it all. Calling that a denial queues false denial work."""
+    submit("CLM-DED", root, control="0001")
+    acknowledge(ack_277ca(("CLM-DED", "A2:20")), root, name="277ca.edi")
+    body = [
+        f"CLP*CLM-DED*1*{CHARGE}*0.00*{CHARGE}*MB*PCNCLM-DED*11~",
+        "NM1*QC*1*Castellanos*Andre****MI*VAZ957419823~",
+        f"SVC*HC:99203*{CHARGE}*0.00**1~",
+        f"CAS*PR*1*{CHARGE}~",
+        "AMT*B6*0.00~",
+    ]
+    remit(_remittance(body, control="0001", check=Decimal("0.00")), root, name="835.edi")
+    advance()
+    assert state_of("CLM-DED") is ClaimState.IN_ADJUDICATION
+    assert problems_on("CLM-DED") == ["835-patient-share-only-line"]
+
+
+def test_some_lines_denied_is_partially_paid(root: Path) -> None:
+    submit("CLM-PP", root, control="0001")
+    acknowledge(ack_277ca(("CLM-PP", "A2:20")), root, name="277ca.edi")
+    total = CHARGE * 2
+    body = [
+        f"CLP*CLM-PP*1*{total}*{PAID}**MB*PCNCLM-PP*11~",
+        "NM1*QC*1*Castellanos*Andre****MI*VAZ957419823~",
+        f"SVC*HC:99203*{CHARGE}*{PAID}**1~",
+        f"CAS*CO*45*{CHARGE - PAID}~",
+        f"SVC*HC:99213*{CHARGE}*0.00**1~",
+        f"CAS*CO*50*{CHARGE}~",
+    ]
+    remit(_remittance(body, control="0001", check=PAID), root, name="835.edi")
+    advance()
+    assert state_of("CLM-PP") is ClaimState.PARTIALLY_PAID
+    assert problems_on("CLM-PP") == []
+
+
+def test_a_reversed_payment_is_not_an_outcome(root: Path) -> None:
+    """BR-STATE-03: money moving backwards is a person's call. A payment the
+    payer took back says nothing about how the claim ended."""
+    submit("CLM-REV", root, control="0001")
+    acknowledge(ack_277ca(("CLM-REV", "A2:20")), root, name="277ca.edi")
+    remit(payment_for("CLM-REV", control="0001"), root, name="835.edi")
+    remit(reversal_for("CLM-REV", control="0002"), root, name="835-rev.edi")
+    advance()
+    assert state_of("CLM-REV") is ClaimState.IN_ADJUDICATION
+    assert "Paid" not in targets_of("CLM-REV")
+
+
+def test_a_claim_with_a_prior_auth_number_takes_the_auth_path(root: Path) -> None:
+    """REF*G1 on the 837: a payer issued an authorisation, so one was needed.
+    The steps are recorded as inferred, never as observed."""
+    with session_scope() as session:
+        load_claim_file(
+            session,
+            file_for(replace(claim("CLM-AUTH"), prior_auth_number="AUTH12345"), control="0001"),
+            client_id=CLIENT_A,
+            original_filename="auth.edi",
             archive_root=root,
         )
     advance()
-    assert state_of("CLM-O") is ClaimState.REPLACED
-    assert state_of("CLM-O2") is ClaimState.SUBMITTED
-    # The denial is in its history before the replacement, not skipped.
-    assert targets_of("CLM-O")[-2:] == ["Denied", "Replaced"]
+    assert targets_of("CLM-AUTH")[:3] == ["EligibilityVerified", "AuthPending", "AuthApproved"]
+    with session_scope() as session:
+        rows = history(session, claim_id=claim_named("CLM-AUTH"), client_id=CLIENT_A)
+        assert all("inferred" in r.note for r in rows)
 
 
 def test_evidence_that_arrives_before_the_claim_still_counts(root: Path) -> None:

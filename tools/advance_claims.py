@@ -26,7 +26,7 @@ from rcm.domain.claim_lifecycle import claims_needing_action
 from rcm.domain.claim_state_log import ClaimStateTransition
 from rcm.platform.db import session_scope
 from rcm.work import progression
-from rcm.work.models import WorkItem
+from rcm.work.models import WorkItem, WorkItemKind
 from tools.load_corpus import DEFAULT_CLIENT
 
 
@@ -65,6 +65,18 @@ def main(argv: list[str] | None = None) -> int:
             .group_by(WorkItem.kind)
             .order_by(WorkItem.kind)
         ).all()
+        # source_key is "<problem>:<claim id>"; the problem is what a person
+        # is being asked to look at.
+        problem = func.split_part(WorkItem.source_key, ":", 1)
+        problems = session.execute(
+            select(problem, func.count())
+            .where(
+                WorkItem.client_id == client_id,
+                WorkItem.kind == str(WorkItemKind.DATA_QUALITY),
+            )
+            .group_by(problem)
+            .order_by(problem)
+        ).all()
 
     out = sys.stdout.write
     out(f"claims seen        {first.claims_seen}\n")
@@ -72,12 +84,16 @@ def main(argv: list[str] | None = None) -> int:
     out(f"steps, second run  {second.transitions}\n")
     out(f"steps on record    {steps}\n")
     out(f"held for a person  {len(first.held)}\n")
+    out(f"problems raised    {first.problems_raised}\n")
     out("claims by state\n")
     for state, count in states:
         out(f"  {state:<16} {count}\n")
     out("work items by kind\n")
     for kind, count in items:
         out(f"  {kind:<26} {count}\n")
+    out("data quality problems\n")
+    for name, count in problems:
+        out(f"  {name:<30} {count}\n")
     out(f"claims with no next action date  {len(unscheduled)}\n")
     return 0 if not unscheduled and second.transitions == 0 else 1
 

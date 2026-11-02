@@ -51,6 +51,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -214,6 +215,14 @@ class Claim(Base):
         # The counting index. Every "how many claims" question groups by this.
         Index("ix_claim_root", "client_id", "root_claim_id"),
         Index("ix_claim_payer", "client_id", "payer_id"),
+        # Claim progression asks "what replaces this claim" once per claim per
+        # run (ADR-0006); without this each ask scans the client's claims.
+        Index(
+            "ix_claim_original",
+            "client_id",
+            "original_claim_id",
+            postgresql_where=text("original_claim_id IS NOT NULL"),
+        ),
         # Every trailing-window feature orders by the submission date within
         # a client, and M2.5's temporal split cuts on it.
         Index("ix_claim_submitted_on", "client_id", "submitted_on"),
