@@ -28,13 +28,14 @@ import re
 import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Final
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session, aliased
 
-from rcm.decision import ncci_store
+from rcm.decision import ncci_store, registry
 from rcm.decision.denial_models import DenialClassification
 from rcm.decision.denials import (
     CATEGORY_RULES,
@@ -258,6 +259,7 @@ class _Answer:
 _CHECK_CATEGORY: Final[dict[str, DenialCategory]] = {
     "NCCI_PTP": C.CODING,
     "NCCI_MUE": C.MEDICAL_NECESSITY,
+    registry.PRIOR_AUTH_CHECK: C.AUTHORISATION,
 }
 
 #: Modes that act on a claim. A shadow rule is recorded, never acted on, so
@@ -350,7 +352,10 @@ def _flagged_now(
         mue_release=ruleset.ncci_mue_release,
         codes={str(line.values["line.procedure_code"]) for line in facts.lines},
     )
-    for finding in evaluate(ruleset.rules, facts, checks=[ncci]).findings:
+    payer_registry = registry.check_for(
+        session, payer_id=str(facts.claim["claim.payer_id"]), today=datetime.now(UTC).date()
+    )
+    for finding in evaluate(ruleset.rules, facts, checks=[ncci, payer_registry]).findings:
         if (
             finding.outcome is Outcome.FLAGGED
             and str(finding.mode) in _ACTING

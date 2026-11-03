@@ -12,14 +12,14 @@ import uuid
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Final
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from rcm.decision import ncci_store
+from rcm.decision import ncci_store, registry
 from rcm.decision.rules.correct import Correction, run_pipeline
 from rcm.decision.rules.evaluate import ClaimFacts, Evaluation, LineFacts
 from rcm.decision.rules.store import load_ruleset
@@ -120,8 +120,14 @@ def _plain(value: object) -> object:
     return value
 
 
-def scrub_claim(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) -> ScrubResult:
-    """Evaluate the claim and record the decision in the caller's transaction."""
+def scrub_claim(
+    session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID, today: date | None = None
+) -> ScrubResult:
+    """Evaluate the claim and record the decision in the caller's transaction.
+
+    `today` dates the payer registry's staleness; it is the current date
+    unless a caller replays a scrub as of another.
+    """
     facts = claim_facts(session, claim_id=claim_id, client_id=client_id)
     ruleset = load_ruleset(session)
     # Exactly the NCCI releases the ruleset pinned (ADR-0008 Decision 3).
@@ -131,8 +137,15 @@ def scrub_claim(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) 
         mue_release=ruleset.ncci_mue_release,
         codes={str(line.values["line.procedure_code"]) for line in facts.lines},
     )
+    # The payer's registry entries as they stand, stale ones advisory only
+    # (BR-REG-02, ADR-0014).
+    payer_registry = registry.check_for(
+        session,
+        payer_id=str(facts.claim["claim.payer_id"]),
+        today=today or datetime.now(UTC).date(),
+    )
     # Fix what has one right answer, re-run from Layer 1 (ADR-0011).
-    corrected = run_pipeline(ruleset.rules, facts, checks=[ncci])
+    corrected = run_pipeline(ruleset.rules, facts, checks=[ncci, payer_registry])
     evaluation = corrected.evaluation
     # The verdict rests on the corrected facts, so the stored claim is
     # corrected in this same transaction: a PASS never describes a claim the
@@ -169,6 +182,8 @@ def scrub_claim(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) 
             "ruleset_digest": ruleset.digest,
             "ncci_ptp_release": ruleset.ncci_ptp_release,
             "ncci_mue_release": ruleset.ncci_mue_release,
+            # BR-REG-03: which registry versions applied, and whether stale.
+            "registry": payer_registry.snapshot(facts),
             "claim": {k: _plain(v) for k, v in facts.claim.items()},
             "lines": [
                 {"line_number": line.number, **{k: _plain(v) for k, v in line.values.items()}}
