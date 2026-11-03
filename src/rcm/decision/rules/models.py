@@ -14,6 +14,7 @@ from decimal import Decimal
 from typing import Any, Final
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -23,6 +24,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     func,
     text,
 )
@@ -145,6 +147,47 @@ class RuleBacktest(Base):
             name="ck_rule_backtest_fp_rate",
         ),
         Index("ix_rule_backtest_rule", "rule_id", "version", "ran_at"),
+    )
+
+
+class RuleStatusChange(Base):
+    """One step of one rule version along the lifecycle (M4.5, ADR-0010).
+    Insert-only: the history of who promoted what, on what evidence."""
+
+    __tablename__ = "rule_status_change"
+
+    change_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    #: Order of changes made within one transaction, which share `changed_at`.
+    sequence: Mapped[int] = mapped_column(BigInteger, Identity(always=True), nullable=False)
+    rule_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    from_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    to_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    changed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    backtest_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("rule_backtest.backtest_id"), nullable=True
+    )
+    fp_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["rule_id", "version"],
+            ["rule_version.rule_id", "rule_version.version"],
+            name="fk_rule_status_change_rule_version",
+        ),
+        CheckConstraint("length(trim(reason)) > 0", name="ck_rule_status_change_reason"),
+        # SHADOW and BLOCKING rest on a backtest; the record must name it.
+        CheckConstraint(
+            "to_status NOT IN ('SHADOW', 'BLOCKING') OR backtest_id IS NOT NULL",
+            name="ck_rule_status_change_evidence",
+        ),
+        Index("ix_rule_status_change_rule", "rule_id", "version", "sequence"),
     )
 
 
