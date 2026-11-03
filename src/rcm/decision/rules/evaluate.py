@@ -122,6 +122,8 @@ class Finding:
     #: What a built-in check matched, e.g. the NCCI edit. Empty for a rule,
     #: which its id and version already name.
     reference: str = ""
+    #: The catalogued fix (ADR-0011), when the rule auto-corrects.
+    fix: str | None = None
 
 
 class Check(Protocol):
@@ -227,6 +229,7 @@ def _check(active: ActiveRule, facts: ClaimFacts) -> list[Finding]:
                 line_number=number,
                 message=rule.action.message,
                 route_to=rule.action.route_to,
+                fix=rule.action.fix if rule.action.auto_correct else None,
             )
         )
     return found

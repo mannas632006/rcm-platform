@@ -20,8 +20,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from rcm.decision import ncci_store
-from rcm.decision.rules.evaluate import ClaimFacts, Evaluation, LineFacts, evaluate
+from rcm.decision.rules.correct import Correction, run_pipeline
+from rcm.decision.rules.evaluate import ClaimFacts, Evaluation, LineFacts
 from rcm.decision.rules.store import load_ruleset
+from rcm.domain import claim_correction
 from rcm.domain.claim import Claim, ClaimLine
 from rcm.platform.audit import DecisionType, record_decision
 from rcm.platform.errors import ResourceNotFoundError
@@ -34,6 +36,8 @@ class ScrubResult:
     ruleset_version: int
     ruleset_digest: str
     evaluation: Evaluation
+    #: Fixes applied to the stored claim before the final evaluation.
+    corrections: tuple[Correction, ...] = ()
 
 
 def claim_facts(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) -> ClaimFacts:
@@ -127,7 +131,32 @@ def scrub_claim(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) 
         mue_release=ruleset.ncci_mue_release,
         codes={str(line.values["line.procedure_code"]) for line in facts.lines},
     )
-    evaluation = evaluate(ruleset.rules, facts, checks=[ncci])
+    # Fix what has one right answer, re-run from Layer 1 (ADR-0011).
+    corrected = run_pipeline(ruleset.rules, facts, checks=[ncci])
+    evaluation = corrected.evaluation
+    # The verdict rests on the corrected facts, so the stored claim is
+    # corrected in this same transaction: a PASS never describes a claim the
+    # database still holds uncorrected.
+    for change in corrected.corrections:
+        if change.line_number is None:
+            claim_correction.correct_diagnoses(
+                session,
+                claim_id=claim_id,
+                client_id=client_id,
+                diagnoses=change.after,
+                fix=change.fix,
+                actor=DECIDED_BY,
+            )
+        else:
+            claim_correction.correct_line_modifiers(
+                session,
+                claim_id=claim_id,
+                client_id=client_id,
+                line_number=change.line_number,
+                modifiers=change.after,
+                fix=change.fix,
+                actor=DECIDED_BY,
+            )
     record_decision(
         session,
         entity_type="claim",
@@ -162,9 +191,23 @@ def scrub_claim(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) 
                 }
                 for f in evaluation.findings
             ],
+            "rounds": corrected.rounds,
+            "corrections": [
+                {
+                    "fix": c.fix,
+                    "field": c.field,
+                    "line_number": c.line_number,
+                    "before": c.before,
+                    "after": c.after,
+                }
+                for c in corrected.corrections
+            ],
         },
     )
     session.flush()
     return ScrubResult(
-        ruleset_version=ruleset.version, ruleset_digest=ruleset.digest, evaluation=evaluation
+        ruleset_version=ruleset.version,
+        ruleset_digest=ruleset.digest,
+        evaluation=evaluation,
+        corrections=corrected.corrections,
     )

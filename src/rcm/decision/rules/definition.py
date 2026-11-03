@@ -17,7 +17,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Final
 
-from rcm.platform.errors import ValidationFailedError
+from rcm.platform.errors import ManualCodingRequiredError, ValidationFailedError
 
 
 class Layer(StrEnum):
@@ -90,9 +90,10 @@ class FieldType(StrEnum):
     TEXT_LIST = "text_list"
 
 
-#: What a condition may name. None of it is PHI (PD-13), so a finding's
-#: inputs are recorded in full. A rule needing PHI waits for M4.10, where
-#: the read is audited (PD-2).
+#: What a condition may name. No direct identifier is among them. Codes tied
+#: to a claim are still health information, so the facts go only to
+#: decision_record, never to logs or errors (PD-13, ADR-0011). A rule
+#: needing an identifier waits for M4.10, where the read is audited (PD-2).
 FIELDS: Final[Mapping[str, FieldType]] = {
     "claim.payer_id": FieldType.TEXT,
     "claim.claim_frequency_code": FieldType.TEXT,
@@ -136,6 +137,17 @@ _OPS: Final[Mapping[Op, frozenset[FieldType]]] = {
 #: The work a finding can be routed to. Names of `rcm.work`'s kinds, which
 #: this layer cannot import.
 ROUTES: Final = frozenset({"SCRUB_EXCEPTION", "AUTH_PROBLEM", "ELIGIBILITY_PROBLEM"})
+
+#: BR-M7-03 / ADR-0011: the only fixes, each pure formatting, and whether it
+#: works on one line or on the claim. Nothing here adds a modifier.
+FIX_SCOPES: Final[Mapping[str, str]] = {
+    "UPPERCASE_MODIFIERS": "line",
+    "DEDUPLICATE_MODIFIERS": "line",
+    "STRIP_DIAGNOSIS_DECIMAL": "claim",
+}
+
+#: PD-16: 25 and 59, and 59's X{EPSU} subset. Never added by the system.
+PROTECTED_MODIFIERS: Final = frozenset({"25", "59", "XE", "XP", "XS", "XU"})
 
 _RULE_ID: Final = re.compile(r"[A-Z0-9][A-Z0-9_]{0,119}")
 _SCOPE_KEYS: Final = {"payer_id", "cpt"}
@@ -181,6 +193,8 @@ class Action:
     message: str
     route_to: str
     auto_correct: bool = False
+    #: A name from FIX_SCOPES; set only when auto_correct is.
+    fix: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,10 +318,23 @@ def _action(raw: object) -> Action:
         raise _refuse("action", "an action object")
     if raw.get("type") != "FLAG":
         raise _refuse("action.type", "FLAG")
-    if raw.get("auto_correct", False) is not False:
-        # ADR-0007: refused until M4.7 builds the deterministic fixes and
-        # their PD-16 refusals.
-        raise _refuse("action.auto_correct", "auto-correction is not available yet")
+    fix = raw.get("fix")
+    if fix == "ADD_MODIFIER":
+        # PD-16 / FR-RULES-05 / BR-M7-03. A modifier asserts something about
+        # the encounter; choosing one is a coder's judgment, never a fix.
+        value = str(raw.get("value", "")).strip().upper()
+        if value in PROTECTED_MODIFIERS:
+            raise ManualCodingRequiredError(field="action.value", modifier=value)
+        raise _refuse("action.fix", "adding a modifier is a coding judgment, not a fix")
+    auto_correct = raw.get("auto_correct", False)
+    if not isinstance(auto_correct, bool):
+        raise _refuse("action.auto_correct", "true or false")
+    if auto_correct and fix not in FIX_SCOPES:
+        raise _refuse(
+            "action.auto_correct", f"name a fix from the catalogue: {', '.join(sorted(FIX_SCOPES))}"
+        )
+    if not auto_correct and fix is not None:
+        raise _refuse("action.fix", "a fix runs only with auto_correct: true")
     message = raw.get("message")
     if not isinstance(message, str) or not message.strip():
         raise _refuse("action.message", "a message for the person who works the finding")
@@ -317,7 +344,12 @@ def _action(raw: object) -> Action:
     route = raw.get("route_to")
     if route not in ROUTES:
         raise _refuse("action.route_to", f"one of {', '.join(sorted(ROUTES))}")
-    return Action(message=message, route_to=str(route))
+    return Action(
+        message=message,
+        route_to=str(route),
+        auto_correct=auto_correct,
+        fix=str(fix) if fix is not None else None,
+    )
 
 
 def parse_rule(document: Mapping[str, Any]) -> Rule:
@@ -344,7 +376,7 @@ def parse_rule(document: Mapping[str, Any]) -> Rule:
     if not isinstance(provenance, Mapping):
         raise _refuse("provenance", "an object")
 
-    return Rule(
+    rule = Rule(
         rule_id=rule_id,
         layer=layer,
         severity=severity,
@@ -353,3 +385,8 @@ def parse_rule(document: Mapping[str, Any]) -> Rule:
         action=_action(document.get("action")),
         provenance=dict(provenance),
     )
+    fix = rule.action.fix
+    if fix is not None and FIX_SCOPES[fix] == "line" and not rule.is_line_level:
+        # A line fix needs to know which line its finding is on.
+        raise _refuse("action.fix", f"{fix} fixes a line; the rule must test a line field")
+    return rule

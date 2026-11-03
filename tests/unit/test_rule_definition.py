@@ -177,8 +177,9 @@ def test_a_bad_rule_is_refused(key: str, value: Any) -> None:
     refused(doc(**{key: value}))
 
 
-def test_auto_correction_is_refused_until_the_fixes_exist() -> None:
-    """ADR-0007: nothing changes a claim before M4.7's PD-16 refusals do."""
+def test_auto_correction_without_a_named_fix_is_refused() -> None:
+    """ADR-0011: auto_correct needs a fix from the catalogue; a message
+    asking for one is not a fix."""
     error = refused(
         doc(
             action={

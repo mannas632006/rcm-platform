@@ -63,8 +63,11 @@ come from a fixed list, each with a type:
 
 A rule is checked when it is created, not when it runs: an unknown field, an
 operator that does not fit the field's type, or a value of the wrong type is
-refused by name. No field carries PHI (member ID, name, date of birth), so a
-finding's inputs can be recorded in full (PD-13). Rules that need PHI, such as
+refused by name. No field is a direct identifier (member ID, name, date of
+birth). Diagnosis and procedure codes tied to a claim are still health
+information, so the facts are recorded only in `decision_record`, in the
+access- and audit-controlled database, and never in logs, metrics or errors
+(PD-13; corrected by ADR-0011). Rules that need identifiers, such as
 member-ID patterns (Layer 2), come with the payer registry in M4.10, where
 their reads can be audited (PD-2).
 
