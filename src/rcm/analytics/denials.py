@@ -153,6 +153,15 @@ def _denied_submitter_claim_ids(client_id: uuid.UUID) -> Select[str]:
     )
 
 
+def denied_submitter_claim_ids(client_id: uuid.UUID) -> Select[str]:
+    """The same definition of a denial, for the rules backtest (M4.4).
+
+    One definition, so a backtest's true positives and the denial rate count
+    the same thing.
+    """
+    return _denied_submitter_claim_ids(client_id)
+
+
 def denial_rate(session: Session, *, client_id: uuid.UUID) -> DenialRate:
     """Denial rate for one client, counted per claim (BR-DATA-03).
 

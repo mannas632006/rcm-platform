@@ -9,6 +9,8 @@ no PHI (ADR-0007 Decision 4), so they are recorded in full.
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -46,6 +48,26 @@ def claim_facts(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) 
         .where(ClaimLine.client_id == client_id, ClaimLine.claim_id == claim_id)
         .order_by(ClaimLine.line_number)
     ).all()
+    return facts_from(claim, lines)
+
+
+def client_facts(session: Session, *, client_id: uuid.UUID) -> Iterator[tuple[Claim, ClaimFacts]]:
+    """Every claim of one client with its facts, in two queries (M4.4)."""
+    lines: dict[uuid.UUID, list[ClaimLine]] = defaultdict(list)
+    for line in session.scalars(
+        select(ClaimLine)
+        .where(ClaimLine.client_id == client_id)
+        .order_by(ClaimLine.claim_id, ClaimLine.line_number)
+    ):
+        lines[line.claim_id].append(line)
+    for claim in session.scalars(
+        select(Claim).where(Claim.client_id == client_id).order_by(Claim.claim_id)
+    ):
+        yield claim, facts_from(claim, lines[claim.claim_id])
+
+
+def facts_from(claim: Claim, lines: Sequence[ClaimLine]) -> ClaimFacts:
+    """The one place a claim becomes facts: scrub and backtest share it."""
     return ClaimFacts(
         claim={
             "claim.payer_id": claim.payer_id,

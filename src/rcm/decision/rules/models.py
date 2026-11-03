@@ -7,8 +7,10 @@ and can only insert rulesets.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Iterable
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Final
 
 from sqlalchemy import (
@@ -19,11 +21,13 @@ from sqlalchemy import (
     Identity,
     Index,
     Integer,
+    Numeric,
     String,
     func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from rcm.decision.ncci_models import NcciRelease as _NcciRelease  # noqa: F401 - FK target
@@ -98,6 +102,50 @@ class Ruleset(Base):
     )
 
     __table_args__ = (CheckConstraint("rule_count >= 0", name="ck_ruleset_rule_count"),)
+
+
+class RuleBacktest(Base):
+    """One backtest of one rule version against one client's history
+    (M4.4, ADR-0009). Insert-only: M4.5 promotes on what is recorded here."""
+
+    __tablename__ = "rule_backtest"
+
+    backtest_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    rule_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    claims_evaluated: Mapped[int] = mapped_column(Integer, nullable=False)
+    flagged: Mapped[int] = mapped_column(Integer, nullable=False)
+    true_positives: Mapped[int] = mapped_column(Integer, nullable=False)
+    false_positives: Mapped[int] = mapped_column(Integer, nullable=False)
+    missed_denials: Mapped[int] = mapped_column(Integer, nullable=False)
+    indeterminate: Mapped[int] = mapped_column(Integer, nullable=False)
+    without_outcome: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: None when nothing was flagged: no evidence of accuracy, not 0%.
+    fp_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
+    ran_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    ran_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["rule_id", "version"],
+            ["rule_version.rule_id", "rule_version.version"],
+            name="fk_rule_backtest_rule_version",
+        ),
+        CheckConstraint(
+            "flagged = true_positives + false_positives AND flagged <= claims_evaluated",
+            name="ck_rule_backtest_counts",
+        ),
+        CheckConstraint(
+            "(flagged = 0 AND fp_rate IS NULL) OR (flagged > 0 AND fp_rate BETWEEN 0 AND 1)",
+            name="ck_rule_backtest_fp_rate",
+        ),
+        Index("ix_rule_backtest_rule", "rule_id", "version", "ran_at"),
+    )
 
 
 class RulesetMember(Base):
