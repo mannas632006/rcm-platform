@@ -40,6 +40,7 @@ from typing import Final
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
+from rcm.analytics.denials import refusal_clause
 from rcm.domain.acknowledgement import (
     AcknowledgementOutcome,
     AcknowledgementSource,
@@ -63,8 +64,6 @@ log = get_logger(__name__)
 LOGIC_VERSION: Final = "progression-v1"
 ACTOR: Final = "system:claim_progression"
 _SENT_BACK_KEY: Final = "step-sent-back:"
-#: CAS group PR: the patient owes it; the payer did not refuse it.
-_PATIENT_GROUP: Final = "PR"
 
 #: Before the payer: an 837 on file is what these steps leave behind, so they
 #: are inferred from it and recorded as inferred. The authorisation branch is
@@ -154,8 +153,8 @@ NO_SERVICE_LINES: Final = Problem(
 )
 PATIENT_SHARE_ONLY: Final = Problem(
     "835-patient-share-only-line",
-    "An 835 line was paid nothing with only patient-responsibility reasons; "
-    "a person decides whether it is a denial",
+    "An 835 line was paid nothing with no refusal reason (the patient's cost share "
+    "or a payment adjustment took it all); a person sets the outcome",
 )
 VOIDED: Final = Problem(
     "void-received", "A void was sent for this claim; a person handles voids until M4"
@@ -262,12 +261,12 @@ def _evidence(session: Session, claim: Claim) -> Evidence:
 
     lines = denied = patient_share_only = 0
     if len(postings) == 1:
-        # The denial rate's definition (rcm.analytics.denials): a line is
-        # denied when the payer paid nothing on it and gave a reason. A line
-        # whose only reasons are patient responsibility (a deductible, say)
-        # meets that rule but is not a refusal, so it is counted apart and
-        # held rather than called a denial. Settling the rule in all three
-        # places it lives is M4.8's.
+        # The denial rule (rcm.analytics.denials, ADR-0012): the payer paid
+        # nothing on the line and gave a refusal -- any reason but the
+        # patient's cost share or a payment adjustment. A line paid nothing
+        # without one (a deductible swallowing the allowed amount, beside
+        # CO-45) was not refused; it is counted apart and held for a person
+        # rather than called paid or denied.
         any_reason = (
             select(RemittanceAdjustment.adjustment_id)
             .where(
@@ -281,7 +280,7 @@ def _evidence(session: Session, claim: Claim) -> Evidence:
             .where(
                 RemittanceAdjustment.service_line_id == RemittanceServiceLine.service_line_id,
                 RemittanceAdjustment.client_id == claim.client_id,
-                RemittanceAdjustment.cas_group_code != _PATIENT_GROUP,
+                refusal_clause(),
             )
             .exists()
         )

@@ -345,6 +345,24 @@ def test_a_line_paid_nothing_for_the_patient_share_is_not_a_denial(root: Path) -
     assert problems_on("CLM-DED") == ["835-patient-share-only-line"]
 
 
+def test_a_refusal_billed_to_the_patient_is_still_a_denial(root: Path) -> None:
+    """ADR-0012: PR-204, "not covered under the plan", is a refusal. Group PR
+    says who may be billed, not whether the payer refused. The 135 claims
+    held at GATE M3 were these."""
+    submit("CLM-204", root, control="0001")
+    acknowledge(ack_277ca(("CLM-204", "A2:20")), root, name="277ca.edi")
+    body = [
+        f"CLP*CLM-204*4*{CHARGE}*0.00*{CHARGE}*MB*PCNCLM-204*11~",
+        "NM1*QC*1*Castellanos*Andre****MI*VAZ957419823~",
+        f"SVC*HC:99203*{CHARGE}*0.00**1~",
+        f"CAS*PR*204*{CHARGE}~",
+    ]
+    remit(_remittance(body, control="0001", check=Decimal("0.00")), root, name="835.edi")
+    advance()
+    assert state_of("CLM-204") is ClaimState.DENIED
+    assert problems_on("CLM-204") == []
+
+
 def test_some_lines_denied_is_partially_paid(root: Path) -> None:
     submit("CLM-PP", root, control="0001")
     acknowledge(ack_277ca(("CLM-PP", "A2:20")), root, name="277ca.edi")

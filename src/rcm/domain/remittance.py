@@ -340,6 +340,15 @@ class RemittanceServiceLine(Base):
         UniqueConstraint(
             "claim_payment_id", "line_number", name="uq_remittance_service_line_claim_line"
         ),
+        # The target of a composite foreign key (M4.8): a row naming this
+        # line must name its client and posting too, so it cannot be filed
+        # under another client's scope (PD-20).
+        UniqueConstraint(
+            "service_line_id",
+            "client_id",
+            "claim_payment_id",
+            name="uq_remittance_service_line_line_client_payment",
+        ),
         Index("ix_remittance_service_line_client_procedure", "client_id", "procedure_code"),
     )
 

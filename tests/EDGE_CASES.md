@@ -80,7 +80,7 @@ DOC-02 — see [ADR-0002](../docs/decisions/ADR-0002-edge-case-priority-discrepa
 | EC-59 | M11 | Generic CO-16 without specifying RARC | High | — | — | NOT_STARTED |
 | EC-60 | M11 | Auth denial despite valid auth | High | — | — | NOT_STARTED |
 | EC-61 | M11 | Denial contradicts prior eligibility response | High | — | — | NOT_STARTED |
-| EC-62 | M11 | Conflicting denial reasons on one claim | Med | — | — | NOT_STARTED |
+| EC-62 | M11 | Conflicting denial reasons on one claim | Med | M4.8 | `unit/test_denial_taxonomy.py::test_a_line_with_several_reasons_gets_exactly_one_category`, `test_a_tie_goes_to_the_earliest_reason` (ADR-0012 Decision 3) | COVERED |
 | EC-63 | M11 | Appeal won, payment not received | Med | — | — | NOT_STARTED |
 | EC-64 | M11 | Denial after filing window closed | High | — | — | NOT_STARTED |
 | EC-65 | M11 | Different denial on resubmission | Med | — | — | NOT_STARTED |

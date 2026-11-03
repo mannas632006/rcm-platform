@@ -26,11 +26,13 @@ recompute it by accident than someone who does not know it exists.
 
 **What counts as a denial.** DOC-02's glossary: *"Payer refusal to pay a line
 or claim, with a reason code."* So a service line is denied when the payer paid
-nothing on it and gave a reason -- both halves matter. A line paid at zero with
-no reason code is not an adjudicated denial, and a line carrying a reason code
-that was still paid is an adjustment, not a refusal. On the corpus this rule
-reproduces the generator's own `is_denied` flag exactly: 135 lines, 107
-submissions, no disagreement in either direction.
+nothing on it and gave a refusal reason -- both halves matter. A line paid at
+zero with no reason code is not an adjudicated denial, a line carrying a reason
+code that was still paid is an adjustment, and a reason that is the patient's
+cost share or a payment adjustment is not a refusal (ADR-0012). A denial on a
+posting the payer later reversed still happened, and still counts. On the
+corpus this rule reproduces the generator's own `is_denied` flag exactly: 135
+lines, 107 submissions, no disagreement in either direction.
 
 That is a structural signal, not a taxonomy. Classifying *why* a claim was
 denied, and whether it was preventable, is M4.8's job. This module only answers
@@ -47,12 +49,37 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Final
 
-from sqlalchemy import Select, and_, distinct, exists, func, select
+from sqlalchemy import ColumnElement, Select, and_, distinct, exists, func, select
 from sqlalchemy.orm import Session
 
 from rcm.domain.claim import Claim
 from rcm.domain.remittance import ClaimPayment, RemittanceAdjustment, RemittanceServiceLine
+
+#: ADR-0012. The patient's cost share: the payer approved the service and the
+#: patient owes deductible (1), coinsurance (2) or copay (3). A line paid
+#: nothing for these reasons alone was not refused. Any other reason --
+#: including PR-204, "not covered under the plan" -- is a refusal; group PR
+#: says who may be billed, not whether the payer refused.
+#:
+#: The one definition. Both dbt models spell it the same way, and
+#: tests/unit/test_denial_taxonomy.py fails if they drift.
+COST_SHARE: Final = frozenset({("PR", "1"), ("PR", "2"), ("PR", "3")})
+
+#: ADR-0012. Payment adjustments: the payer priced the service, it did not
+#: refuse it. 45 is the fee-schedule cut that rides on nearly every paid line
+#: -- and on a line the deductible swallowed whole, beside PR-1. 23 is a prior
+#: payer having paid already (a secondary paying nothing is the correct
+#: outcome), 24 is capitation. Read by CARC whatever the group, as the payer's
+#: group on these varies. Spelled the same in both dbt models.
+PAYMENT_ADJUSTMENT: Final = frozenset({"23", "24", "45"})
+
+
+def is_refusal(group: str, carc: str) -> bool:
+    """Whether one adjustment reason is a refusal to pay (ADR-0012)."""
+    return (group, carc) not in COST_SHARE and carc not in PAYMENT_ADJUSTMENT
+
 
 _HUNDRED = Decimal("100")
 _PERCENT_PLACES = Decimal("0.01")
@@ -147,9 +174,22 @@ def _denied_submitter_claim_ids(client_id: uuid.UUID) -> Select[str]:
                 and_(
                     RemittanceAdjustment.service_line_id == RemittanceServiceLine.service_line_id,
                     RemittanceAdjustment.client_id == client_id,
+                    # ...a refusal, not the patient's cost share (ADR-0012).
+                    refusal_clause(),
                 )
             ),
         )
+    )
+
+
+def refusal_clause() -> ColumnElement[bool]:
+    """SQL for `is_refusal` on a `RemittanceAdjustment` row."""
+    return and_(
+        ~and_(
+            RemittanceAdjustment.cas_group_code == "PR",
+            RemittanceAdjustment.reason_code.in_(sorted(carc for _, carc in COST_SHARE)),
+        ),
+        RemittanceAdjustment.reason_code.not_in(sorted(PAYMENT_ADJUSTMENT)),
     )
 
 
