@@ -73,10 +73,15 @@ Mapping choices worth stating:
   it is often sent with no RARC to say what is missing, so the category is
   the best the CARC allows. A person refines it.
 - **CARC 252** (documentation required) → Medical Necessity. The
-  documentation is what supports necessity. DOC-02 has no Documentation
-  category; review flagged this as arguably administrative and fully
-  preventable. Left for the owner's quarterly review, with CARC 59
-  (multiple-procedure rules → Coding).
+  documentation is what supports necessity. Review flagged it as arguably
+  administrative and fully preventable, but DOC-02 has no Documentation
+  category, and BR-TAX-01 fixes the list at ten. Payers send 252 when they
+  want records before deciding the service was warranted, which is
+  Medical Necessity's partial preventability. Kept (owner: "do what is
+  best", 2026-11-03).
+- **CARC 59** (multiple or concurrent procedure rules) → Coding. On a line
+  paid nothing, it is a multiple-procedure edit the scrubber can catch
+  (M5/M7). Kept for the same reason.
 - **Payer Error** has no CARC. A person assigns it, when an appeal shows the
   payer was wrong.
 

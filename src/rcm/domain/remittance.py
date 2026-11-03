@@ -410,7 +410,9 @@ class RemittanceAdjustment(Base):
         CheckConstraint(
             "(claim_level AND service_line_id IS NULL) OR "
             "(NOT claim_level AND service_line_id IS NOT NULL)",
-            name="claim_level_adjustments_have_no_service_line",
+            # Short enough for Postgres's 63 characters once prefixed; the
+            # long name was cut and hashed, and never matched (migration 0022).
+            name="claim_level_has_no_line",
         ),
         Index("ix_remittance_adjustment_line", "service_line_id"),
         Index("ix_remittance_adjustment_claim", "claim_payment_id"),
