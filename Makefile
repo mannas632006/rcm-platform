@@ -26,7 +26,10 @@ COMPOSE := docker compose
 .DEFAULT_GOAL := help
 .PHONY: help venv install up down migrate seed openapi \
         lint typecheck test test-unit test-property test-integration \
-        test-security test-contract coverage verify clean frontend-install frontend-lint
+        test-security test-contract coverage verify clean frontend-install frontend-lint \
+        frontend
+# `frontend` must be phony: a directory of that name exists, and without this
+# make treats the gate as already built and silently skips it.
 
 help: ## List targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -68,8 +71,20 @@ seed-smoke: ## Generate the small corpus the tests use
 	$(PYTHON) -m tools.synthetic --config tools/synthetic/config/smoke.yaml
 	$(PYTHON) -m tools.synthetic.validate
 
-openapi: ## Regenerate the committed OpenAPI schema (the frontend client joins in M5.1)
+openapi: ## Regenerate the committed OpenAPI schema and the frontend client from it (FR-API-05)
 	$(PYTHON) tools/export_openapi.py openapi.json
+	cd frontend && npm run api:generate
+
+# --- frontend (M5) ----------------------------------------------------------
+# Each step is a gate: tsc strict, ESLint + the colour-token check (M5.2), the
+# generated client matching openapi.json (M5.1), Vitest, and a production
+# build (which is where an over-budget bundle would show, NFR-FE-04).
+frontend: ## Frontend gate: types, lint, tokens, API drift, tests, build
+	cd frontend && npm run typecheck
+	cd frontend && npm run lint
+	cd frontend && npm run api:check
+	cd frontend && npm test
+	cd frontend && npx vite build
 
 # --- quality gates ----------------------------------------------------------
 
@@ -127,7 +142,7 @@ coverage: ## Combine every suite's coverage and enforce the floor (CLAUDE.md sec
 verify-ci: ## THE GATE, as CI runs it: separate env, empty DB, CI's step order
 	$(PYTHON) -m tools.verify_ci $(ARGS)
 
-verify: lint typecheck test coverage ## THE GATE: lint + types + every suite + the coverage floor
+verify: lint typecheck test coverage frontend ## THE GATE: lint + types + every suite + the coverage floor + the frontend
 	@echo ""
 	@echo "verify: PASS"
 

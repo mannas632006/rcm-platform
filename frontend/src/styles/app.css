@@ -1,0 +1,87 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+/*
+ * Tailwind reads the SRS tokens and nothing else. Its default palette and
+ * type scale are switched off, so `bg-red-500` or `text-2xl` do not exist:
+ * the only colours and sizes a class can name are SRS 10.3's.
+ */
+@theme inline {
+  --color-*: initial;
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-alt: var(--surface-alt);
+  --color-border: var(--border);
+  --color-border-control: var(--border-control);
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-on-nav: var(--text-on-nav);
+  --color-on-nav-muted: var(--text-on-nav-muted);
+  --color-nav: var(--nav);
+  --color-nav-raised: var(--nav-raised);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-strong: var(--danger-strong);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-strong: var(--warn-strong);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-focus: var(--focus);
+  --color-focus-on-nav: var(--focus-on-nav);
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  --text-*: initial;
+  --text-xs: var(--fs-xs);
+  --text-sm: var(--fs-sm);
+  --text-base: var(--fs-base);
+  --text-md: var(--fs-md);
+  --text-lg: var(--fs-lg);
+  --text-xl: var(--fs-xl);
+
+  --font-sans: var(--font-sans);
+
+  /* Spacing scale 4 / 8 / 12 / 16 / 24 / 32: p-1 p-2 p-3 p-4 p-6 p-8. */
+  --spacing: 4px;
+
+  --radius-*: initial;
+  --radius-control: var(--radius-control);
+  --radius-panel: var(--radius-panel);
+  --radius-chip: var(--radius-chip);
+  --radius-full: 9999px;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: var(--fs-base);
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* WCAG 2.4.7: a focus ring on every interactive element, never removed. */
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+}
+
+@utility tabular {
+  /* UR-32: tabular numerals on every monetary and numeric column. */
+  font-variant-numeric: tabular-nums;
+}

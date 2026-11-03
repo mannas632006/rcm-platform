@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
-from typing import Annotated, Final
+from typing import Annotated, Any, Final
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -57,12 +57,13 @@ CurrentPrincipal = Annotated[Principal, Depends(current_principal)]
 DbSession = Annotated[Session, Depends(get_session)]
 
 
-def require_permission(permission: Permission) -> object:
+def require_permission(permission: Permission) -> Any:
     """Dependency factory asserting a single permission (S-4).
 
-    Used as `Depends(require_permission(Permission.CLAIM_WRITE))`. The check is
-    declared on the route, so the route's authority is readable from its
-    signature rather than from the body of its handler.
+    Returns the `Depends` itself, so it is used as
+    `dependencies=[require_permission(Permission.CLAIM_WRITE)]` on the route
+    decorator. The check is declared on the route, so the route's authority
+    is readable from its signature rather than from the body of its handler.
     """
 
     def _check(principal: CurrentPrincipal) -> Principal:
