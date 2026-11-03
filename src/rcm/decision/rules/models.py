@@ -26,6 +26,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from rcm.decision.ncci_models import NcciRelease as _NcciRelease  # noqa: F401 - FK target
 from rcm.decision.rules.definition import LIVE_STATUSES, Layer, RuleStatus, Severity
 from rcm.platform.db import Base
 
@@ -86,6 +87,14 @@ class Ruleset(Base):
     published_by: Mapped[str] = mapped_column(String(128), nullable=False)
     published_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    #: The NCCI releases pinned with the rules (ADR-0008). None: no release
+    #: was loaded when this ruleset was published.
+    ncci_ptp_release: Mapped[str | None] = mapped_column(
+        String(40), ForeignKey("ncci_release.release_id"), nullable=True
+    )
+    ncci_mue_release: Mapped[str | None] = mapped_column(
+        String(40), ForeignKey("ncci_release.release_id"), nullable=True
     )
 
     __table_args__ = (CheckConstraint("rule_count >= 0", name="ck_ruleset_rule_count"),)

@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from rcm.decision import ncci_store
 from rcm.decision.rules.definition import LIVE_STATUSES, RuleStatus, parse_rule
 from rcm.decision.rules.evaluate import ActiveRule
 from rcm.decision.rules.models import Ruleset, RulesetMember, RuleVersion
@@ -39,6 +40,9 @@ class LoadedRuleset:
     version: int
     digest: str
     rules: tuple[ActiveRule, ...]
+    #: The NCCI releases this ruleset pinned (ADR-0008), or None.
+    ncci_ptp_release: str | None = None
+    ncci_mue_release: str | None = None
 
 
 def _as_json(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -79,12 +83,15 @@ def create_rule_version(session: Session, *, document: Mapping[str, Any], create
     return version
 
 
-def _digest(rows: list[RuleVersion]) -> str:
+def _digest(rows: list[RuleVersion], *, ptp: str | None, mue: str | None) -> str:
     canonical = json.dumps(
-        [
-            {"rule_id": r.rule_id, "version": r.version, "status": r.status, "rule": r.document}
-            for r in sorted(rows, key=lambda r: r.rule_id)
-        ],
+        {
+            "rules": [
+                {"rule_id": r.rule_id, "version": r.version, "status": r.status, "rule": r.document}
+                for r in sorted(rows, key=lambda r: r.rule_id)
+            ],
+            "ncci": {"ptp": ptp, "mue": mue},
+        },
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -106,7 +113,16 @@ def publish_ruleset(session: Session, *, published_by: str) -> PublishedRuleset:
         # A rule the current validator refuses is not published (PD-18).
         parse_rule(row.document)
 
-    ruleset = Ruleset(digest=_digest(rows), rule_count=len(rows), published_by=published_by)
+    # The latest loaded NCCI releases are pinned with the rules (ADR-0008).
+    ptp = ncci_store.latest_release(session, "PTP")
+    mue = ncci_store.latest_release(session, "MUE")
+    ruleset = Ruleset(
+        digest=_digest(rows, ptp=ptp, mue=mue),
+        rule_count=len(rows),
+        published_by=published_by,
+        ncci_ptp_release=ptp,
+        ncci_mue_release=mue,
+    )
     session.add(ruleset)
     session.flush()
     session.add_all(
@@ -163,4 +179,6 @@ def load_ruleset(session: Session, *, version: int | None = None) -> LoadedRules
             )
             for m in members
         ),
+        ncci_ptp_release=ruleset.ncci_ptp_release,
+        ncci_mue_release=ruleset.ncci_mue_release,
     )

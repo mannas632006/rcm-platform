@@ -17,6 +17,7 @@ from typing import Final
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from rcm.decision import ncci_store
 from rcm.decision.rules.evaluate import ClaimFacts, Evaluation, LineFacts, evaluate
 from rcm.decision.rules.store import load_ruleset
 from rcm.domain.claim import Claim, ClaimLine
@@ -97,7 +98,14 @@ def scrub_claim(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) 
     """Evaluate the claim and record the decision in the caller's transaction."""
     facts = claim_facts(session, claim_id=claim_id, client_id=client_id)
     ruleset = load_ruleset(session)
-    evaluation = evaluate(ruleset.rules, facts)
+    # Exactly the NCCI releases the ruleset pinned (ADR-0008 Decision 3).
+    ncci = ncci_store.check_for(
+        session,
+        ptp_release=ruleset.ncci_ptp_release,
+        mue_release=ruleset.ncci_mue_release,
+        codes={str(line.values["line.procedure_code"]) for line in facts.lines},
+    )
+    evaluation = evaluate(ruleset.rules, facts, checks=[ncci])
     record_decision(
         session,
         entity_type="claim",
@@ -108,6 +116,8 @@ def scrub_claim(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) 
         input_snapshot={
             "ruleset_version": ruleset.version,
             "ruleset_digest": ruleset.digest,
+            "ncci_ptp_release": ruleset.ncci_ptp_release,
+            "ncci_mue_release": ruleset.ncci_mue_release,
             "claim": {k: _plain(v) for k, v in facts.claim.items()},
             "lines": [
                 {"line_number": line.number, **{k: _plain(v) for k, v in line.values.items()}}
@@ -126,6 +136,7 @@ def scrub_claim(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) 
                     "outcome": str(f.outcome),
                     "line_number": f.line_number,
                     "route_to": f.route_to,
+                    "reference": f.reference,
                 }
                 for f in evaluation.findings
             ],

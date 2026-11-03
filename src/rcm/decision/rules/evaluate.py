@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, StrEnum
-from typing import Final
+from typing import Final, Protocol
 
 from rcm.decision.rules.definition import (
     CLAIM_FIELDS,
@@ -119,6 +119,19 @@ class Finding:
     line_number: int | None
     message: str
     route_to: str
+    #: What a built-in check matched, e.g. the NCCI edit. Empty for a rule,
+    #: which its id and version already name.
+    reference: str = ""
+
+
+class Check(Protocol):
+    """A built-in check that the condition language cannot express, such as
+    NCCI pairs across lines (ADR-0008). Runs in its layer, after the rules."""
+
+    @property
+    def layer(self) -> Layer: ...
+
+    def findings(self, facts: ClaimFacts) -> list[Finding]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,7 +232,9 @@ def _check(active: ActiveRule, facts: ClaimFacts) -> list[Finding]:
     return found
 
 
-def evaluate(rules: Sequence[ActiveRule], facts: ClaimFacts) -> Evaluation:
+def evaluate(
+    rules: Sequence[ActiveRule], facts: ClaimFacts, *, checks: Sequence[Check] = ()
+) -> Evaluation:
     """Every layer, in order, every time (SRS 8.2, ADR-0007 Decision 6)."""
     for active in rules:
         if active.status not in LIVE_STATUSES:
@@ -236,6 +251,9 @@ def evaluate(rules: Sequence[ActiveRule], facts: ClaimFacts) -> Evaluation:
         for active in in_layer:
             if _applies(active, facts):
                 findings.extend(_check(active, facts))
+        for check in checks:
+            if check.layer is layer:
+                findings.extend(check.findings(facts))
 
     acting = {f.mode for f in findings if f.mode in _ACTS}
     if Mode.BLOCKING in acting:

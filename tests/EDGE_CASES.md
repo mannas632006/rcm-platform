@@ -55,7 +55,7 @@ DOC-02 — see [ADR-0002](../docs/decisions/ADR-0002-edge-case-priority-discrepa
 | EC-34 | M6 | Professional/technical component split | Med | — | — | NOT_STARTED |
 | EC-35 | M6 | Insurance changed between DOS and billing | High | — | — | NOT_STARTED |
 | EC-36 | M7 | Rule correct generally, wrong for one payer | High | — | — | NOT_STARTED |
-| EC-37 | M7 | NCCI edit with valid modifier bypass | High | — | — | NOT_STARTED |
+| EC-37 | M7 | NCCI edit with valid modifier bypass | High | M4.3 | `unit/test_ncci.py::test_a_valid_modifier_bypass_passes`; no bypass where the edit allows none: `test_a_bypass_is_no_use_when_the_edit_allows_none` | COVERED |
 | EC-38 | M7 | Legitimate same-day duplicate (76/77) | Med | — | — | NOT_STARTED |
 | EC-39 | M7 | Rule blocks claim near filing deadline | High | — | — | NOT_STARTED |
 | EC-40 | M7 | Payer changes requirement overnight | High | — | — | NOT_STARTED |
