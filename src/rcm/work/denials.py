@@ -1,22 +1,28 @@
-"""Denial classification, with every unclassified denial put before a person
-(M4.8, ADR-0012).
+"""Denials classified and fed back, with what needs a person put before one
+(M4.8, M4.9, ADR-0012, ADR-0013).
 
-`rcm.decision.denials` classifies and reports what the taxonomy does not
-hold; it sits below this layer and cannot open work. This module runs it and
-raises each unmapped line as a named DATA_QUALITY exception, so a refusal
-code nobody mapped is never just a number in a log line (PD-18).
+`rcm.decision` classifies denials and runs the feedback loop; it sits below
+this layer and cannot open work. This module runs both and raises:
+
+- each unmapped refusal as a named DATA_QUALITY exception, so a code nobody
+  mapped is never just a number in a log line (PD-18);
+- each rule that flagged a line the payer then denied for the same cause as
+  a RULE_CONFLICT for the rules reviewer -- SRS 8.4's "DEFECT, rule failed";
+- each preventable denial no submitted line could be traced to as a named
+  DATA_QUALITY exception, since the loop could not learn from it.
 """
 
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from rcm.decision import denials
+from rcm.decision import denials, feedback
 from rcm.platform.audit import DecisionType, record_decision
 from rcm.platform.errors import ValidationFailedError
 from rcm.platform.logging import get_logger
@@ -29,6 +35,8 @@ log = get_logger(__name__)
 #: One item per line per taxonomy version: a new version that still does not
 #: hold the code raises it afresh.
 _UNMAPPED_KEY: Final = "denial-unmapped:"
+_FAILED_KEY: Final = "rule-failed:"
+_UNTRACED_KEY: Final = "denial-untraced:"
 
 
 def _source_key(line: denials.UnmappedLine) -> str:
@@ -51,13 +59,18 @@ def _open(session: Session, *, client_id: uuid.UUID, source_key: str) -> bool:
     )
 
 
-def classify_and_route(
-    session: Session, *, client_id: uuid.UUID, now: datetime
-) -> denials.ClassificationReport:
-    """Classify one client's denials; raise each unmapped one with a person.
+@dataclass(frozen=True, slots=True)
+class DenialRun:
+    classification: denials.ClassificationReport
+    feedback: feedback.FeedbackReport
 
-    Idempotent: a second run classifies nothing new and finds each unmapped
-    line's item still open.
+
+def classify_and_route(session: Session, *, client_id: uuid.UUID, now: datetime) -> DenialRun:
+    """Classify one client's denials, feed them back, and raise what needs a
+    person.
+
+    Idempotent: a second run classifies and answers nothing new, and finds
+    each item it raised still open.
     """
     if now.tzinfo is None:
         raise ValidationFailedError(field="now", reason="time must be timezone-aware")
@@ -91,6 +104,39 @@ def classify_and_route(
             source_key=source_key,
             now=now,
         )
+    answered = feedback.run_feedback(session, client_id=client_id)
+    for failed in answered.failed:
+        # Recorded by the loop's own decision record; raised once per line.
+        exceptions.raise_exception(
+            session,
+            client_id=client_id,
+            kind=WorkItemKind.RULE_CONFLICT,
+            problem=(
+                f"{failed.rule_id} flagged this claim before submission and the payer "
+                "denied it for the same cause; the rule did not stop it"
+            ),
+            record=exceptions.RecordRef("claim", failed.claim_id),
+            source_key=f"{_FAILED_KEY}{denials.TAXONOMY_VERSION}:{failed.service_line_id}",
+            now=now,
+            claim_id=failed.claim_id,
+        )
+    for untraced in answered.untraced:
+        # A preventable denial no submitted line could be found for: the
+        # loop could not learn from it, so a person traces it (PD-18).
+        exceptions.raise_exception(
+            session,
+            client_id=client_id,
+            kind=WorkItemKind.DATA_QUALITY,
+            problem=untraced.reason,
+            record=exceptions.RecordRef("claim_payment", untraced.claim_payment_id),
+            source_key=f"{_UNTRACED_KEY}{denials.TAXONOMY_VERSION}:{untraced.service_line_id}",
+            now=now,
+        )
     session.flush()
-    log.info("denials.routed", unmapped=len(report.unmapped))
-    return report
+    log.info(
+        "denials.routed",
+        unmapped=len(report.unmapped),
+        rules_failed=len(answered.failed),
+        untraced=len(answered.untraced),
+    )
+    return DenialRun(classification=report, feedback=answered)

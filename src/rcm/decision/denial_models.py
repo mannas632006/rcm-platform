@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     String,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -67,6 +68,15 @@ class DenialClassification(Base):
                 "remittance_service_line.claim_payment_id",
             ],
             name="fk_denial_classification_line",
+        ),
+        # The target of denial_feedback's composite key (migration 0023),
+        # so feedback is tied to its classification's client too (PD-20).
+        UniqueConstraint(
+            "service_line_id",
+            "taxonomy_version",
+            "client_id",
+            "claim_payment_id",
+            name="uq_denial_classification_line_version_client_payment",
         ),
         CheckConstraint(f"category IN ({CATEGORIES})", name="category_is_known"),
         CheckConstraint(f"preventability IN ({PREVENTABILITY})", name="preventability_is_known"),

@@ -243,8 +243,8 @@ def test_an_unmapped_denial_is_put_before_a_person(root: Path) -> None:
     remit(one_line("CLM-UNK", f"CAS*CO*A1*{CHARGE}~", control="0001"), root, name="unk.835")
     for _ in range(2):
         with session_scope() as session:
-            report = work_denials.classify_and_route(session, client_id=CLIENT_A, now=NOW)
-        (line,) = report.unmapped
+            run = work_denials.classify_and_route(session, client_id=CLIENT_A, now=NOW)
+        (line,) = run.classification.unmapped
     with session_scope() as session:
         items = session.scalars(
             select(WorkItem).where(WorkItem.kind == str(WorkItemKind.DATA_QUALITY))
