@@ -177,7 +177,7 @@ export default function QueueScreen() {
         />
       )}
       {items.data && rows.length === 0 && (
-        <div className="rounded-panel border border-border bg-surface p-8 text-center text-md">
+        <div className="rounded-panel border border-border bg-bg p-8 text-center text-md shadow-card">
           {assigned === "any" ? (
             <p>This queue is empty: nothing is waiting here.</p>
           ) : (

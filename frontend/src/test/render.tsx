@@ -32,6 +32,20 @@ export function mockApi(routes: Routes) {
   return fetchMock;
 }
 
+/** WCAG 1.3.1: the page starts at h1 and never skips a heading level going down. */
+export function expectNoHeadingSkips(root: ParentNode = document) {
+  const levels = [...root.querySelectorAll("h1, h2, h3, h4, h5, h6")].map((h) =>
+    Number(h.tagName.slice(1)),
+  );
+  if (levels[0] !== 1) throw new Error(`first heading is h${String(levels[0])}, not h1`);
+  levels.forEach((level, i) => {
+    const previous = levels[i - 1];
+    if (previous !== undefined && level > previous + 1) {
+      throw new Error(`heading h${String(level)} follows h${String(previous)}: ${levels.join(",")}`);
+    }
+  });
+}
+
 export const ME = {
   subject: "ops.ana",
   roles: ["AR_SPECIALIST"],

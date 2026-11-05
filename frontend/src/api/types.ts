@@ -15,3 +15,10 @@ export type QueueItemsPage = Schemas["QueueItemsPage"];
 export type Assignment = NonNullable<
   NonNullable<paths["/api/v1/work-queues/{queue_key}/items"]["get"]["parameters"]["query"]>["assigned"]
 >;
+export type Permission = Schemas["Permission"];
+export type Dashboard = Schemas["DashboardOut"];
+export type StateCount = Schemas["StateCount"];
+export type Rule = Schemas["RuleOut"];
+export type RulesList = Schemas["RulesOut"];
+export type RegistryEntry = Schemas["RegistryEntryOut"];
+export type PayerRegistry = Schemas["PayerRegistryOut"];

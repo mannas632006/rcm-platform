@@ -95,7 +95,7 @@ export function WorkQueueTable({
       role="table"
       aria-label={label}
       aria-rowcount={hasMore ? -1 : items.length + 1}
-      className="flex min-h-0 flex-1 flex-col rounded-panel border border-border"
+      className="flex min-h-0 flex-1 flex-col rounded-panel border border-border bg-bg shadow-card"
     >
       <div role="rowgroup">
         <div

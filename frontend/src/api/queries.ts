@@ -1,7 +1,16 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { api, unwrap } from "./client";
-import type { Assignment, DeadlineRisk, Me, QueueItemsPage, WorkQueues } from "./types";
+import type {
+  Assignment,
+  Dashboard,
+  DeadlineRisk,
+  Me,
+  PayerRegistry,
+  QueueItemsPage,
+  RulesList,
+  WorkQueues,
+} from "./types";
 
 /**
  * UR-23: work queues poll. A stale count sends two operators to the same
@@ -14,6 +23,9 @@ export const keys = {
   me: ["me"] as const,
   workQueues: ["work-queues"] as const,
   deadlineRisk: ["alerts", "deadline-risk"] as const,
+  dashboard: ["dashboard"] as const,
+  rules: ["rules"] as const,
+  payerRegistry: ["payer-registry"] as const,
 };
 
 export function useMe() {
@@ -70,5 +82,30 @@ export function useDeadlineRisk() {
     queryFn: async (): Promise<DeadlineRisk> =>
       unwrap(await api.GET("/api/v1/alerts/deadline-risk")),
     refetchInterval: QUEUE_POLL_MS,
+  });
+}
+
+/** KPIs move with the work, so they poll on the queues' cadence (UR-23). */
+export function useDashboard() {
+  return useQuery({
+    queryKey: keys.dashboard,
+    queryFn: async (): Promise<Dashboard> => unwrap(await api.GET("/api/v1/dashboard")),
+    refetchInterval: QUEUE_POLL_MS,
+  });
+}
+
+/** Rules change by promotion, not by the minute: no polling. */
+export function useRules() {
+  return useQuery({
+    queryKey: keys.rules,
+    queryFn: async (): Promise<RulesList> => unwrap(await api.GET("/api/v1/rules")),
+  });
+}
+
+export function usePayerRegistry() {
+  return useQuery({
+    queryKey: keys.payerRegistry,
+    queryFn: async (): Promise<PayerRegistry> =>
+      unwrap(await api.GET("/api/v1/payer-registry")),
   });
 }
