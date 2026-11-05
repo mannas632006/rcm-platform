@@ -114,3 +114,68 @@ QUEUE_ERRORS: dict[int | str, dict[str, Any]] = {
     404: {"model": Problem, "description": "No such queue, or not one this role may see."},
     422: {"model": Problem, "description": "A cursor, limit or filter that is not valid."},
 }
+
+
+# ---------------------------------------------------------------------------
+# INSIGHT and ADMIN (M5.9-M5.11, pulled forward)
+# ---------------------------------------------------------------------------
+
+
+class StateCount(_Out):
+    state: str
+    count: int
+
+
+class DashboardOut(_Out):
+    """KPIs for the signed-in operator's clients. Counts and rates only."""
+
+    adjudicated_claims: int
+    denied_claims: int
+    denial_rate: Decimal | None = Field(
+        description="Denied over adjudicated claims, per claim (BR-DATA-03), as a percentage."
+    )
+    first_pass_claims: int
+    first_pass_clean: int
+    first_pass_clean_rate: Decimal | None = Field(
+        description="First submissions neither rejected nor denied, as a percentage."
+    )
+    claims_by_state: list[StateCount]
+    open_work: int
+    pinned_work: int
+    overdue_work: int
+    steps_awaiting_review: int = Field(
+        description="Automatic claim steps waiting for the submitter's approval (ADR-0006)."
+    )
+
+
+class RuleOut(_Out):
+    rule_id: str
+    version: int
+    layer: str
+    severity: str
+    status: str
+    created_at: datetime
+    backtest_flagged: int | None
+    backtest_fp_rate: Decimal | None = Field(
+        description="False-positive rate of the latest backtest, 0-1; null when none has run."
+    )
+
+
+class RulesOut(_Out):
+    rules: list[RuleOut]
+
+
+class RegistryEntryOut(_Out):
+    payer_id: str
+    payer_name: str
+    plan_type: str
+    cpt: str
+    version: int
+    prior_auth_required: bool | None
+    last_verified_date: date
+    stale: bool = Field(description="Past [TBD-42]: cannot drive a BLOCKING decision (BR-REG-02).")
+
+
+class PayerRegistryOut(_Out):
+    entries: list[RegistryEntryOut]
+    staleness_days: int
