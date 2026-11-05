@@ -66,6 +66,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/work-queues/{queue_key}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A queue's items, best first
+         * @description S-02: the queue in priority order (UR-02), deadline-pinned items first
+         *     and never filtered out (UR-03). Cursor-paginated (FR-API-02).
+         *
+         *     Rows carry claim identifiers and dates of service, so the read is
+         *     audited (PD-2).
+         */
+        get: operations["listQueueItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -94,6 +118,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * Assignment
+         * @enum {string}
+         */
+        Assignment: "any" | "mine" | "unassigned";
         /**
          * DeadlineRiskOut
          * @description UR-26: the alert bar that cannot be dismissed while claims are at risk.
@@ -154,6 +183,75 @@ export interface components {
             title: string;
             /** Type */
             type: string;
+        };
+        /**
+         * QueueItemOut
+         * @description One row of a queue (S-02). Charges are billed charges, to the cent.
+         */
+        QueueItemOut: {
+            /** Assigned To */
+            assigned_to: string | null;
+            /** Bulk Handling */
+            bulk_handling: boolean;
+            /** Charges */
+            charges: string | null;
+            /** Claim Id */
+            claim_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Date Of Service */
+            date_of_service: string | null;
+            /** Days To Deadline */
+            days_to_deadline: number | null;
+            /**
+             * Deadline Pinned
+             * @description PD-15: always first, never filtered out (UR-03).
+             */
+            deadline_pinned: boolean;
+            /** Kind */
+            kind: string;
+            /** Overdue */
+            overdue: boolean;
+            /** Payer Id */
+            payer_id: string | null;
+            /** Payer Name */
+            payer_name: string | null;
+            /** Priority Score */
+            priority_score: number;
+            /**
+             * Recovery Probability
+             * @description ML-3's P(recovery). Null until the model exists (M6): the UI shows it as unavailable, never as zero (SRS 10.8 PARTIAL).
+             */
+            recovery_probability?: number | null;
+            /**
+             * Sla Due At
+             * Format: date-time
+             */
+            sla_due_at: string;
+            /** State */
+            state: string;
+            /** Submitter Claim Id */
+            submitter_claim_id: string | null;
+            /** Title */
+            title: string;
+            /**
+             * Work Item Id
+             * Format: uuid
+             */
+            work_item_id: string;
+        };
+        /** QueueItemsPage */
+        QueueItemsPage: {
+            /** Items */
+            items: components["schemas"]["QueueItemOut"][];
+            /**
+             * Next Cursor
+             * @description Pass back as `cursor` for the next page.
+             */
+            next_cursor: string | null;
         };
         /** QueueSummaryOut */
         QueueSummaryOut: {
@@ -312,6 +410,70 @@ export interface operations {
             };
             /** @description The token lacks the permission this route needs. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listQueueItems: {
+        parameters: {
+            query?: {
+                /** @description From the previous page. */
+                cursor?: string | null;
+                limit?: number;
+                assigned?: components["schemas"]["Assignment"];
+                payer_id?: string | null;
+            };
+            header?: never;
+            path: {
+                queue_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueItemsPage"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such queue, or not one this role may see. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A cursor, limit or filter that is not valid. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

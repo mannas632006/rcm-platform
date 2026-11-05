@@ -25,9 +25,10 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
-from sqlalchemy import case, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import ColumnElement, case, func, select
+from sqlalchemy.orm import QueryableAttribute, Session
 
 from rcm.decision.prioritisation import PriorityInputs, PriorityResult, prioritise
 from rcm.domain.claim import Claim, ClaimLine
@@ -233,25 +234,34 @@ def next_items(
     )
     if not include_bulk:
         query = query.where(WorkItem.bulk_handling.is_(False))
-    return list(
-        session.scalars(
-            query.order_by(
-                WorkItem.deadline_pinned.desc(),
-                # Among pinned items, the nearest deadline first; an unknown
-                # one is treated as due today (PD-18).
-                case(
-                    (WorkItem.deadline_pinned, func.coalesce(WorkItem.days_to_deadline, 0)),
-                    else_=None,
-                )
-                .asc()
-                .nulls_last(),
-                WorkItem.prioritised_at.is_(None).desc(),
-                WorkItem.priority_score.desc(),
-                WorkItem.sla_due_at,
-                WorkItem.created_at,
-                WorkItem.work_item_id,
-            ).limit(limit)
-        ).all()
+    return list(session.scalars(query.order_by(*queue_order()).limit(limit)).all())
+
+
+def queue_order() -> tuple[ColumnElement[Any] | QueryableAttribute[Any], ...]:
+    """The queue's order, best first, as keys that all sort ascending.
+
+    The one definition: `next_items` and the operator UI's queue (M5.3)
+    both read it. All-ascending so a keyset cursor can compare a row against
+    the last one seen as a single row value (FR-API-02).
+
+    1. Pinned first (PD-15).
+    2. Among pinned items, the nearest deadline first; an unknown one is due
+       today (PD-18). Unpinned items tie here.
+    3. Never scored before scored: unknown urgency is urgent (PD-18).
+    4. Higher score first.
+    5. Earlier SLA, then older, then the id, so the order is total.
+    """
+    return (
+        case((WorkItem.deadline_pinned, 0), else_=1),
+        case(
+            (WorkItem.deadline_pinned, func.coalesce(WorkItem.days_to_deadline, 0)),
+            else_=0,
+        ),
+        case((WorkItem.prioritised_at.is_(None), 0), else_=1),
+        -WorkItem.priority_score,
+        WorkItem.sla_due_at,
+        WorkItem.created_at,
+        WorkItem.work_item_id,
     )
 
 

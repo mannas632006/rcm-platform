@@ -1,6 +1,15 @@
 {
   "components": {
     "schemas": {
+      "Assignment": {
+        "enum": [
+          "any",
+          "mine",
+          "unassigned"
+        ],
+        "title": "Assignment",
+        "type": "string"
+      },
       "DeadlineRiskOut": {
         "description": "UR-26: the alert bar that cannot be dismissed while claims are at risk.",
         "properties": {
@@ -138,6 +147,208 @@
           "code"
         ],
         "title": "Problem",
+        "type": "object"
+      },
+      "QueueItemOut": {
+        "description": "One row of a queue (S-02). Charges are billed charges, to the cent.",
+        "properties": {
+          "assigned_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned To"
+          },
+          "bulk_handling": {
+            "title": "Bulk Handling",
+            "type": "boolean"
+          },
+          "charges": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Charges"
+          },
+          "claim_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "date_of_service": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Of Service"
+          },
+          "days_to_deadline": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days To Deadline"
+          },
+          "deadline_pinned": {
+            "description": "PD-15: always first, never filtered out (UR-03).",
+            "title": "Deadline Pinned",
+            "type": "boolean"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "overdue": {
+            "title": "Overdue",
+            "type": "boolean"
+          },
+          "payer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payer Id"
+          },
+          "payer_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payer Name"
+          },
+          "priority_score": {
+            "title": "Priority Score",
+            "type": "integer"
+          },
+          "recovery_probability": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ML-3's P(recovery). Null until the model exists (M6): the UI shows it as unavailable, never as zero (SRS 10.8 PARTIAL).",
+            "title": "Recovery Probability"
+          },
+          "sla_due_at": {
+            "format": "date-time",
+            "title": "Sla Due At",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "submitter_claim_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitter Claim Id"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "work_item_id": {
+            "format": "uuid",
+            "title": "Work Item Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_item_id",
+          "kind",
+          "title",
+          "state",
+          "priority_score",
+          "deadline_pinned",
+          "days_to_deadline",
+          "assigned_to",
+          "sla_due_at",
+          "overdue",
+          "bulk_handling",
+          "created_at",
+          "claim_id",
+          "submitter_claim_id",
+          "payer_id",
+          "payer_name",
+          "date_of_service",
+          "charges"
+        ],
+        "title": "QueueItemOut",
+        "type": "object"
+      },
+      "QueueItemsPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/QueueItemOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass back as `cursor` for the next page.",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "QueueItemsPage",
         "type": "object"
       },
       "QueueSummaryOut": {
@@ -367,6 +578,140 @@
           }
         ],
         "summary": "Queues visible to me",
+        "tags": [
+          "shell"
+        ]
+      }
+    },
+    "/api/v1/work-queues/{queue_key}/items": {
+      "get": {
+        "description": "S-02: the queue in priority order (UR-02), deadline-pinned items first\nand never filtered out (UR-03). Cursor-paginated (FR-API-02).\n\nRows carry claim identifiers and dates of service, so the read is\naudited (PD-2).",
+        "operationId": "listQueueItems",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "queue_key",
+            "required": true,
+            "schema": {
+              "title": "Queue Key",
+              "type": "string"
+            }
+          },
+          {
+            "description": "From the previous page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "From the previous page.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "assigned",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Assignment",
+              "default": "any"
+            }
+          },
+          {
+            "in": "query",
+            "name": "payer_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 80,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Payer Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueItemsPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such queue, or not one this role may see."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A cursor, limit or filter that is not valid."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "A queue's items, best first",
         "tags": [
           "shell"
         ]
