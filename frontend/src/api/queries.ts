@@ -1,5 +1,7 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
+import { hasPermission } from "@/lib/permissions";
+
 import { api, unwrap } from "./client";
 import type {
   Assignment,
@@ -77,12 +79,19 @@ export function useQueueItems(queueKey: string, assigned: Assignment) {
 }
 
 export function useDeadlineRisk() {
-  return useQuery({
+  const me = useMe();
+  // A role without claim:read could open none of the claims at risk, and the
+  // API refuses the check (403); asked anyway, that reads like an outage. If
+  // `me` itself fails we cannot tell, so the check still runs (PD-18).
+  const forbidden = me.isSuccess && !hasPermission(me.data, "claim:read");
+  const query = useQuery({
     queryKey: keys.deadlineRisk,
     queryFn: async (): Promise<DeadlineRisk> =>
       unwrap(await api.GET("/api/v1/alerts/deadline-risk")),
     refetchInterval: QUEUE_POLL_MS,
+    enabled: !me.isPending && !forbidden,
   });
+  return { ...query, forbidden };
 }
 
 /** KPIs move with the work, so they poll on the queues' cadence (UR-23). */

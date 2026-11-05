@@ -80,6 +80,26 @@ describe("deadline alert bar (UR-26)", () => {
     expect(screen.getByText(/Database unreachable/)).toBeInTheDocument();
   });
 
+  it("is not shown, nor asked for, to a role that cannot read claims", async () => {
+    // An administrator holds no claim:read; asking would only earn a 403 that
+    // reads like an outage, for claims the role could never open anyway.
+    const fetchMock = mockApi({
+      "/api/v1/me": { body: { ...ME, permissions: ["report:read", "user:admin"] } },
+      "/api/v1/work-queues": { body: QUEUES },
+      "/api/v1/alerts/deadline-risk": { status: 403, body: { title: "Forbidden" } },
+    });
+    renderApp(<App />);
+    await screen.findByRole("navigation", { name: "Primary" });
+    await waitFor(() => {
+      expect(screen.queryByText("Checking filing deadlines…")).toBeNull();
+    });
+    expect(screen.queryByText("FILING DEADLINE CHECK UNAVAILABLE")).toBeNull();
+    const asked = fetchMock.mock.calls.some(([input]) =>
+      String(input instanceof Request ? input.url : input).includes("/alerts/deadline-risk"),
+    );
+    expect(asked).toBe(false);
+  });
+
   it("keeps the last known count when a refresh fails, marked as out of date (SRS 10.8 PARTIAL)", async () => {
     api({ status: 503, body: { title: "Service Unavailable", detail: "Database unreachable" } });
     renderApp(<App />, {

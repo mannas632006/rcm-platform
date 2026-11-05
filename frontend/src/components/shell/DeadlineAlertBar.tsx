@@ -46,6 +46,8 @@ export function DeadlineAlertBar() {
     </div>
   );
 
+  if (risk.forbidden) return null;
+
   if (risk.isPending) {
     return (
       <>
