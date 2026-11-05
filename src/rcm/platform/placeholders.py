@@ -74,14 +74,6 @@ REGISTRY: Final[dict[str, Placeholder]] = {
         provisional=180,
         source="DOC-02 Appendix A",
     ),
-    "blocking_rule_max_false_positive_rate": Placeholder(
-        tbd_id="TBD-45",
-        description="Maximum measured false-positive rate for a rule to be promoted "
-        "to BLOCKING (M4.6).",
-        owner="Eng 2",
-        provisional=0.05,
-        source="DOC-02 Appendix A",
-    ),
     "outcome_maturity_days": Placeholder(
         tbd_id="TBD-50",
         description="Days post-DOS before a row's outcome is final enough to train on. "

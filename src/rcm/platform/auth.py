@@ -380,11 +380,11 @@ class UnscopedQueryError(RuntimeError):
     """
 
 
-def scoped_query[S](
-    statement: Select[tuple[S]],
+def scoped_query[*Ts](
+    statement: Select[*Ts],
     entity: type[Any],
     principal: Principal,
-) -> Select[tuple[S]]:
+) -> Select[*Ts]:
     """Apply the principal's client scope to `statement`.
 
     This is the control PD-20 names. Every read of a client-scoped table goes

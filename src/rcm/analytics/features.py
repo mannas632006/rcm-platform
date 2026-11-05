@@ -166,8 +166,8 @@ PENDING_COLUMNS: Final[dict[str, str]] = {
     "coder_id_hashed": "M3: the 837 names no coder",
     "scrub_flags_raised": "M4: rules engine",
     "scrub_flags_overridden": "M4: rules engine",
-    "denial_category": "M4.8: denial taxonomy",
-    "preventability": "M4.8: denial taxonomy",
+    # denial_category and preventability: filled by M4.8 (ADR-0012). Labels,
+    # never features -- see MART_COLUMNS.
     "underpayment_flag": "M4.10: contracted rates",
 }
 

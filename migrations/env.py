@@ -14,6 +14,10 @@ from alembic import context
 # Importing a model module is what registers its tables on Base.metadata.
 # Autogenerate compares the database against whatever is registered here, so a
 # model not imported is a model Alembic will cheerfully propose dropping.
+from rcm.decision.denial_models import DenialClassification  # noqa: F401 - metadata
+from rcm.decision.feedback_models import DenialFeedback  # noqa: F401 - metadata
+from rcm.decision.registry_models import PayerRegistryEntry  # noqa: F401 - metadata
+from rcm.decision.rules.models import RulesetMember  # noqa: F401 - registers metadata
 from rcm.domain.acknowledgement import ClaimAcknowledgement  # noqa: F401 - metadata
 from rcm.domain.claim import Claim, ClaimLine  # noqa: F401 - registers metadata
 from rcm.domain.claim_state_log import ClaimStateTransition  # noqa: F401 - metadata

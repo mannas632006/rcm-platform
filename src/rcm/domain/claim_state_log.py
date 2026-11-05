@@ -135,4 +135,6 @@ class ClaimStateTransition(Base):
         ),
         Index("ix_claim_transition_claim", "client_id", "claim_id", "occurred_at"),
         Index("ix_claim_transition_target", "client_id", "target_state"),
+        # Migration 0015: the steps awaiting a person, per claim.
+        Index("ix_claim_transition_review", "client_id", "claim_id", "review_status"),
     )

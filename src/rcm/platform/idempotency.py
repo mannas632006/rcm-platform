@@ -276,9 +276,10 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
     async def _store_or_default(self) -> IdempotencyStore:
         if self._store is None:
             settings = self._settings_or_default()
-            # redis-py ships `from_url` without annotations; the return type is
-            # documented and stable, so it is narrowed here rather than left as Any.
-            client: aioredis.Redis = aioredis.from_url(  # type: ignore[no-untyped-call]
+            # redis-py before 8 ships `from_url` without annotations; 8 adds them.
+            # The ignore covers the older one, and `unused-ignore` keeps strict
+            # mypy quiet on the newer one, so either resolves cleanly.
+            client: aioredis.Redis = aioredis.from_url(  # type: ignore[no-untyped-call, unused-ignore]
                 settings.redis_url.get_secret_value(), decode_responses=True
             )
             self._store = IdempotencyStore(client, ttl_seconds=settings.idempotency_key_ttl_seconds)

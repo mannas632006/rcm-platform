@@ -43,6 +43,29 @@ adjustments as (
     select * from {{ ref('core_line_adjustment') }}
 ),
 
+line_denial as (
+    -- ADR-0012. A line's refusal: any reason that is neither the patient's
+    -- cost share nor a payment adjustment. One category per denied line: the
+    -- largest refusal decides, a tie goes to the earliest reason, then the
+    -- adjustment id -- as rcm.decision.denials does. A refusal code the
+    -- taxonomy does not hold is labelled UNMAPPED, never left to look like
+    -- a line nobody classified.
+    select distinct on (a.service_line_id)
+        a.service_line_id,
+        coalesce(tx.denial_category, 'UNMAPPED') as denial_category,
+        tx.preventability
+    from {{ ref('core_line_adjustment') }} as a
+    left join {{ ref('core_denial_taxonomy') }} as tx
+        on a.carc_code = tx.carc_code
+    where not (a.cas_group_code = 'PR' and a.carc_code in ('1', '2', '3'))
+        and a.carc_code not in ('23', '24', '45')
+    order by
+        a.service_line_id,
+        a.adjustment_amount desc,
+        a.adjustment_sequence,
+        a.adjustment_id
+),
+
 joined as (
     select
         sl.claim_line_id,
@@ -103,7 +126,11 @@ joined as (
         adj.cas_group_code,
         adj.carc_code,
         adj.adjustment_amount,
-        adj.adjustment_sequence
+        adj.adjustment_sequence,
+
+        ld.service_line_id is not null as has_refusal,
+        ld.denial_category as line_denial_category,
+        ld.preventability as line_preventability
 
     from submitted as sl
     inner join claims as c
@@ -122,6 +149,8 @@ joined as (
     -- paid line from the dataset.
     left join adjustments as adj
         on al.service_line_id = adj.service_line_id
+    left join line_denial as ld
+        on al.service_line_id = ld.service_line_id
 )
 
 select
@@ -203,21 +232,32 @@ select
     j.adjustment_sequence,
     j.claim_status_code,
 
-    -- The denial signal, structural rather than taxonomic: the payer paid
-    -- nothing on the line and gave a reason. Both halves matter. A line paid
-    -- at zero with no reason code is not an adjudicated denial, and a reason
-    -- code on a line that was paid is an adjustment, not a refusal.
+    -- The denial signal (ADR-0012): the payer paid nothing on the line and
+    -- gave a refusal -- a reason that is neither the patient's cost share nor
+    -- a payment adjustment. A zero payment with no reason is not an
+    -- adjudicated denial, and a reason on a paid line is an adjustment. A
+    -- denial on a posting later reversed still happened: is_denied says so,
+    -- final_outcome says REVERSED. A line-level fact, so every adjustment
+    -- row of the line carries the same value.
     --
     -- Null, not false, when the line was never adjudicated. False would claim
     -- the payer accepted a line it never saw, and a training set reading it
     -- that way learns that rejected claims are clean ones (PD-4).
     case
         when j.service_line_id is null then null
-        else (j.line_paid = 0 and j.adjustment_id is not null)
+        else (j.line_paid = 0 and j.has_refusal)
     end as is_denied,
 
-    cast(null as varchar) as denial_category,  -- M4.8: denial taxonomy
-    cast(null as varchar) as preventability,   -- M4.8: denial taxonomy
+    -- BR-TAX-01: one category and one preventability per denied line, from
+    -- core_denial_taxonomy. Null for a line that was not denied. A refusal
+    -- code the taxonomy does not hold is UNMAPPED with a null
+    -- preventability: reported, never guessed (PD-18).
+    case
+        when j.line_paid = 0 and j.has_refusal then j.line_denial_category
+    end as denial_category,
+    case
+        when j.line_paid = 0 and j.has_refusal then j.line_preventability
+    end as preventability,
 
     case
         when j.payment_date is null or j.date_of_service is null then null
@@ -232,7 +272,10 @@ select
         when j.service_line_id is null then 'NOT_ADJUDICATED'
         when j.was_reversed then 'REVERSED'
         when j.line_paid > 0 then 'PAID'
-        when j.adjustment_id is not null then 'DENIED'
+        when j.has_refusal then 'DENIED'
+        -- Paid nothing, and no reason was a refusal: the patient's cost share
+        -- or a payment adjustment took it all (ADR-0012).
+        when j.adjustment_id is not null then 'ZERO_PAID_NOT_REFUSED'
         else 'ZERO_PAID_NO_REASON'
     end as final_outcome,
 

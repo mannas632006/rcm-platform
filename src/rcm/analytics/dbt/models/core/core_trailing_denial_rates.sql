@@ -33,10 +33,13 @@ with adjudicated as (
         ls.procedure_code,
         ls.modifier_1,
         la.payment_date as known_on,
-        -- The denial rule, structural and the same one M1.9 established: the
-        -- payer paid nothing on the line and gave a reason. A zero payment
-        -- with no reason code is not an adjudicated denial, and a reason code
-        -- on a line that was paid is an adjustment, not a refusal.
+        -- The denial rule (ADR-0012), the same as rcm.analytics.denials: the
+        -- payer paid nothing on the line and gave a refusal -- a reason that
+        -- is neither the patient's cost share (PR-1/2/3) nor a payment
+        -- adjustment (23/24/45). A zero payment with no reason is not an
+        -- adjudicated denial, and a reason on a paid line is an adjustment.
+        -- A later reversal is not read here: it was not knowable on the day
+        -- (PD-11).
         case
             when la.line_paid = 0 and adj.adjustment_id is not null then 1
             else 0
@@ -55,6 +58,8 @@ with adjudicated as (
         select a.adjustment_id
         from {{ ref('core_line_adjustment') }} as a
         where a.service_line_id = la.service_line_id
+            and not (a.cas_group_code = 'PR' and a.carc_code in ('1', '2', '3'))
+            and a.carc_code not in ('23', '24', '45')
         limit 1
     ) as adj on true
     where la.payment_date is not null

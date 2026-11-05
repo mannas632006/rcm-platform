@@ -87,7 +87,11 @@ class Settings(BaseSettings):
     session_idle_timeout_minutes: int = Field(default=15)
     work_item_lock_expiry_minutes: int = Field(default=30)
     payer_registry_staleness_days: int = Field(default=180)
-    blocking_rule_max_false_positive_rate: float = Field(default=0.05)
+    # TBD-45, decided by the owner on 2026-11-03: 10%. A rule whose measured
+    # false-positive rate is above this may not be promoted to BLOCKING
+    # (FR-RULES-03, M4.6). Decimal, so it compares exactly with a backtest's
+    # four-place rate.
+    blocking_rule_max_false_positive_rate: Decimal = Field(default=Decimal("0.10"))
     outcome_maturity_days: int = Field(default=180)
     timely_filing_escalation_days: int = Field(default=14)
     preventable_denial_defect_threshold: int = Field(default=3)

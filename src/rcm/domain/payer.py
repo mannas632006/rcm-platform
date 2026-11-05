@@ -184,7 +184,9 @@ class PayerMatchCandidate(Base):
         CheckConstraint(
             "(status = 'PENDING' AND reviewed_at IS NULL AND reviewed_by IS NULL) OR "
             "(status <> 'PENDING' AND reviewed_at IS NOT NULL AND reviewed_by IS NOT NULL)",
-            name="a_reviewed_candidate_names_its_reviewer",
+            # Short enough for Postgres's 63 characters once prefixed; the
+            # long name was cut and hashed, and never matched (migration 0022).
+            name="reviewed_names_reviewer",
         ),
         Index("ix_payer_match_candidate_status", "status"),
     )

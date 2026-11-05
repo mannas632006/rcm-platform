@@ -340,6 +340,15 @@ class RemittanceServiceLine(Base):
         UniqueConstraint(
             "claim_payment_id", "line_number", name="uq_remittance_service_line_claim_line"
         ),
+        # The target of a composite foreign key (M4.8): a row naming this
+        # line must name its client and posting too, so it cannot be filed
+        # under another client's scope (PD-20).
+        UniqueConstraint(
+            "service_line_id",
+            "client_id",
+            "claim_payment_id",
+            name="uq_remittance_service_line_line_client_payment",
+        ),
         Index("ix_remittance_service_line_client_procedure", "client_id", "procedure_code"),
     )
 
@@ -401,7 +410,9 @@ class RemittanceAdjustment(Base):
         CheckConstraint(
             "(claim_level AND service_line_id IS NULL) OR "
             "(NOT claim_level AND service_line_id IS NOT NULL)",
-            name="claim_level_adjustments_have_no_service_line",
+            # Short enough for Postgres's 63 characters once prefixed; the
+            # long name was cut and hashed, and never matched (migration 0022).
+            name="claim_level_has_no_line",
         ),
         Index("ix_remittance_adjustment_line", "service_line_id"),
         Index("ix_remittance_adjustment_claim", "claim_payment_id"),
