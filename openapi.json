@@ -6,7 +6,6 @@
         "properties": {
           "charges": {
             "description": "Billed charges of the claims at risk, as an exact decimal string to the cent.",
-            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Charges",
             "type": "string"
           },
