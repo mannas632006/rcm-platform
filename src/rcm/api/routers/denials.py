@@ -17,6 +17,9 @@ from rcm.api.schemas import (
     AUTH_ERRORS,
     DENIAL_ERRORS,
     DISPOSITION_ERRORS,
+    AppealOut,
+    AppealRevisionIn,
+    AppealSignIn,
     DenialWorkbenchOut,
     DispositionIn,
     PatientShareIn,
@@ -26,7 +29,7 @@ from rcm.api.schemas import (
     WriteOffOut,
 )
 from rcm.platform.auth import Permission
-from rcm.work import denial_workbench, dispositions
+from rcm.work import appeals, denial_workbench, dispositions
 from rcm.work.models import WriteOffReason
 
 router = APIRouter(prefix="/api/v1", tags=["denials"], responses=AUTH_ERRORS)
@@ -127,3 +130,68 @@ def bill_denial_to_patient(
         now=datetime.now(UTC),
     )
     return PatientShareOut(amount=result.amount)
+
+
+@router.post(
+    "/denials/{work_item_id}/appeal",
+    operation_id="draftAppeal",
+    summary="Open a denial's appeal: its draft, or a new one",
+    responses=DISPOSITION_ERRORS,
+    dependencies=[require_permission(Permission.DENIAL_DISPOSITION)],
+)
+def draft_appeal(
+    work_item_id: uuid.UUID, principal: CurrentPrincipal, session: AuditedSession
+) -> AppealOut:
+    """ADR-0017: a template letter with prompts a person must replace."""
+    view = appeals.draft_appeal(
+        session, principal=principal, work_item_id=work_item_id, now=datetime.now(UTC)
+    )
+    return AppealOut.model_validate(view, from_attributes=True)
+
+
+@router.post(
+    "/appeals/{appeal_id}/versions",
+    operation_id="reviseAppeal",
+    summary="Save a change to an appeal letter as a new version",
+    responses=DISPOSITION_ERRORS,
+    dependencies=[require_permission(Permission.DENIAL_DISPOSITION)],
+)
+def revise_appeal(
+    appeal_id: uuid.UUID,
+    body: AppealRevisionIn,
+    principal: CurrentPrincipal,
+    session: AuditedSession,
+) -> AppealOut:
+    view = appeals.revise_appeal(
+        session,
+        principal=principal,
+        appeal_id=appeal_id,
+        letter=body.letter,
+        now=datetime.now(UTC),
+    )
+    return AppealOut.model_validate(view, from_attributes=True)
+
+
+@router.post(
+    "/appeals/{appeal_id}/sign",
+    operation_id="signAppeal",
+    summary="Sign the current letter and send the appeal",
+    responses=DISPOSITION_ERRORS,
+    dependencies=[require_permission(Permission.APPEAL_SIGN)],
+)
+def sign_appeal(
+    appeal_id: uuid.UUID,
+    body: AppealSignIn,
+    principal: CurrentPrincipal,
+    session: AuditedSession,
+) -> AppealOut:
+    """UR-09: refused while any [prompt] is left or the version is not the
+    current one. Needs an Idempotency-Key; a retry sends once (PD-14)."""
+    view = appeals.sign_and_send(
+        session,
+        principal=principal,
+        appeal_id=appeal_id,
+        version=body.version,
+        now=datetime.now(UTC),
+    )
+    return AppealOut.model_validate(view, from_attributes=True)

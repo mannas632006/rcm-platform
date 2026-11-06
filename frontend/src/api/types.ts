@@ -34,3 +34,4 @@ export type DeniedLine = Schemas["DeniedLineOut"];
 export type WriteOffSummary = Schemas["WriteOffSummaryOut"];
 export type WriteOffReason = Schemas["DispositionIn"]["reason"];
 export type WriteOffResult = Schemas["WriteOffOut"];
+export type Appeal = Schemas["AppealOut"];

@@ -25,6 +25,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/appeals/{appeal_id}/sign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign the current letter and send the appeal
+         * @description UR-09: refused while any [prompt] is left or the version is not the
+         *     current one. Needs an Idempotency-Key; a retry sends once (PD-14).
+         */
+        post: operations["signAppeal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/appeals/{appeal_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save a change to an appeal letter as a new version */
+        post: operations["reviseAppeal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/claims/{claim_id}": {
         parameters: {
             query?: never;
@@ -84,6 +122,26 @@ export interface paths {
         get: operations["getDenial"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/denials/{work_item_id}/appeal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open a denial's appeal: its draft, or a new one
+         * @description ADR-0017: a template letter with prompts a person must replace.
+         */
+        post: operations["draftAppeal"];
         delete?: never;
         options?: never;
         head?: never;
@@ -300,6 +358,47 @@ export interface components {
             group_code: string;
             /** Reason Code */
             reason_code: string;
+        };
+        /**
+         * AppealOut
+         * @description UR-09: a DRAFT until a person signs the current text; SENT after.
+         */
+        AppealOut: {
+            /**
+             * Appeal Id
+             * Format: uuid
+             */
+            appeal_id: string;
+            /** Evidence */
+            evidence: string[];
+            /** Letter */
+            letter: string;
+            /** Signed At */
+            signed_at: string | null;
+            /** Signed By */
+            signed_by: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "DRAFT" | "SENT";
+            /** Version */
+            version: number;
+            /** Written By */
+            written_by: string;
+        };
+        /** AppealRevisionIn */
+        AppealRevisionIn: {
+            /** Letter */
+            letter: string;
+        };
+        /** AppealSignIn */
+        AppealSignIn: {
+            /**
+             * Version
+             * @description The version the signer read; it must be the current one.
+             */
+            version: number;
         };
         /**
          * Assignment
@@ -544,6 +643,8 @@ export interface components {
         };
         /** DenialWorkbenchOut */
         DenialWorkbenchOut: {
+            /** @description The denial's appeal, if one was drafted. */
+            appeal: components["schemas"]["AppealOut"] | null;
             /** Assigned To */
             assigned_to: string | null;
             /** @description Null when the 835 names a claim this client never submitted. */
@@ -1111,6 +1212,148 @@ export interface operations {
             };
         };
     };
+    signAppeal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                appeal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppealSignIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppealOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such denial, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The claim is not denied, a write-off already waits, or another operator holds the item. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A reason or note that is not valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reviseAppeal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                appeal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppealRevisionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppealOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such denial, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The claim is not denied, a write-off already waits, or another operator holds the item. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A reason or note that is not valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     getClaim: {
         parameters: {
             query?: never;
@@ -1261,6 +1504,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    draftAppeal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppealOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such denial, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The claim is not denied, a write-off already waits, or another operator holds the item. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A reason or note that is not valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

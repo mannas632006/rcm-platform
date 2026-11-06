@@ -30,6 +30,110 @@
         "title": "AdjustmentOut",
         "type": "object"
       },
+      "AppealOut": {
+        "description": "UR-09: a DRAFT until a person signs the current text; SENT after.",
+        "properties": {
+          "appeal_id": {
+            "format": "uuid",
+            "title": "Appeal Id",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "letter": {
+            "title": "Letter",
+            "type": "string"
+          },
+          "signed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signed At"
+          },
+          "signed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signed By"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "SENT"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "written_by": {
+            "title": "Written By",
+            "type": "string"
+          }
+        },
+        "required": [
+          "appeal_id",
+          "version",
+          "letter",
+          "evidence",
+          "status",
+          "written_by",
+          "signed_by",
+          "signed_at"
+        ],
+        "title": "AppealOut",
+        "type": "object"
+      },
+      "AppealRevisionIn": {
+        "additionalProperties": false,
+        "properties": {
+          "letter": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Letter",
+            "type": "string"
+          }
+        },
+        "required": [
+          "letter"
+        ],
+        "title": "AppealRevisionIn",
+        "type": "object"
+      },
+      "AppealSignIn": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "description": "The version the signer read; it must be the current one.",
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "AppealSignIn",
+        "type": "object"
+      },
       "Assignment": {
         "enum": [
           "any",
@@ -627,6 +731,17 @@
       },
       "DenialWorkbenchOut": {
         "properties": {
+          "appeal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AppealOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The denial's appeal, if one was drafted."
+          },
           "assigned_to": {
             "anyOf": [
               {
@@ -711,7 +826,8 @@
           "payment",
           "lines",
           "claim_adjustments",
-          "write_offs"
+          "write_offs",
+          "appeal"
         ],
         "title": "DenialWorkbenchOut",
         "type": "object"
@@ -1944,6 +2060,203 @@
         ]
       }
     },
+    "/api/v1/appeals/{appeal_id}/sign": {
+      "post": {
+        "description": "UR-09: refused while any [prompt] is left or the version is not the\ncurrent one. Needs an Idempotency-Key; a retry sends once (PD-14).",
+        "operationId": "signAppeal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "appeal_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Appeal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppealSignIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppealOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such denial, or not one in your clients."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The claim is not denied, a write-off already waits, or another operator holds the item."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A reason or note that is not valid."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Sign the current letter and send the appeal",
+        "tags": [
+          "denials"
+        ]
+      }
+    },
+    "/api/v1/appeals/{appeal_id}/versions": {
+      "post": {
+        "operationId": "reviseAppeal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "appeal_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Appeal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppealRevisionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppealOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such denial, or not one in your clients."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The claim is not denied, a write-off already waits, or another operator holds the item."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A reason or note that is not valid."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Save a change to an appeal letter as a new version",
+        "tags": [
+          "denials"
+        ]
+      }
+    },
     "/api/v1/claims/{claim_id}": {
       "get": {
         "description": "S-03: header and filing countdown (UR-07), service lines, each 835\npayment with its adjustments group and reason together (UR-08, PD-3),\nthe resubmission chain (PD-7), the state history, and every automated\ndecision with its version and inputs (UR-06).",
@@ -2144,6 +2457,95 @@
           }
         ],
         "summary": "One denial, with what is needed to decide on it",
+        "tags": [
+          "denials"
+        ]
+      }
+    },
+    "/api/v1/denials/{work_item_id}/appeal": {
+      "post": {
+        "description": "ADR-0017: a template letter with prompts a person must replace.",
+        "operationId": "draftAppeal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Work Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppealOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such denial, or not one in your clients."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The claim is not denied, a write-off already waits, or another operator holds the item."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A reason or note that is not valid."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Open a denial's appeal: its draft, or a new one",
         "tags": [
           "denials"
         ]

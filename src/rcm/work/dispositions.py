@@ -45,6 +45,8 @@ from rcm.platform.errors import (
 from rcm.work import queue
 from rcm.work.denial_workbench import DENIAL_KEY
 from rcm.work.models import (
+    Appeal,
+    AppealSignoff,
     WorkItem,
     WorkItemKind,
     WriteOff,
@@ -84,7 +86,7 @@ class WriteOffResult:
     threshold: Decimal
 
 
-def _denial_item(session: Session, *, principal: Principal, work_item_id: uuid.UUID) -> WorkItem:
+def denial_item(session: Session, *, principal: Principal, work_item_id: uuid.UUID) -> WorkItem:
     item = session.scalar(
         scoped_query(
             select(WorkItem)
@@ -144,7 +146,7 @@ def _denied_share(session: Session, *, item: WorkItem, patient: bool) -> Decimal
     return Decimal(total if total is not None else 0).quantize(Decimal("0.01"))
 
 
-def _waiting(session: Session, *, item: WorkItem) -> WriteOff | None:
+def waiting_write_off(session: Session, *, item: WorkItem) -> WriteOff | None:
     return session.scalar(
         select(WriteOff)
         .outerjoin(WriteOffDecision, WriteOffDecision.write_off_id == WriteOff.write_off_id)
@@ -169,7 +171,7 @@ def request_write_off(
     """Ask to write off a denial's payer share; apply it at once if within
     the asker's limit, otherwise leave it for a named approver."""
     principal.require(Permission.DENIAL_DISPOSITION)
-    item = _denial_item(session, principal=principal, work_item_id=work_item_id)
+    item = denial_item(session, principal=principal, work_item_id=work_item_id)
     if reason is WriteOffReason.OTHER and not note.strip():
         raise ValidationFailedError(field="note", reason='a write-off for "other" must say why')
     if item.claim_id is None:
@@ -177,7 +179,22 @@ def request_write_off(
             field="work_item_id",
             reason="the denied payment names no claim on file; find the claim first",
         )
-    if _waiting(session, item=item) is not None:
+    if session.scalar(
+        select(Appeal.appeal_id)
+        .outerjoin(AppealSignoff, AppealSignoff.appeal_id == Appeal.appeal_id)
+        .where(
+            Appeal.client_id == item.client_id,
+            Appeal.work_item_id == item.work_item_id,
+            AppealSignoff.appeal_id.is_(None),
+        )
+    ):
+        # One decision at a time: an appeal of this denial is being drafted.
+        raise StateTransitionError(
+            source="appeal in draft",
+            target="write-off",
+            reason="an appeal of this denial is being drafted; send it or decide against it first",
+        )
+    if waiting_write_off(session, item=item) is not None:
         raise StateTransitionError(
             source="write-off awaiting approval",
             target="write-off",
@@ -269,13 +286,13 @@ def bill_patient(
     provider's and never reaches a patient (PD-19).
     """
     principal.require(Permission.DENIAL_DISPOSITION)
-    item = _denial_item(session, principal=principal, work_item_id=work_item_id)
+    item = denial_item(session, principal=principal, work_item_id=work_item_id)
     if item.claim_id is None:
         raise ValidationFailedError(
             field="work_item_id",
             reason="the denied payment names no claim on file; find the claim first",
         )
-    if _waiting(session, item=item) is not None:
+    if waiting_write_off(session, item=item) is not None:
         raise StateTransitionError(
             source="write-off awaiting approval",
             target=str(ClaimState.PATIENT_BALANCE),
@@ -322,7 +339,7 @@ def bill_patient(
         entity_id=item.claim_id,
         after_state={"amount": str(amount), "work_item_id": str(item.work_item_id)},
     )
-    _close(
+    close_item(
         session,
         item=item,
         operator=principal.subject,
@@ -354,7 +371,7 @@ def decide_write_off(
     # Serialise on the denial's work item, not the write-off: the write-off
     # tables are insert-only, and FOR UPDATE needs the UPDATE grant they
     # deliberately lack. Every decision on a denial takes this lock first.
-    item = _denial_item(session, principal=principal, work_item_id=write_off.work_item_id)
+    item = denial_item(session, principal=principal, work_item_id=write_off.work_item_id)
     if _same_person(write_off.requested_by, principal.subject):
         # BR-M11-05: approval is a second person's. A CHECK cannot see both
         # tables, so it is refused here.
@@ -416,7 +433,7 @@ def _apply(
         next_action_due=now.date(),
         note=f"write-off {write_off.reason}: {write_off.amount}",
     )
-    _close(
+    close_item(
         session,
         item=item,
         operator=operator,
@@ -426,7 +443,7 @@ def _apply(
     )
 
 
-def _close(
+def close_item(
     session: Session,
     *,
     item: WorkItem,

@@ -15,7 +15,7 @@ const DISPOSER = {
   ...ME,
   subject: "den.dana",
   roles: ["DENIAL_SPECIALIST"],
-  permissions: ["claim:read", "denial:read", "denial:disposition"],
+  permissions: ["claim:read", "denial:read", "denial:disposition", "appeal:sign"],
 };
 const APPROVER = {
   ...ME,
@@ -95,7 +95,21 @@ const DENIAL: DenialWorkbench = {
   ],
   claim_adjustments: [],
   write_offs: [],
+  appeal: null,
 };
+
+const APPEAL_ID = "66666666-0000-4000-8000-000000000006";
+const DRAFT = {
+  appeal_id: APPEAL_ID,
+  version: 1,
+  letter: "Re: Request for reconsideration\n\n[State why the denial should be reversed.]",
+  evidence: ["Clinical notes for the date of service"],
+  status: "DRAFT" as const,
+  written_by: "den.dana",
+  signed_by: null,
+  signed_at: null,
+};
+const REVIEWED = "Re: Request for reconsideration\n\nThe notes show the visit was necessary.";
 
 function api(denial: { status?: number; body: unknown } = { body: DENIAL }, me: unknown = DENIER) {
   return mockApi({
@@ -125,6 +139,13 @@ function withDisposition(me: unknown, denial: unknown = DENIAL) {
       },
     },
     [`/api/v1/denials/${ID}/patient-responsibility`]: { body: { amount: "50.00" } },
+    [`/api/v1/denials/${ID}/appeal`]: { body: DRAFT },
+    [`/api/v1/appeals/${APPEAL_ID}/versions`]: {
+      body: { ...DRAFT, version: 2, letter: REVIEWED },
+    },
+    [`/api/v1/appeals/${APPEAL_ID}/sign`]: {
+      body: { ...DRAFT, version: 2, letter: REVIEWED, status: "SENT", signed_by: "den.dana" },
+    },
     [`/api/v1/write-offs/${WAITING.write_off_id}/decision`]: {
       body: { write_off_id: WAITING.write_off_id, status: "APPLIED" },
     },
@@ -139,7 +160,10 @@ async function posted(fetchMock: ReturnType<typeof mockApi>, path: string) {
     calls.map(async (request) => ({
       method: request.method,
       key: request.headers.get("Idempotency-Key"),
-      body: (await request.clone().json()) as unknown,
+      body: await request
+        .clone()
+        .text()
+        .then((text) => (text ? (JSON.parse(text) as unknown) : null)),
     })),
   );
 }
@@ -253,6 +277,54 @@ describe("denial write-off (M5.7, BR-M11-05)", () => {
     renderApp(<App />, { path: PATH });
     await screen.findByRole("button", { name: "Write off" });
     expect(screen.queryByRole("button", { name: /Bill patient/ })).toBeNull();
+  });
+
+  it("drafts an appeal and opens it for review (ADR-0017)", async () => {
+    const fetchMock = withDisposition(DISPOSER);
+    renderApp(<App />, { path: PATH });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Draft appeal" }));
+    expect(await screen.findByLabelText("Appeal letter")).toHaveValue(DRAFT.letter);
+    expect(screen.getByText("Clinical notes for the date of service")).toBeInTheDocument();
+    expect(await posted(fetchMock, "/appeal")).toHaveLength(1);
+  });
+
+  it("will not sign a letter with prompts left in it (UR-09)", async () => {
+    withDisposition(DISPOSER, { ...DENIAL, appeal: DRAFT });
+    renderApp(<App />, { path: PATH });
+    expect(await screen.findByRole("button", { name: "Sign and send" })).toBeDisabled();
+    expect(screen.getByText(/Replace every \[bracketed\] prompt/)).toBeInTheDocument();
+  });
+
+  it("saves a reviewed letter, then signs that version after a confirm step", async () => {
+    const fetchMock = withDisposition(DISPOSER, { ...DENIAL, appeal: DRAFT });
+    renderApp(<App />, { path: PATH });
+    const user = userEvent.setup();
+    const editor = await screen.findByLabelText("Appeal letter");
+    await user.clear(editor);
+    await user.type(editor, REVIEWED);
+    // Unsaved words are not what would be signed.
+    expect(screen.getByRole("button", { name: "Sign and send" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Save letter" }));
+    await waitFor(async () => {
+      expect(await posted(fetchMock, "/versions")).toHaveLength(1);
+    });
+    expect((await posted(fetchMock, "/versions"))[0]?.body).toEqual({ letter: REVIEWED });
+    await user.click(await screen.findByRole("button", { name: "Sign and send" }));
+    await user.click(screen.getByRole("button", { name: "Confirm: sign and send version 2" }));
+    expect(await screen.findByText(/Appeal sent/)).toBeInTheDocument();
+    const signed = await posted(fetchMock, "/sign");
+    expect(signed).toHaveLength(1);
+    expect(signed[0]?.body).toEqual({ version: 2 });
+    expect(signed[0]?.key).toBeTruthy();
+  });
+
+  it("shows a sent appeal as sent, not as something to edit", async () => {
+    const sent = { ...DRAFT, version: 2, letter: REVIEWED, status: "SENT" as const, signed_by: "den.dana", signed_at: "2026-11-06T10:00:00Z" };
+    withDisposition(DISPOSER, { ...DENIAL, appeal: sent, outcome: "APPEALED" });
+    renderApp(<App />, { path: PATH });
+    expect(await screen.findByText(/Appeal sent/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Appeal letter")).toBeNull();
   });
 
   it("offers no action to a role that cannot dispose of denials", async () => {
