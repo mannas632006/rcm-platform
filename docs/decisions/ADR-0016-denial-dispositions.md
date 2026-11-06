@@ -33,6 +33,34 @@ non-PR group (shown).
 
 DOC-02 §7's diagram gains `Denied --> PatientBalance: PR share only`.
 
+### While a CO amount is open, the patient is not billed (interim)
+
+A denial can carry both, for example CO-50 $5,000 beside PR-1 $10. Billing the
+patient would move the claim out of `Denied`, and the $5,000 would be dropped
+with no write-off and no approval (BR-M11-05). So `bill_patient` refuses while
+any non-PR amount remains on the denied lines, and says to appeal, correct or
+write that off first. The screen explains this instead of offering the button.
+
+**Real-world practice (researched 2026-11-06), and the target:**
+
+- The group code decides who can be billed. CO is the provider's (the patient
+  must not be billed); PR may be billed.
+- Billing teams treat the two parts separately: the PR part goes to the
+  patient as the 835 states it, and the denied CO part stays open in denial
+  work until it is appealed, corrected or written off. It is never pushed onto
+  the patient.
+- A denial write-off is a discretionary adjustment under the organisation's
+  own approval levels, not a contractual one.
+- Medicare: only PR is billable to the beneficiary, and a non-covered service
+  only with a valid ABN.
+
+The target is that split: bill the PR share at once and keep the CO part as
+open denial work. It needs a patient balance kept apart from the claim's
+state, which belongs with patient statements (not built yet). The interim rule
+is one function (`bill_patient`), with nothing stored that depends on it, so
+it can change after testers' review. The Medicare ABN check belongs in the
+same later change.
+
 ## Decision 2: a write-off covers the payer's share, never the patient's
 
 The amount written off is the denied lines' adjustments outside the PR group.
@@ -67,6 +95,13 @@ an `Idempotency-Key` (PD-14).
   with denied lines needs a separate decision.
 - Write-offs waiting for approval are visible on the denial page. A queue of
   them for approvers is not built yet.
+- A disposition acts only on an open denial item. A resolved item is history:
+  the claim may since have been denied again under another payment.
+- The operator's free-text note stays on the work item's resolution, never in
+  the claim's state history (PD-13).
+- "Not your own approval" compares subjects case- and space-insensitively.
+  A write-off that goes to wait releases the requester's hold on the item, so
+  the approver is not blocked by it.
 - `audit_event.action` was widened from 64 to 255 characters (migration 0026),
   because `POST /api/v1/denials/<id>/disposition` could not be audited and was
   refused.

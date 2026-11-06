@@ -52,7 +52,7 @@ from rcm.work.models import (
     WriteOffDecisionKind,
     WriteOffReason,
 )
-from rcm.work.state import WorkItemOutcome, WorkItemState
+from rcm.work.state import OPEN_STATES, WorkItemOutcome, WorkItemState
 
 __all__ = [
     "PatientShareResult",
@@ -99,7 +99,18 @@ def _denial_item(session: Session, *, principal: Principal, work_item_id: uuid.U
     )
     if item is None or not (item.source_key or "").startswith(DENIAL_KEY):
         raise ResourceNotFoundError(entity="denial", entity_id=str(work_item_id))
+    if WorkItemState(item.state) not in OPEN_STATES:
+        # A finished item is history, not a handle on the claim: the claim
+        # may since have been denied again under another payment.
+        raise StateTransitionError(
+            source=item.state, target="disposition", reason="this denial is already resolved"
+        )
     return item
+
+
+def _same_person(a: str, b: str) -> bool:
+    """BR-M11-05 compares people, not spellings of a subject."""
+    return a.strip().casefold() == b.strip().casefold()
 
 
 def _payer_share(session: Session, *, item: WorkItem) -> Decimal:
@@ -221,6 +232,16 @@ def request_write_off(
         },
     )
     if needs_approval:
+        if item.assigned_to is not None and _same_person(item.assigned_to, principal.subject):
+            # Waiting for someone else: free the item, so the requester's
+            # lease cannot block the approver.
+            queue.release(
+                session,
+                work_item_id=item.work_item_id,
+                client_id=item.client_id,
+                operator=item.assigned_to,
+                now=now,
+            )
         return WriteOffResult(
             write_off.write_off_id, WriteOffStatus.PENDING_APPROVAL, amount, threshold
         )
@@ -267,6 +288,17 @@ def bill_patient(
             reason="the denied lines carry no patient-responsibility (PR) amount; "
             "contractual amounts are never billed to the patient",
         )
+    payer = _payer_share(session, item=item)
+    if payer > 0:
+        # Leaving Denied would drop the payer's share with no write-off and
+        # no approval (BR-M11-05). Real teams split the two; until patient
+        # balances live apart from claim state, refuse (ADR-0016).
+        raise StateTransitionError(
+            source=str(ClaimState.DENIED),
+            target=str(ClaimState.PATIENT_BALANCE),
+            reason=f"the denial still carries {payer} the payer refused outside the patient's "
+            "share; appeal, correct or write that off first -- it is never billed to the patient",
+        )
     transition(
         session,
         claim_id=item.claim_id,
@@ -277,7 +309,9 @@ def bill_patient(
         facts={str(Guard.PATIENT_SHARE_DENIED): True},
         # The patient statement is the next step, due now.
         next_action_due=now.date(),
-        note=f"patient share {amount}" + (f": {note.strip()}" if note.strip() else ""),
+        # PD-13: the operator's free text stays on the work item, never in
+        # the claim's history.
+        note=f"patient share {amount}",
     )
     record_audit_event(
         session,
@@ -321,7 +355,7 @@ def decide_write_off(
     # tables are insert-only, and FOR UPDATE needs the UPDATE grant they
     # deliberately lack. Every decision on a denial takes this lock first.
     item = _denial_item(session, principal=principal, work_item_id=write_off.work_item_id)
-    if write_off.requested_by == principal.subject:
+    if _same_person(write_off.requested_by, principal.subject):
         # BR-M11-05: approval is a second person's. A CHECK cannot see both
         # tables, so it is refused here.
         raise AuthorizationDeniedError()

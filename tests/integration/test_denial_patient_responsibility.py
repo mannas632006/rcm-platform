@@ -3,6 +3,12 @@
 The owner chose (2026-11-06) to allow Denied -> PatientBalance only for the
 amount the payer put in the patient-responsibility group (PR). Contractual
 (CO) amounts are the provider's and are never billed to a patient (PD-19).
+
+While a CO amount is still on the denial, billing the patient is refused: the
+claim would leave Denied and the CO amount would be dropped without a
+write-off or its approval (BR-M11-05). Real billing teams split the two; that
+needs a patient balance kept apart from claim state, recorded in ADR-0016 as
+the target.
 """
 
 from __future__ import annotations
@@ -18,6 +24,7 @@ from sqlalchemy import select
 
 from rcm.domain.claim import Claim
 from rcm.domain.claim_state import ClaimState
+from rcm.domain.claim_state_log import ClaimStateTransition
 from rcm.platform.audit import AuditEvent
 from rcm.platform.auth import Role
 from rcm.platform.db import session_scope
@@ -29,7 +36,9 @@ from rcm.platform.errors import (
 from rcm.work import dispositions
 from rcm.work.models import WorkItem, WorkItemKind
 from tests.integration.test_acknowledgement_loading import (
+    CHARGE,
     CLIENT_A,
+    _remittance,
     ack_277ca,
     acknowledge,
     denial_for,
@@ -51,6 +60,28 @@ def root(tmp_path: Path) -> Path:
     return r
 
 
+def patient_only(root: Path, submitter_id: str = "CLM-PR") -> uuid.UUID:
+    """PR-204: not covered under the patient's plan. The whole denied amount
+    is the patient's. Its denial work item id."""
+    submit(submitter_id, root, control="0001")
+    acknowledge(ack_277ca((submitter_id, "A2:20")), root, name="277ca.edi")
+    body = [
+        f"CLP*{submitter_id}*4*{CHARGE}*0.00*{CHARGE}*MB*PCN{submitter_id}*11~",
+        "NM1*QC*1*Castellanos*Andre****MI*VAZ957419823~",
+        f"SVC*HC:99203*{CHARGE}*0.00**1~",
+        f"CAS*PR*204*{CHARGE}~",
+    ]
+    remit(_remittance(body, control="0001", check=Decimal("0.00")), root, name="pr.835")
+    advance()
+    route()
+    with session_scope() as session:
+        item = session.scalar(
+            select(WorkItem.work_item_id).where(WorkItem.kind == str(WorkItemKind.DENIAL))
+        )
+    assert item is not None
+    return item
+
+
 def bill(item: uuid.UUID, who: Any = SPECIALIST) -> dispositions.PatientShareResult:
     with session_scope() as session:
         return dispositions.bill_patient(
@@ -67,12 +98,26 @@ def claim_state(submitter_id: str = "CLM-WO") -> str:
 
 @pytest.mark.invariant
 def test_co_group_never_billed_to_patient(root: Path) -> None:
-    """PD-19. The denial carries CO-50 150.00 and PR-1 50.00; the patient is
-    billed the 50.00 and never any of the CO amount."""
+    """PD-19. A denial carrying CO-50 150.00 beside PR-1 50.00 is not sent
+    to the patient at all -- neither the CO amount, nor (while the CO amount
+    is undecided) the PR share that would carry the claim away from it."""
     item = denied(root)
+    with pytest.raises(StateTransitionError):
+        bill(item)
+    assert claim_state() == str(ClaimState.DENIED)
+    with session_scope() as session:
+        found = session.get(WorkItem, item)
+        assert found is not None
+        assert found.outcome is None
+
+
+@pytest.mark.invariant
+def test_a_denial_that_is_all_the_patients_is_billed_to_them(root: Path) -> None:
+    """PR-204: the payer says the patient owes it all; they are billed it."""
+    item = patient_only(root)
     result = bill(item)
-    assert result.amount == Decimal("50.00")
-    assert claim_state() == str(ClaimState.PATIENT_BALANCE)
+    assert result.amount == Decimal(str(CHARGE))
+    assert claim_state("CLM-PR") == str(ClaimState.PATIENT_BALANCE)
     with session_scope() as session:
         found = session.get(WorkItem, item)
         assert found is not None
@@ -84,7 +129,7 @@ def test_co_group_never_billed_to_patient(root: Path) -> None:
                 AuditEvent.entity_id == found.claim_id,
             )
         ).all()
-    assert event.after_state == {"amount": "50.00", "work_item_id": str(item)}
+    assert event.after_state == {"amount": f"{CHARGE}", "work_item_id": str(item)}
 
 
 def test_a_denial_with_no_patient_share_stays_off_the_patient(root: Path) -> None:
@@ -105,14 +150,14 @@ def test_a_denial_with_no_patient_share_stays_off_the_patient(root: Path) -> Non
 
 
 def test_only_a_denied_claim_goes_to_the_patient(root: Path) -> None:
-    item = denied(root)
+    item = patient_only(root)
     bill(item)
     with pytest.raises(StateTransitionError):
         bill(item)
 
 
 def test_billing_the_patient_needs_denial_disposition(root: Path) -> None:
-    item = denied(root)
+    item = patient_only(root)
     with pytest.raises(AuthorizationDeniedError):
         bill(item, who=person("rules.ria", Role.RULES_AUTHOR))
 
@@ -140,7 +185,7 @@ def test_billing_the_patient_twice_with_one_key_bills_once(
     root: Path,
 ) -> None:
     """PD-14."""
-    item = denied(root)
+    item = patient_only(root)
     key = f"pr-{uuid.uuid4()}"
     subject = f"den.{uuid.uuid4().hex[:8]}"
     headers = {
@@ -151,7 +196,7 @@ def test_billing_the_patient_twice_with_one_key_bills_once(
     first = api.post(path, json={"note": ""}, headers=headers)
     again = api.post(path, json={"note": ""}, headers=headers)
     assert first.status_code == again.status_code == 200
-    assert first.json() == again.json() == {"amount": "50.00"}
+    assert first.json() == again.json() == {"amount": f"{CHARGE}"}
     with session_scope() as session:
         events = session.scalars(
             select(AuditEvent).where(
@@ -159,3 +204,23 @@ def test_billing_the_patient_twice_with_one_key_bills_once(
             )
         ).all()
     assert len(events) == 1
+
+
+def test_a_resolved_denial_cannot_be_disposed_of_again(root: Path) -> None:
+    """A finished item is history, not a handle on the claim's next denial."""
+    item = patient_only(root)
+    bill(item)
+    with pytest.raises(StateTransitionError):
+        bill(item, who=MANAGER)
+
+
+def test_the_operators_note_stays_out_of_the_claim_history(root: Path) -> None:
+    """PD-13: free text can carry a name; the claim's history never does."""
+    item = patient_only(root)
+    with session_scope() as session:
+        dispositions.bill_patient(
+            session, principal=SPECIALIST, work_item_id=item, note="spoke to Jane Roe", now=NOW
+        )
+    with session_scope() as session:
+        notes = session.scalars(select(ClaimStateTransition.note)).all()
+    assert not any("Jane" in n for n in notes)

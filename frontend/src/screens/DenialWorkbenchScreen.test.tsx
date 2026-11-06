@@ -203,8 +203,7 @@ describe("denial write-off (M5.7, BR-M11-05)", () => {
           ? {
               ...line,
               adjustments: [
-                { group_code: "CO", reason_code: "50", amount: "370.00", claim_level: false },
-                { group_code: "PR", reason_code: "1", amount: "50.00", claim_level: false },
+                { group_code: "PR", reason_code: "204", amount: "50.00", claim_level: false },
               ],
             }
           : line,
@@ -223,6 +222,30 @@ describe("denial write-off (M5.7, BR-M11-05)", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]?.key).toBeTruthy();
     expect(sent[0]?.body).toEqual({ note: "" });
+  });
+
+  it("explains, rather than offers, billing the patient while a CO amount is open", async () => {
+    const mixed = {
+      ...DENIAL,
+      lines: DENIAL.lines.map((line) =>
+        line.line_number === 1
+          ? {
+              ...line,
+              adjustments: [
+                { group_code: "CO", reason_code: "50", amount: "370.00", claim_level: false },
+                { group_code: "PR", reason_code: "1", amount: "50.00", claim_level: false },
+              ],
+            }
+          : line,
+      ),
+    };
+    withDisposition(DISPOSER, mixed);
+    renderApp(<App />, { path: PATH });
+    await screen.findByRole("button", { name: "Write off" });
+    expect(screen.queryByRole("button", { name: /Bill patient/ })).toBeNull();
+    expect(
+      screen.getByText(/can be billed once the payer's share is appealed, corrected or written off/),
+    ).toBeInTheDocument();
   });
 
   it("offers no patient billing when nothing is the patient's (PD-19)", async () => {

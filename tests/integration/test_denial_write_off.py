@@ -33,7 +33,7 @@ from rcm.platform.errors import (
     StateTransitionError,
     ValidationFailedError,
 )
-from rcm.work import dispositions
+from rcm.work import dispositions, queue
 from rcm.work.dispositions import WriteOff, WriteOffReason, WriteOffStatus
 from rcm.work.models import WorkItem, WorkItemKind
 from tests.integration.test_acknowledgement_loading import (
@@ -319,3 +319,23 @@ def test_the_workbench_shows_a_write_off_waiting_for_approval(
     ).json()
     assert body["write_offs"][0]["status"] == "REJECTED"
     assert body["write_offs"][0]["decided_by"] == MANAGER.subject
+
+
+def test_a_differently_written_name_is_still_the_requester(root: Path) -> None:
+    """BR-M11-05: "DEN.Dana " is den.dana; they still cannot approve."""
+    result = write_off(denied(root))
+    same_person = person(" DEN.Dana ", Role.OPERATIONS_MANAGER)
+    with pytest.raises(AuthorizationDeniedError):
+        decide(result.write_off_id, same_person, approve=True)
+
+
+def test_an_approver_can_decide_while_the_requester_held_the_item(root: Path) -> None:
+    """A waiting write-off frees the item, so approval is not blocked by the
+    requester's lease."""
+    item = denied(root)
+    with session_scope() as session:
+        queue.claim(
+            session, work_item_id=item, client_id=CLIENT_A, operator=SPECIALIST.subject, now=NOW
+        )
+    result = write_off(item)
+    assert decide(result.write_off_id, MANAGER, approve=True) is WriteOffStatus.APPLIED

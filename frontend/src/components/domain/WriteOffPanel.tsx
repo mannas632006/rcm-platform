@@ -264,9 +264,18 @@ export function WriteOffPanel({ denial }: { denial: DenialWorkbench }) {
             ) : (
               <Request denial={denial} share={share} />
             )}
-            {patient !== null && patient !== "0.00" && (
-              <PatientShare denial={denial} share={patient} />
-            )}
+            {patient !== null &&
+              patient !== "0.00" &&
+              (share === "0.00" ? (
+                <PatientShare denial={denial} share={patient} />
+              ) : (
+                // ADR-0016: billing the patient now would drop the payer's
+                // share with no write-off or approval, so it waits.
+                <p className="text-sm text-muted">
+                  The patient&apos;s share, <MoneyDisplay amount={patient} />, can be billed once
+                  the payer&apos;s share is appealed, corrected or written off.
+                </p>
+              ))}
           </div>
         )}
       </div>
