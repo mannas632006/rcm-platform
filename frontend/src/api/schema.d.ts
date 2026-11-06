@@ -68,6 +68,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/denials/{work_item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One denial, with what is needed to decide on it
+         * @description S-04: each line the payer denied, group and reason together (PD-3),
+         *     with its recorded category and preventability (BR-TAX-01), guidance for
+         *     the category, and how the same denial went before (UR-11).
+         */
+        get: operations["getDenial"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/denials/{work_item_id}/disposition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decide what to do with a denial
+         * @description S-04. Write off the denial's payer share (BR-M11-05): applied at once
+         *     within the operator's limit, otherwise left for a named approver. Needs
+         *     an Idempotency-Key; a retry writes off once (PD-14).
+         */
+        post: operations["disposeDenial"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/denials/{work_item_id}/patient-responsibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bill a denial's patient share to the patient
+         * @description ADR-0016: accept the payer's refusal and move the denied lines' PR
+         *     share to the patient. A CO amount is never billed to the patient (PD-19).
+         *     Needs an Idempotency-Key; a retry bills once (PD-14).
+         */
+        post: operations["billDenialToPatient"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -167,6 +233,26 @@ export interface paths {
         get: operations["listQueueItems"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/write-offs/{write_off_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve or reject a write-off that waits for approval
+         * @description BR-M11-05: a named approver who is not the requester.
+         */
+        post: operations["decideWriteOff"];
         delete?: never;
         options?: never;
         head?: never;
@@ -389,6 +475,153 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** DenialClaimOut */
+        DenialClaimOut: {
+            /** Balance */
+            balance: string;
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /** Date Of Service */
+            date_of_service: string | null;
+            /** Payer Id */
+            payer_id: string;
+            /** Payer Name */
+            payer_name: string | null;
+            /** State */
+            state: string;
+            /** Submitter Claim Id */
+            submitter_claim_id: string;
+        };
+        /**
+         * DenialClassificationOut
+         * @description As the classifier recorded it (BR-TAX-01), never re-derived.
+         */
+        DenialClassificationOut: {
+            /** Category */
+            category: string;
+            /** Group Code */
+            group_code: string;
+            /** Preventability */
+            preventability: string;
+            /** Reason Code */
+            reason_code: string;
+            /** Taxonomy Version */
+            taxonomy_version: string;
+        };
+        /**
+         * DenialGuidanceOut
+         * @description What usually resolves this category (DOC-02 8.1). The same for every
+         *     claim in it: documentation, not a decision about this claim.
+         */
+        DenialGuidanceOut: {
+            /** Category */
+            category: string;
+            /** Text */
+            text: string;
+            /** Version */
+            version: string;
+        };
+        /** DenialPaymentOut */
+        DenialPaymentOut: {
+            /**
+             * Claim Payment Id
+             * Format: uuid
+             */
+            claim_payment_id: string;
+            /** Patient Responsibility */
+            patient_responsibility: string;
+            /** Payer Control Number */
+            payer_control_number: string;
+            /** Payment Date */
+            payment_date: string | null;
+            /** Total Charge */
+            total_charge: string;
+            /** Total Paid */
+            total_paid: string;
+        };
+        /** DenialWorkbenchOut */
+        DenialWorkbenchOut: {
+            /** Assigned To */
+            assigned_to: string | null;
+            /** @description Null when the 835 names a claim this client never submitted. */
+            claim: components["schemas"]["DenialClaimOut"] | null;
+            /**
+             * Claim Adjustments
+             * @description CAS at claim level (PD-6).
+             */
+            claim_adjustments: components["schemas"]["AdjustmentOut"][];
+            /** Lines */
+            lines: components["schemas"]["DeniedLineOut"][];
+            /** Outcome */
+            outcome: string | null;
+            payment: components["schemas"]["DenialPaymentOut"];
+            /**
+             * Sla Due At
+             * Format: date-time
+             */
+            sla_due_at: string;
+            /** State */
+            state: string;
+            /**
+             * Work Item Id
+             * Format: uuid
+             */
+            work_item_id: string;
+            /**
+             * Write Offs
+             * @description Every write-off asked of this denial, newest first.
+             */
+            write_offs: components["schemas"]["WriteOffSummaryOut"][];
+        };
+        /** DeniedLineOut */
+        DeniedLineOut: {
+            /** Adjustments */
+            adjustments: components["schemas"]["AdjustmentOut"][];
+            /** Charge */
+            charge: string;
+            /** @description Null for a line the payer did not deny. */
+            classification: components["schemas"]["DenialClassificationOut"] | null;
+            guidance: components["schemas"]["DenialGuidanceOut"] | null;
+            /** Line Number */
+            line_number: number;
+            /** Modifiers */
+            modifiers: string[];
+            /** Paid */
+            paid: string;
+            /** Procedure Code */
+            procedure_code: string;
+            similar: components["schemas"]["SimilarDenialsOut"] | null;
+            /**
+             * Status
+             * @description DENIED (classified), UNCLASSIFIED (paid nothing for a refusal the taxonomy does not hold yet -- a denial awaiting a category), or NOT_DENIED.
+             */
+            status: string;
+        };
+        /**
+         * DispositionIn
+         * @description S-04: what the operator decided. Write-off only in this slice.
+         */
+        DispositionIn: {
+            /**
+             * Action
+             * @constant
+             */
+            action: "WRITE_OFF";
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /**
+             * Reason
+             * @description Structured (FR-WORK-04); "OTHER" needs a note.
+             * @enum {string}
+             */
+            reason: "APPEAL_NOT_VIABLE" | "TIMELY_FILING_MISSED" | "CONTRACTUAL" | "SMALL_BALANCE" | "OTHER";
+        };
         /** FilingOut */
         FilingOut: {
             /**
@@ -440,6 +673,22 @@ export interface components {
             /** Remark Codes */
             remark_codes: string[];
         };
+        /** PatientShareIn */
+        PatientShareIn: {
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
+        /** PatientShareOut */
+        PatientShareOut: {
+            /**
+             * Amount
+             * @description The denied lines' PR share billed to the patient. Never a CO amount (PD-19).
+             */
+            amount: string;
+        };
         /** PayerRegistryOut */
         PayerRegistryOut: {
             /** Entries */
@@ -488,7 +737,7 @@ export interface components {
          * @description What a principal may do. Checked, never inferred from the role name.
          * @enum {string}
          */
-        Permission: "claim:read" | "claim:write" | "claim:submit" | "denial:read" | "denial:disposition" | "appeal:sign" | "coding:read" | "coding:write" | "rule:read" | "rule:author" | "rule:promote" | "payer_registry:write" | "report:read" | "audit:read" | "user:admin";
+        Permission: "claim:read" | "claim:write" | "claim:submit" | "denial:read" | "denial:disposition" | "appeal:sign" | "write_off:approve" | "coding:read" | "coding:write" | "rule:read" | "rule:author" | "rule:promote" | "payer_registry:write" | "report:read" | "audit:read" | "user:admin";
         /**
          * Problem
          * @description RFC 7807 Problem Details (FR-API-04): every error the API returns.
@@ -679,6 +928,21 @@ export interface components {
             /** Rules */
             rules: components["schemas"]["RuleOut"][];
         };
+        /**
+         * SimilarDenialsOut
+         * @description UR-11: other claims' denials with the same payer, procedure, group and
+         *     reason in the window, and how the resolved ones ended.
+         */
+        SimilarDenialsOut: {
+            /** Denials */
+            denials: number;
+            /** Outcomes */
+            outcomes: {
+                [key: string]: number;
+            };
+            /** Window Days */
+            window_days: number;
+        };
         /** StateCount */
         StateCount: {
             /** Count */
@@ -725,6 +989,80 @@ export interface components {
         WorkQueues: {
             /** Queues */
             queues: components["schemas"]["QueueSummaryOut"][];
+        };
+        /** WriteOffDecisionIn */
+        WriteOffDecisionIn: {
+            /** Approve */
+            approve: boolean;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
+        /** WriteOffDecisionOut */
+        WriteOffDecisionOut: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "APPLIED" | "REJECTED";
+            /**
+             * Write Off Id
+             * Format: uuid
+             */
+            write_off_id: string;
+        };
+        /** WriteOffOut */
+        WriteOffOut: {
+            /**
+             * Amount
+             * @description The denied lines' payer share; never the PR amount.
+             */
+            amount: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "APPLIED" | "PENDING_APPROVAL" | "REJECTED";
+            /**
+             * Threshold
+             * @description [TBD-48] when asked. Above it, a specialist's write-off waits for a named approver (BR-M11-05).
+             */
+            threshold: string;
+            /**
+             * Write Off Id
+             * Format: uuid
+             */
+            write_off_id: string;
+        };
+        /** WriteOffSummaryOut */
+        WriteOffSummaryOut: {
+            /** Amount */
+            amount: string;
+            /** Decided By */
+            decided_by: string | null;
+            /** Note */
+            note: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Requested By */
+            requested_by: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "APPLIED" | "PENDING_APPROVAL" | "REJECTED";
+            /**
+             * Write Off Id
+             * Format: uuid
+             */
+            write_off_id: string;
         };
     };
     responses: never;
@@ -860,6 +1198,206 @@ export interface operations {
             };
             /** @description The token lacks the permission this route needs. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getDenial: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DenialWorkbenchOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such denial, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disposeDenial: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DispositionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WriteOffOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such denial, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The claim is not denied, a write-off already waits, or another operator holds the item. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A reason or note that is not valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    billDenialToPatient: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatientShareIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatientShareOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such denial, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The claim is not denied, a write-off already waits, or another operator holds the item. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A reason or note that is not valid. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1075,6 +1613,77 @@ export interface operations {
                 };
             };
             /** @description A cursor, limit or filter that is not valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    decideWriteOff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                write_off_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WriteOffDecisionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WriteOffDecisionOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such denial, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The claim is not denied, a write-off already waits, or another operator holds the item. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A reason or note that is not valid. */
             422: {
                 headers: {
                     [name: string]: unknown;

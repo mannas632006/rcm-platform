@@ -202,6 +202,10 @@ class ClassificationReport:
     no_reason: int = 0
     #: Denied lines whose refusal the taxonomy does not hold.
     unmapped: list[UnmappedLine] = field(default_factory=list)
+    #: Claim payments with a line classified by *this* run, so the work
+    #: layer raises a denial once, when it first appears -- not again after
+    #: a person has worked it.
+    newly_classified: list[uuid.UUID] = field(default_factory=list)
 
 
 #: Rows per INSERT. Eight binds a row keeps a batch far under Postgres's
@@ -352,6 +356,7 @@ def classify_denials(session: Session, *, client_id: uuid.UUID) -> Classificatio
             {"line_number": line.line_number, "carcs": list(line.carcs)}
         )
 
+    report.newly_classified = list(by_payment)
     for claim_payment_id, classified in by_payment.items():
         record_decision(
             session,

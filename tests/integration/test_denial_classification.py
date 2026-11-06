@@ -22,11 +22,14 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError
 from rcm.analytics.denials import denial_rate
 from rcm.decision import denials
 from rcm.decision.denial_models import DenialClassification
+from rcm.domain.claim import Claim
 from rcm.domain.remittance import ClaimPayment
 from rcm.platform.audit import DecisionRecord, DecisionType
 from rcm.platform.db import reset_engines, session_scope
 from rcm.work import denials as work_denials
+from rcm.work import queue
 from rcm.work.models import WorkItem, WorkItemKind
+from rcm.work.state import WorkItemOutcome
 from tests.integration.test_acknowledgement_loading import (
     CHARGE,
     CLIENT_A,
@@ -310,3 +313,63 @@ def test_a_classification_cannot_name_another_clients_line(root: Path) -> None:
         )
         session.flush()
     assert isinstance(refused.value.orig, pg_errors.ForeignKeyViolation)
+
+
+def route(client: uuid.UUID = CLIENT_A) -> work_denials.DenialRun:
+    with session_scope() as session:
+        return work_denials.classify_and_route(session, client_id=client, now=NOW)
+
+
+def denial_items() -> list[WorkItem]:
+    with session_scope() as session:
+        items = list(
+            session.scalars(select(WorkItem).where(WorkItem.kind == str(WorkItemKind.DENIAL))).all()
+        )
+        session.expunge_all()
+        return items
+
+
+@pytest.mark.invariant
+def test_a_denied_claim_lands_in_the_denial_workbench(root: Path) -> None:
+    """S-04: the Denial Workbench queue holds every denied claim, once,
+    linked to the claim so the operator opens it in one step."""
+    submit("CLM-DW", root, control="0001")
+    remit(denial_for("CLM-DW", control="0001"), root, name="dw.835")
+    route()
+    route()
+    (item,) = denial_items()
+    with session_scope() as session:
+        payment = session.scalar(select(ClaimPayment).where(ClaimPayment.claim_id == "CLM-DW"))
+        assert payment is not None
+        claim_uuid = session.scalar(
+            select(Claim.claim_id).where(Claim.submitter_claim_id == "CLM-DW")
+        )
+    assert item.claim_id == claim_uuid
+    assert item.source_key == f"denial:{payment.claim_payment_id}"
+    assert "CO-50" in item.title
+
+
+def test_a_worked_denial_is_not_raised_again(root: Path) -> None:
+    """Raised when the denial is first classified, not whenever no item is
+    open -- a denial a person finished must not come back on the next run."""
+    submit("CLM-WK", root, control="0001")
+    remit(denial_for("CLM-WK", control="0001"), root, name="wk.835")
+    route()
+    (item,) = denial_items()
+    with session_scope() as session:
+        queue.auto_resolve(
+            session,
+            work_item_id=item.work_item_id,
+            client_id=CLIENT_A,
+            outcome=WorkItemOutcome.WRITTEN_OFF,
+            now=NOW,
+        )
+    route()
+    assert [i.work_item_id for i in denial_items()] == [item.work_item_id]
+
+
+def test_a_paid_claim_raises_no_denial_work(root: Path) -> None:
+    submit("CLM-PD", root, control="0001")
+    remit(payment_for("CLM-PD", control="0001"), root, name="pd.835")
+    route()
+    assert denial_items() == []

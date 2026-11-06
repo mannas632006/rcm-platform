@@ -26,3 +26,23 @@ export function formatMoney(amount: string, { cents = true }: { cents?: boolean 
   const negative = sign === "-" && /[1-9]/.test(units + (cents ? pennies : ""));
   return `${negative ? "-" : ""}$${grouped}${cents ? `.${pennies}` : ""}`;
 }
+
+const CENTS = /^(-?)(\d+)(?:\.(\d{1,2}))?$/;
+
+/**
+ * The exact sum of decimal money strings, as a two-place decimal string.
+ * Counted in integer cents (BigInt), never floats (UR-21): 0.10 + 0.20 is
+ * 0.30. Null if any value is not a decimal -- never a guess (PD-18).
+ */
+export function sumMoney(amounts: readonly string[]): string | null {
+  let cents = 0n;
+  for (const amount of amounts) {
+    const match = CENTS.exec(amount.trim());
+    if (!match) return null;
+    const value = BigInt(match[2] ?? "0") * 100n + BigInt((match[3] ?? "").padEnd(2, "0"));
+    cents += match[1] ? -value : value;
+  }
+  const sign = cents < 0n ? "-" : "";
+  const abs = cents < 0n ? -cents : cents;
+  return `${sign}${(abs / 100n).toString()}.${(abs % 100n).toString().padStart(2, "0")}`;
+}

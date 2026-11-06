@@ -280,3 +280,17 @@ def test_opposed_guards_split_a_state_exhaustively(yes: Guard, no: Guard) -> Non
             assert len(open_edges) == 1, (
                 f"{source} with {yes}={answer} has {len(open_edges)} open edges"
             )
+
+
+def test_a_denial_goes_to_the_patient_only_for_the_patients_share() -> None:
+    """ADR-0016 / PD-19: Denied -> PatientBalance needs a PR share on the
+    denied lines. Without that fact the patient is never billed."""
+    with pytest.raises(StateTransitionError) as raised:
+        check(ClaimState.DENIED, ClaimState.PATIENT_BALANCE, facts={})
+    assert raised.value.context["guard"] == Guard.PATIENT_SHARE_DENIED
+    allowed = check(
+        ClaimState.DENIED,
+        ClaimState.PATIENT_BALANCE,
+        facts={str(Guard.PATIENT_SHARE_DENIED): True},
+    )
+    assert allowed.guard is Guard.PATIENT_SHARE_DENIED
