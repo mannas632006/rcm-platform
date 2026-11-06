@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -392,3 +392,48 @@ class DenialWorkbenchOut(_Out):
     payment: DenialPaymentOut
     lines: list[DeniedLineOut]
     claim_adjustments: list[AdjustmentOut] = Field(description="CAS at claim level (PD-6).")
+
+
+class _In(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class DispositionIn(_In):
+    """S-04: what the operator decided. Write-off only in this slice."""
+
+    action: Literal["WRITE_OFF"]
+    reason: Literal[
+        "APPEAL_NOT_VIABLE", "TIMELY_FILING_MISSED", "CONTRACTUAL", "SMALL_BALANCE", "OTHER"
+    ] = Field(description='Structured (FR-WORK-04); "OTHER" needs a note.')
+    note: str = Field(default="", max_length=2000)
+
+
+class WriteOffOut(_Out):
+    write_off_id: uuid.UUID
+    status: Literal["APPLIED", "PENDING_APPROVAL", "REJECTED"]
+    amount: Decimal = Field(description="The denied lines' payer share; never the PR amount.")
+    threshold: Decimal = Field(
+        description="[TBD-48] when asked. Above it, a specialist's write-off waits for a "
+        "named approver (BR-M11-05)."
+    )
+
+
+class WriteOffDecisionIn(_In):
+    approve: bool
+    note: str = Field(default="", max_length=2000)
+
+
+class WriteOffDecisionOut(_Out):
+    write_off_id: uuid.UUID
+    status: Literal["APPLIED", "REJECTED"]
+
+
+DISPOSITION_ERRORS: dict[int | str, dict[str, Any]] = {
+    404: {"model": Problem, "description": "No such denial, or not one in your clients."},
+    409: {
+        "model": Problem,
+        "description": "The claim is not denied, a write-off already waits, or another "
+        "operator holds the item.",
+    },
+    422: {"model": Problem, "description": "A reason or note that is not valid."},
+}

@@ -173,6 +173,17 @@ REGISTRY: Final[dict[str, Placeholder]] = {
         provisional=1.5,
         source="none -- raised at M3.5",
     ),
+    "write_off_approval_threshold": Placeholder(
+        tbd_id="TBD-48",
+        description="Write-off amount above which a named approver must sign off "
+        '(BR-M11-05). Applies to roles whose limit is "<= threshold" in SRS 11.5; '
+        'an Ops Manager\'s limit is "Any".',
+        owner="Muhammad Anas",
+        # 0.00: every specialist write-off waits for approval until the owner
+        # sets the real figure -- the closed side of an open decision.
+        provisional="0.00",
+        source="DOC-02 Appendix A",
+    ),
     "exception_trend_min_count": Placeholder(
         tbd_id="UNREGISTERED",
         description="Minimum exceptions in the latest window before a trend can "

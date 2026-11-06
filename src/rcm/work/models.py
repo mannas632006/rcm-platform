@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 
 from sqlalchemy import (
@@ -33,6 +34,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     func,
@@ -319,4 +321,90 @@ class AutomationSuspension(Base):
             name="a_lift_names_who_lifted_it",
         ),
         Index("ix_suspension_active", "client_id", "path", "lifted_at"),
+    )
+
+
+class WriteOffReason(StrEnum):
+    """Why a denial is written off (FR-WORK-04: structured, not free text).
+    OTHER is allowed only with a note saying what."""
+
+    APPEAL_NOT_VIABLE = "APPEAL_NOT_VIABLE"
+    TIMELY_FILING_MISSED = "TIMELY_FILING_MISSED"
+    CONTRACTUAL = "CONTRACTUAL"
+    SMALL_BALANCE = "SMALL_BALANCE"
+    OTHER = "OTHER"
+
+
+class WriteOffDecisionKind(StrEnum):
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class WriteOff(Base):
+    """A request to write off a denial's payer share (BR-M11-05).
+
+    Insert-only by grant: a request is never edited. Whether it still waits,
+    was applied or was turned down is read from `needs_approval` and the
+    `write_off_decision` row, so the record of who asked for how much -- and
+    who agreed -- cannot be rewritten afterwards.
+    """
+
+    __tablename__ = "write_off"
+
+    write_off_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    client_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    work_item_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("work_item.work_item_id"), nullable=False
+    )
+    claim_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("claim.claim_id"), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    requested_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: Above [TBD-48] for a role whose limit is the threshold.
+    needs_approval: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    #: The [TBD-48] value in force when asked, so a later change of the
+    #: setting cannot make an old request look like it broke the rule.
+    threshold: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="write_off_amount_is_positive"),
+        CheckConstraint(_one_of("reason", WriteOffReason), name="write_off_reason_is_known"),
+        CheckConstraint(
+            "reason <> 'OTHER' OR length(trim(note)) > 0", name="write_off_other_says_what"
+        ),
+        CheckConstraint("length(trim(requested_by)) > 0", name="write_off_names_its_requester"),
+        Index("ix_write_off_item", "client_id", "work_item_id"),
+    )
+
+
+class WriteOffDecision(Base):
+    """The one approval or rejection of a write-off that needed it.
+
+    One per request (primary key) and insert-only by grant. Never made by the
+    requester: a CHECK cannot see the other table, so
+    `rcm.work.dispositions.decide_write_off` refuses it.
+    """
+
+    __tablename__ = "write_off_decision"
+
+    write_off_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("write_off.write_off_id"), primary_key=True
+    )
+    client_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    decided_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    __table_args__ = (
+        CheckConstraint(
+            _one_of("decision", WriteOffDecisionKind), name="write_off_decision_is_known"
+        ),
+        CheckConstraint("length(trim(decided_by)) > 0", name="write_off_decision_names_its_maker"),
     )

@@ -90,6 +90,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/denials/{work_item_id}/disposition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decide what to do with a denial
+         * @description S-04. Write off the denial's payer share (BR-M11-05): applied at once
+         *     within the operator's limit, otherwise left for a named approver. Needs
+         *     an Idempotency-Key; a retry writes off once (PD-14).
+         */
+        post: operations["disposeDenial"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -189,6 +211,26 @@ export interface paths {
         get: operations["listQueueItems"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/write-offs/{write_off_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve or reject a write-off that waits for approval
+         * @description BR-M11-05: a named approver who is not the requester.
+         */
+        post: operations["decideWriteOff"];
         delete?: never;
         options?: never;
         head?: never;
@@ -531,6 +573,28 @@ export interface components {
              */
             status: string;
         };
+        /**
+         * DispositionIn
+         * @description S-04: what the operator decided. Write-off only in this slice.
+         */
+        DispositionIn: {
+            /**
+             * Action
+             * @constant
+             */
+            action: "WRITE_OFF";
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /**
+             * Reason
+             * @description Structured (FR-WORK-04); "OTHER" needs a note.
+             * @enum {string}
+             */
+            reason: "APPEAL_NOT_VIABLE" | "TIMELY_FILING_MISSED" | "CONTRACTUAL" | "SMALL_BALANCE" | "OTHER";
+        };
         /** FilingOut */
         FilingOut: {
             /**
@@ -630,7 +694,7 @@ export interface components {
          * @description What a principal may do. Checked, never inferred from the role name.
          * @enum {string}
          */
-        Permission: "claim:read" | "claim:write" | "claim:submit" | "denial:read" | "denial:disposition" | "appeal:sign" | "coding:read" | "coding:write" | "rule:read" | "rule:author" | "rule:promote" | "payer_registry:write" | "report:read" | "audit:read" | "user:admin";
+        Permission: "claim:read" | "claim:write" | "claim:submit" | "denial:read" | "denial:disposition" | "appeal:sign" | "write_off:approve" | "coding:read" | "coding:write" | "rule:read" | "rule:author" | "rule:promote" | "payer_registry:write" | "report:read" | "audit:read" | "user:admin";
         /**
          * Problem
          * @description RFC 7807 Problem Details (FR-API-04): every error the API returns.
@@ -883,6 +947,52 @@ export interface components {
             /** Queues */
             queues: components["schemas"]["QueueSummaryOut"][];
         };
+        /** WriteOffDecisionIn */
+        WriteOffDecisionIn: {
+            /** Approve */
+            approve: boolean;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
+        /** WriteOffDecisionOut */
+        WriteOffDecisionOut: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "APPLIED" | "REJECTED";
+            /**
+             * Write Off Id
+             * Format: uuid
+             */
+            write_off_id: string;
+        };
+        /** WriteOffOut */
+        WriteOffOut: {
+            /**
+             * Amount
+             * @description The denied lines' payer share; never the PR amount.
+             */
+            amount: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "APPLIED" | "PENDING_APPROVAL" | "REJECTED";
+            /**
+             * Threshold
+             * @description [TBD-48] when asked. Above it, a specialist's write-off waits for a named approver (BR-M11-05).
+             */
+            threshold: string;
+            /**
+             * Write Off Id
+             * Format: uuid
+             */
+            write_off_id: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -1080,6 +1190,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disposeDenial: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DispositionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WriteOffOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such denial, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The claim is not denied, a write-off already waits, or another operator holds the item. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A reason or note that is not valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -1290,6 +1471,77 @@ export interface operations {
                 };
             };
             /** @description A cursor, limit or filter that is not valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    decideWriteOff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                write_off_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WriteOffDecisionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WriteOffDecisionOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such denial, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The claim is not denied, a write-off already waits, or another operator holds the item. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A reason or note that is not valid. */
             422: {
                 headers: {
                     [name: string]: unknown;

@@ -791,6 +791,41 @@
         "title": "DeniedLineOut",
         "type": "object"
       },
+      "DispositionIn": {
+        "additionalProperties": false,
+        "description": "S-04: what the operator decided. Write-off only in this slice.",
+        "properties": {
+          "action": {
+            "const": "WRITE_OFF",
+            "title": "Action",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Note",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Structured (FR-WORK-04); \"OTHER\" needs a note.",
+            "enum": [
+              "APPEAL_NOT_VIABLE",
+              "TIMELY_FILING_MISSED",
+              "CONTRACTUAL",
+              "SMALL_BALANCE",
+              "OTHER"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "reason"
+        ],
+        "title": "DispositionIn",
+        "type": "object"
+      },
       "FilingOut": {
         "properties": {
           "days_left": {
@@ -1049,6 +1084,7 @@
           "denial:read",
           "denial:disposition",
           "appeal:sign",
+          "write_off:approve",
           "coding:read",
           "coding:write",
           "rule:read",
@@ -1669,6 +1705,85 @@
         ],
         "title": "WorkQueues",
         "type": "object"
+      },
+      "WriteOffDecisionIn": {
+        "additionalProperties": false,
+        "properties": {
+          "approve": {
+            "title": "Approve",
+            "type": "boolean"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "approve"
+        ],
+        "title": "WriteOffDecisionIn",
+        "type": "object"
+      },
+      "WriteOffDecisionOut": {
+        "properties": {
+          "status": {
+            "enum": [
+              "APPLIED",
+              "REJECTED"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "write_off_id": {
+            "format": "uuid",
+            "title": "Write Off Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "write_off_id",
+          "status"
+        ],
+        "title": "WriteOffDecisionOut",
+        "type": "object"
+      },
+      "WriteOffOut": {
+        "properties": {
+          "amount": {
+            "description": "The denied lines' payer share; never the PR amount.",
+            "title": "Amount",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "APPLIED",
+              "PENDING_APPROVAL",
+              "REJECTED"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "threshold": {
+            "description": "[TBD-48] when asked. Above it, a specialist's write-off waits for a named approver (BR-M11-05).",
+            "title": "Threshold",
+            "type": "string"
+          },
+          "write_off_id": {
+            "format": "uuid",
+            "title": "Write Off Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "write_off_id",
+          "status",
+          "amount",
+          "threshold"
+        ],
+        "title": "WriteOffOut",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -1931,6 +2046,105 @@
           }
         ],
         "summary": "One denial, with what is needed to decide on it",
+        "tags": [
+          "denials"
+        ]
+      }
+    },
+    "/api/v1/denials/{work_item_id}/disposition": {
+      "post": {
+        "description": "S-04. Write off the denial's payer share (BR-M11-05): applied at once\nwithin the operator's limit, otherwise left for a named approver. Needs\nan Idempotency-Key; a retry writes off once (PD-14).",
+        "operationId": "disposeDenial",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Work Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DispositionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteOffOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such denial, or not one in your clients."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The claim is not denied, a write-off already waits, or another operator holds the item."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A reason or note that is not valid."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Decide what to do with a denial",
         "tags": [
           "denials"
         ]
@@ -2255,6 +2469,105 @@
         "summary": "A queue's items, best first",
         "tags": [
           "shell"
+        ]
+      }
+    },
+    "/api/v1/write-offs/{write_off_id}/decision": {
+      "post": {
+        "description": "BR-M11-05: a named approver who is not the requester.",
+        "operationId": "decideWriteOff",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "write_off_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Write Off Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteOffDecisionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteOffDecisionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such denial, or not one in your clients."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The claim is not denied, a write-off already waits, or another operator holds the item."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A reason or note that is not valid."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Approve or reject a write-off that waits for approval",
+        "tags": [
+          "denials"
         ]
       }
     },

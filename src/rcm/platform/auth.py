@@ -83,6 +83,8 @@ class Permission(StrEnum):
     DENIAL_READ = "denial:read"
     DENIAL_DISPOSITION = "denial:disposition"
     APPEAL_SIGN = "appeal:sign"
+    #: Above [TBD-48], a write-off waits for this (BR-M11-05, SRS 11.5).
+    WRITE_OFF_APPROVE = "write_off:approve"
     CODING_READ = "coding:read"
     CODING_WRITE = "coding:write"
     RULE_READ = "rule:read"
@@ -137,6 +139,7 @@ ROLE_PERMISSIONS: Final[dict[Role, frozenset[Permission]]] = {
             Permission.DENIAL_READ,
             Permission.DENIAL_DISPOSITION,
             Permission.APPEAL_SIGN,
+            Permission.WRITE_OFF_APPROVE,
             Permission.CODING_READ,
             Permission.RULE_READ,
             Permission.REPORT_READ,
