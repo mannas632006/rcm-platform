@@ -30,6 +30,7 @@ from rcm.platform.audit import DecisionType, record_decision
 from rcm.platform.errors import ValidationFailedError
 from rcm.platform.logging import get_logger
 from rcm.work import exceptions
+from rcm.work.denial_workbench import DENIAL_KEY
 from rcm.work.models import WorkItem, WorkItemKind
 from rcm.work.state import OPEN_STATES
 
@@ -40,7 +41,6 @@ log = get_logger(__name__)
 _UNMAPPED_KEY: Final = "denial-unmapped:"
 _FAILED_KEY: Final = "rule-failed:"
 _UNTRACED_KEY: Final = "denial-untraced:"
-_DENIAL_KEY: Final = "denial:"
 
 
 def _source_key(line: denials.UnmappedLine) -> str:
@@ -190,7 +190,7 @@ def _raise_denial(
             "correct, appeal, bill the patient or write off"
         ),
         record=exceptions.RecordRef("claim_payment", claim_payment_id),
-        source_key=f"{_DENIAL_KEY}{claim_payment_id}",
+        source_key=f"{DENIAL_KEY}{claim_payment_id}",
         now=now,
         # None when the 835 names a claim this client never submitted; the
         # item is still raised, and a person finds the claim (PD-18).

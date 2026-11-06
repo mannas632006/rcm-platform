@@ -304,3 +304,86 @@ class ClaimDetailOut(_Out):
     chain: list[ChainLinkOut] = Field(description="Every submission of this claim (PD-7).")
     timeline: list[TimelineEventOut]
     decisions: list[DecisionOut]
+
+
+# ---------------------------------------------------------------------------
+# S-04 Denial Workbench (M5.7)
+# ---------------------------------------------------------------------------
+
+DENIAL_ERRORS: dict[int | str, dict[str, Any]] = {
+    404: {"model": Problem, "description": "No such denial, or not one in your clients."},
+}
+
+
+class DenialClassificationOut(_Out):
+    """As the classifier recorded it (BR-TAX-01), never re-derived."""
+
+    category: str
+    preventability: str
+    group_code: str
+    reason_code: str
+    taxonomy_version: str
+
+
+class DenialGuidanceOut(_Out):
+    """What usually resolves this category (DOC-02 8.1). The same for every
+    claim in it: documentation, not a decision about this claim."""
+
+    category: str
+    text: str
+    version: str
+
+
+class SimilarDenialsOut(_Out):
+    """UR-11: other claims' denials with the same payer, procedure, group and
+    reason in the window, and how the resolved ones ended."""
+
+    window_days: int
+    denials: int
+    outcomes: dict[str, int]
+
+
+class DeniedLineOut(_Out):
+    line_number: int
+    procedure_code: str
+    modifiers: list[str]
+    charge: Decimal
+    paid: Decimal
+    adjustments: list[AdjustmentOut]
+    classification: DenialClassificationOut | None = Field(
+        description="Null for a line the payer did not deny."
+    )
+    guidance: DenialGuidanceOut | None
+    similar: SimilarDenialsOut | None
+
+
+class DenialClaimOut(_Out):
+    claim_id: uuid.UUID
+    submitter_claim_id: str
+    state: str
+    payer_id: str
+    payer_name: str | None
+    date_of_service: date | None
+    balance: Decimal
+
+
+class DenialPaymentOut(_Out):
+    claim_payment_id: uuid.UUID
+    payer_control_number: str
+    payment_date: date | None
+    total_charge: Decimal
+    total_paid: Decimal
+    patient_responsibility: Decimal
+
+
+class DenialWorkbenchOut(_Out):
+    work_item_id: uuid.UUID
+    state: str
+    assigned_to: str | None
+    sla_due_at: datetime
+    outcome: str | None
+    claim: DenialClaimOut | None = Field(
+        description="Null when the 835 names a claim this client never submitted."
+    )
+    payment: DenialPaymentOut
+    lines: list[DeniedLineOut]

@@ -461,6 +461,321 @@
         "title": "DecisionOut",
         "type": "object"
       },
+      "DenialClaimOut": {
+        "properties": {
+          "balance": {
+            "title": "Balance",
+            "type": "string"
+          },
+          "claim_id": {
+            "format": "uuid",
+            "title": "Claim Id",
+            "type": "string"
+          },
+          "date_of_service": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Of Service"
+          },
+          "payer_id": {
+            "title": "Payer Id",
+            "type": "string"
+          },
+          "payer_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payer Name"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "submitter_claim_id": {
+            "title": "Submitter Claim Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_id",
+          "submitter_claim_id",
+          "state",
+          "payer_id",
+          "payer_name",
+          "date_of_service",
+          "balance"
+        ],
+        "title": "DenialClaimOut",
+        "type": "object"
+      },
+      "DenialClassificationOut": {
+        "description": "As the classifier recorded it (BR-TAX-01), never re-derived.",
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "group_code": {
+            "title": "Group Code",
+            "type": "string"
+          },
+          "preventability": {
+            "title": "Preventability",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "taxonomy_version": {
+            "title": "Taxonomy Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "preventability",
+          "group_code",
+          "reason_code",
+          "taxonomy_version"
+        ],
+        "title": "DenialClassificationOut",
+        "type": "object"
+      },
+      "DenialGuidanceOut": {
+        "description": "What usually resolves this category (DOC-02 8.1). The same for every\nclaim in it: documentation, not a decision about this claim.",
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "text",
+          "version"
+        ],
+        "title": "DenialGuidanceOut",
+        "type": "object"
+      },
+      "DenialPaymentOut": {
+        "properties": {
+          "claim_payment_id": {
+            "format": "uuid",
+            "title": "Claim Payment Id",
+            "type": "string"
+          },
+          "patient_responsibility": {
+            "title": "Patient Responsibility",
+            "type": "string"
+          },
+          "payer_control_number": {
+            "title": "Payer Control Number",
+            "type": "string"
+          },
+          "payment_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Date"
+          },
+          "total_charge": {
+            "title": "Total Charge",
+            "type": "string"
+          },
+          "total_paid": {
+            "title": "Total Paid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_payment_id",
+          "payer_control_number",
+          "payment_date",
+          "total_charge",
+          "total_paid",
+          "patient_responsibility"
+        ],
+        "title": "DenialPaymentOut",
+        "type": "object"
+      },
+      "DenialWorkbenchOut": {
+        "properties": {
+          "assigned_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned To"
+          },
+          "claim": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenialClaimOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the 835 names a claim this client never submitted."
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/DeniedLineOut"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/DenialPaymentOut"
+          },
+          "sla_due_at": {
+            "format": "date-time",
+            "title": "Sla Due At",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "work_item_id": {
+            "format": "uuid",
+            "title": "Work Item Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_item_id",
+          "state",
+          "assigned_to",
+          "sla_due_at",
+          "outcome",
+          "claim",
+          "payment",
+          "lines"
+        ],
+        "title": "DenialWorkbenchOut",
+        "type": "object"
+      },
+      "DeniedLineOut": {
+        "properties": {
+          "adjustments": {
+            "items": {
+              "$ref": "#/components/schemas/AdjustmentOut"
+            },
+            "title": "Adjustments",
+            "type": "array"
+          },
+          "charge": {
+            "title": "Charge",
+            "type": "string"
+          },
+          "classification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenialClassificationOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for a line the payer did not deny."
+          },
+          "guidance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenialGuidanceOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "line_number": {
+            "title": "Line Number",
+            "type": "integer"
+          },
+          "modifiers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Modifiers",
+            "type": "array"
+          },
+          "paid": {
+            "title": "Paid",
+            "type": "string"
+          },
+          "procedure_code": {
+            "title": "Procedure Code",
+            "type": "string"
+          },
+          "similar": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SimilarDenialsOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "line_number",
+          "procedure_code",
+          "modifiers",
+          "charge",
+          "paid",
+          "adjustments",
+          "classification",
+          "guidance",
+          "similar"
+        ],
+        "title": "DeniedLineOut",
+        "type": "object"
+      },
       "FilingOut": {
         "properties": {
           "days_left": {
@@ -1190,6 +1505,33 @@
         "title": "RulesOut",
         "type": "object"
       },
+      "SimilarDenialsOut": {
+        "description": "UR-11: other claims' denials with the same payer, procedure, group and\nreason in the window, and how the resolved ones ended.",
+        "properties": {
+          "denials": {
+            "title": "Denials",
+            "type": "integer"
+          },
+          "outcomes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Outcomes",
+            "type": "object"
+          },
+          "window_days": {
+            "title": "Window Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_days",
+          "denials",
+          "outcomes"
+        ],
+        "title": "SimilarDenialsOut",
+        "type": "object"
+      },
       "StateCount": {
         "properties": {
           "count": {
@@ -1497,6 +1839,85 @@
         "summary": "KPIs for my clients",
         "tags": [
           "insight"
+        ]
+      }
+    },
+    "/api/v1/denials/{work_item_id}": {
+      "get": {
+        "description": "S-04: each line the payer denied, group and reason together (PD-3),\nwith its recorded category and preventability (BR-TAX-01), guidance for\nthe category, and how the same denial went before (UR-11).",
+        "operationId": "getDenial",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Work Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DenialWorkbenchOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such denial, or not one in your clients."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "One denial, with what is needed to decide on it",
+        "tags": [
+          "denials"
         ]
       }
     },

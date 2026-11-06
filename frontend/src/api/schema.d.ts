@@ -68,6 +68,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/denials/{work_item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One denial, with what is needed to decide on it
+         * @description S-04: each line the payer denied, group and reason together (PD-3),
+         *     with its recorded category and preventability (BR-TAX-01), guidance for
+         *     the category, and how the same denial went before (UR-11).
+         */
+        get: operations["getDenial"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -389,6 +411,116 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** DenialClaimOut */
+        DenialClaimOut: {
+            /** Balance */
+            balance: string;
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /** Date Of Service */
+            date_of_service: string | null;
+            /** Payer Id */
+            payer_id: string;
+            /** Payer Name */
+            payer_name: string | null;
+            /** State */
+            state: string;
+            /** Submitter Claim Id */
+            submitter_claim_id: string;
+        };
+        /**
+         * DenialClassificationOut
+         * @description As the classifier recorded it (BR-TAX-01), never re-derived.
+         */
+        DenialClassificationOut: {
+            /** Category */
+            category: string;
+            /** Group Code */
+            group_code: string;
+            /** Preventability */
+            preventability: string;
+            /** Reason Code */
+            reason_code: string;
+            /** Taxonomy Version */
+            taxonomy_version: string;
+        };
+        /**
+         * DenialGuidanceOut
+         * @description What usually resolves this category (DOC-02 8.1). The same for every
+         *     claim in it: documentation, not a decision about this claim.
+         */
+        DenialGuidanceOut: {
+            /** Category */
+            category: string;
+            /** Text */
+            text: string;
+            /** Version */
+            version: string;
+        };
+        /** DenialPaymentOut */
+        DenialPaymentOut: {
+            /**
+             * Claim Payment Id
+             * Format: uuid
+             */
+            claim_payment_id: string;
+            /** Patient Responsibility */
+            patient_responsibility: string;
+            /** Payer Control Number */
+            payer_control_number: string;
+            /** Payment Date */
+            payment_date: string | null;
+            /** Total Charge */
+            total_charge: string;
+            /** Total Paid */
+            total_paid: string;
+        };
+        /** DenialWorkbenchOut */
+        DenialWorkbenchOut: {
+            /** Assigned To */
+            assigned_to: string | null;
+            /** @description Null when the 835 names a claim this client never submitted. */
+            claim: components["schemas"]["DenialClaimOut"] | null;
+            /** Lines */
+            lines: components["schemas"]["DeniedLineOut"][];
+            /** Outcome */
+            outcome: string | null;
+            payment: components["schemas"]["DenialPaymentOut"];
+            /**
+             * Sla Due At
+             * Format: date-time
+             */
+            sla_due_at: string;
+            /** State */
+            state: string;
+            /**
+             * Work Item Id
+             * Format: uuid
+             */
+            work_item_id: string;
+        };
+        /** DeniedLineOut */
+        DeniedLineOut: {
+            /** Adjustments */
+            adjustments: components["schemas"]["AdjustmentOut"][];
+            /** Charge */
+            charge: string;
+            /** @description Null for a line the payer did not deny. */
+            classification: components["schemas"]["DenialClassificationOut"] | null;
+            guidance: components["schemas"]["DenialGuidanceOut"] | null;
+            /** Line Number */
+            line_number: number;
+            /** Modifiers */
+            modifiers: string[];
+            /** Paid */
+            paid: string;
+            /** Procedure Code */
+            procedure_code: string;
+            similar: components["schemas"]["SimilarDenialsOut"] | null;
+        };
         /** FilingOut */
         FilingOut: {
             /**
@@ -679,6 +811,21 @@ export interface components {
             /** Rules */
             rules: components["schemas"]["RuleOut"][];
         };
+        /**
+         * SimilarDenialsOut
+         * @description UR-11: other claims' denials with the same payer, procedure, group and
+         *     reason in the window, and how the resolved ones ended.
+         */
+        SimilarDenialsOut: {
+            /** Denials */
+            denials: number;
+            /** Outcomes */
+            outcomes: {
+                [key: string]: number;
+            };
+            /** Window Days */
+            window_days: number;
+        };
         /** StateCount */
         StateCount: {
             /** Count */
@@ -865,6 +1012,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getDenial: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DenialWorkbenchOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such denial, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
