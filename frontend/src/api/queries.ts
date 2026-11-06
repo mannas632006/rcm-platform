@@ -4,6 +4,7 @@ import { hasPermission } from "@/lib/permissions";
 
 import { api, unwrap } from "./client";
 import type {
+  Appeal,
   Assignment,
   ClaimDetail,
   DenialWorkbench,
@@ -203,6 +204,61 @@ export function useBillPatient(workItemId: string) {
         await api.POST("/api/v1/denials/{work_item_id}/patient-responsibility", {
           params: { path: { work_item_id: workItemId } },
           body: { note: "" },
+          headers: { "Idempotency-Key": input.idempotencyKey },
+        }),
+      ),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
+  });
+}
+
+/** ADR-0017: open the denial's appeal -- its draft, or a new one. */
+export function useDraftAppeal(workItemId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { idempotencyKey: string }): Promise<Appeal> =>
+      unwrap(
+        await api.POST("/api/v1/denials/{work_item_id}/appeal", {
+          params: { path: { work_item_id: workItemId } },
+          headers: { "Idempotency-Key": input.idempotencyKey },
+        }),
+      ),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
+  });
+}
+
+/** A person's change to the letter, saved as a new version. */
+export function useReviseAppeal(workItemId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      appealId: string;
+      letter: string;
+      idempotencyKey: string;
+    }): Promise<Appeal> =>
+      unwrap(
+        await api.POST("/api/v1/appeals/{appeal_id}/versions", {
+          params: { path: { appeal_id: input.appealId } },
+          body: { letter: input.letter },
+          headers: { "Idempotency-Key": input.idempotencyKey },
+        }),
+      ),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
+  });
+}
+
+/** UR-09: sign the exact current version and send the appeal. */
+export function useSignAppeal(workItemId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      appealId: string;
+      version: number;
+      idempotencyKey: string;
+    }): Promise<Appeal> =>
+      unwrap(
+        await api.POST("/api/v1/appeals/{appeal_id}/sign", {
+          params: { path: { appeal_id: input.appealId } },
+          body: { version: input.version },
           headers: { "Idempotency-Key": input.idempotencyKey },
         }),
       ),
