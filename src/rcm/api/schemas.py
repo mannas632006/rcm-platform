@@ -451,3 +451,13 @@ DISPOSITION_ERRORS: dict[int | str, dict[str, Any]] = {
     },
     422: {"model": Problem, "description": "A reason or note that is not valid."},
 }
+
+
+class PatientShareIn(_In):
+    note: str = Field(default="", max_length=2000)
+
+
+class PatientShareOut(_Out):
+    amount: Decimal = Field(
+        description="The denied lines' PR share billed to the patient. Never a CO amount (PD-19)."
+    )

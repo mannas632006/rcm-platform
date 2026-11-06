@@ -19,6 +19,8 @@ from rcm.api.schemas import (
     DISPOSITION_ERRORS,
     DenialWorkbenchOut,
     DispositionIn,
+    PatientShareIn,
+    PatientShareOut,
     WriteOffDecisionIn,
     WriteOffDecisionOut,
     WriteOffOut,
@@ -99,3 +101,29 @@ def decide_write_off(
         now=datetime.now(UTC),
     )
     return WriteOffDecisionOut(write_off_id=write_off_id, status=status.value)
+
+
+@router.post(
+    "/denials/{work_item_id}/patient-responsibility",
+    operation_id="billDenialToPatient",
+    summary="Bill a denial's patient share to the patient",
+    responses=DISPOSITION_ERRORS,
+    dependencies=[require_permission(Permission.DENIAL_DISPOSITION)],
+)
+def bill_denial_to_patient(
+    work_item_id: uuid.UUID,
+    body: PatientShareIn,
+    principal: CurrentPrincipal,
+    session: AuditedSession,
+) -> PatientShareOut:
+    """ADR-0016: accept the payer's refusal and move the denied lines' PR
+    share to the patient. A CO amount is never billed to the patient (PD-19).
+    Needs an Idempotency-Key; a retry bills once (PD-14)."""
+    result = dispositions.bill_patient(
+        session,
+        principal=principal,
+        work_item_id=work_item_id,
+        note=body.note,
+        now=datetime.now(UTC),
+    )
+    return PatientShareOut(amount=result.amount)

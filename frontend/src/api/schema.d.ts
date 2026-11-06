@@ -112,6 +112,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/denials/{work_item_id}/patient-responsibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bill a denial's patient share to the patient
+         * @description ADR-0016: accept the payer's refusal and move the denied lines' PR
+         *     share to the patient. A CO amount is never billed to the patient (PD-19).
+         *     Needs an Idempotency-Key; a retry bills once (PD-14).
+         */
+        post: operations["billDenialToPatient"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -650,6 +672,22 @@ export interface components {
             procedure_code: string;
             /** Remark Codes */
             remark_codes: string[];
+        };
+        /** PatientShareIn */
+        PatientShareIn: {
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
+        /** PatientShareOut */
+        PatientShareOut: {
+            /**
+             * Amount
+             * @description The denied lines' PR share billed to the patient. Never a CO amount (PD-19).
+             */
+            amount: string;
         };
         /** PayerRegistryOut */
         PayerRegistryOut: {
@@ -1249,6 +1287,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WriteOffOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such denial, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The claim is not denied, a write-off already waits, or another operator holds the item. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A reason or note that is not valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    billDenialToPatient: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatientShareIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatientShareOut"];
                 };
             };
             /** @description No valid bearer token. */

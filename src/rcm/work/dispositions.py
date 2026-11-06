@@ -31,7 +31,7 @@ from rcm.decision.denial_models import DenialClassification
 from rcm.decision.denials import TAXONOMY_VERSION
 from rcm.domain.claim import Claim
 from rcm.domain.claim_lifecycle import transition
-from rcm.domain.claim_state import ClaimState
+from rcm.domain.claim_state import ClaimState, Guard
 from rcm.domain.remittance import RemittanceAdjustment
 from rcm.platform.audit import ActorType, record_audit_event
 from rcm.platform.auth import Permission, Principal, scoped_query
@@ -55,13 +55,19 @@ from rcm.work.models import (
 from rcm.work.state import WorkItemOutcome, WorkItemState
 
 __all__ = [
+    "PatientShareResult",
     "WriteOff",
     "WriteOffReason",
     "WriteOffResult",
     "WriteOffStatus",
+    "bill_patient",
     "decide_write_off",
     "request_write_off",
 ]
+
+
+#: CAS group "patient responsibility" (X12). Everything else is the payer's.
+PATIENT_GROUP = "PR"
 
 
 class WriteOffStatus(StrEnum):
@@ -98,6 +104,15 @@ def _denial_item(session: Session, *, principal: Principal, work_item_id: uuid.U
 
 def _payer_share(session: Session, *, item: WorkItem) -> Decimal:
     """The denied lines' adjustments outside the patient's group (PR)."""
+    return _denied_share(session, item=item, patient=False)
+
+
+def _patient_share(session: Session, *, item: WorkItem) -> Decimal:
+    """The denied lines' PR adjustments -- the only part a patient may owe."""
+    return _denied_share(session, item=item, patient=True)
+
+
+def _denied_share(session: Session, *, item: WorkItem, patient: bool) -> Decimal:
     payment_id = uuid.UUID((item.source_key or "").removeprefix(DENIAL_KEY))
     total = session.scalar(
         select(func.coalesce(func.sum(RemittanceAdjustment.amount), 0))
@@ -108,7 +123,9 @@ def _payer_share(session: Session, *, item: WorkItem) -> Decimal:
         .where(
             RemittanceAdjustment.client_id == item.client_id,
             RemittanceAdjustment.claim_payment_id == payment_id,
-            RemittanceAdjustment.cas_group_code != "PR",
+            (RemittanceAdjustment.cas_group_code == PATIENT_GROUP)
+            if patient
+            else (RemittanceAdjustment.cas_group_code != PATIENT_GROUP),
             DenialClassification.client_id == item.client_id,
             DenialClassification.taxonomy_version == TAXONOMY_VERSION,
         )
@@ -211,6 +228,77 @@ def request_write_off(
     return WriteOffResult(write_off.write_off_id, WriteOffStatus.APPLIED, amount, threshold)
 
 
+@dataclass(frozen=True, slots=True)
+class PatientShareResult:
+    amount: Decimal
+
+
+def bill_patient(
+    session: Session,
+    *,
+    principal: Principal,
+    work_item_id: uuid.UUID,
+    note: str,
+    now: datetime,
+) -> PatientShareResult:
+    """Accept the payer's refusal and move the patient's share to them.
+
+    ADR-0016: Denied -> PatientBalance, guarded on a PR amount on the denied
+    lines. The amount is that PR share and nothing else; the CO amount is the
+    provider's and never reaches a patient (PD-19).
+    """
+    principal.require(Permission.DENIAL_DISPOSITION)
+    item = _denial_item(session, principal=principal, work_item_id=work_item_id)
+    if item.claim_id is None:
+        raise ValidationFailedError(
+            field="work_item_id",
+            reason="the denied payment names no claim on file; find the claim first",
+        )
+    if _waiting(session, item=item) is not None:
+        raise StateTransitionError(
+            source="write-off awaiting approval",
+            target=str(ClaimState.PATIENT_BALANCE),
+            reason="a write-off of this denial is waiting for approval; decide that first",
+        )
+    amount = _patient_share(session, item=item)
+    if amount <= 0:
+        raise ValidationFailedError(
+            field="work_item_id",
+            reason="the denied lines carry no patient-responsibility (PR) amount; "
+            "contractual amounts are never billed to the patient",
+        )
+    transition(
+        session,
+        claim_id=item.claim_id,
+        client_id=item.client_id,
+        target=ClaimState.PATIENT_BALANCE,
+        actor_type=ActorType.USER,
+        actor_id=principal.subject,
+        facts={str(Guard.PATIENT_SHARE_DENIED): True},
+        # The patient statement is the next step, due now.
+        next_action_due=now.date(),
+        note=f"patient share {amount}" + (f": {note.strip()}" if note.strip() else ""),
+    )
+    record_audit_event(
+        session,
+        actor_type=ActorType.USER,
+        actor_id=principal.subject,
+        action="denial.billed_to_patient",
+        entity_type="claim",
+        entity_id=item.claim_id,
+        after_state={"amount": str(amount), "work_item_id": str(item.work_item_id)},
+    )
+    _close(
+        session,
+        item=item,
+        operator=principal.subject,
+        outcome=WorkItemOutcome.BILLED_TO_PATIENT,
+        note=note.strip(),
+        now=now,
+    )
+    return PatientShareResult(amount=amount)
+
+
 def decide_write_off(
     session: Session,
     *,
@@ -294,6 +382,28 @@ def _apply(
         next_action_due=now.date(),
         note=f"write-off {write_off.reason}: {write_off.amount}",
     )
+    _close(
+        session,
+        item=item,
+        operator=operator,
+        outcome=WorkItemOutcome.WRITTEN_OFF,
+        note=write_off.reason,
+        now=now,
+    )
+
+
+def _close(
+    session: Session,
+    *,
+    item: WorkItem,
+    operator: str,
+    outcome: WorkItemOutcome,
+    note: str,
+    now: datetime,
+) -> None:
+    """Resolve the denial item as `operator`, taking it first if nobody holds
+    it. Held by someone else, `queue.claim` refuses by name and the caller's
+    whole transaction rolls back."""
     if item.assigned_to != operator:
         queue.claim(
             session,
@@ -316,7 +426,7 @@ def _apply(
         work_item_id=item.work_item_id,
         client_id=item.client_id,
         operator=operator,
-        outcome=WorkItemOutcome.WRITTEN_OFF,
+        outcome=outcome,
         now=now,
-        note=write_off.reason,
+        note=note,
     )
