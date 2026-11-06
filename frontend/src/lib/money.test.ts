@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatMoney } from "./money";
+import { formatMoney, sumMoney } from "./money";
 
 describe("formatMoney", () => {
   it.each([
@@ -33,5 +33,21 @@ describe("formatMoney", () => {
     expect(() => formatMoney("12,000")).toThrow();
     expect(() => formatMoney("NaN")).toThrow();
     expect(() => formatMoney("")).toThrow();
+  });
+});
+
+describe("sumMoney", () => {
+  it("adds exactly, in cents, never in floating point (UR-21)", () => {
+    expect(sumMoney(["0.10", "0.20"])).toBe("0.30");
+    expect(sumMoney(["150.00", "50"])).toBe("200.00");
+    expect(sumMoney(["12.5", "-2.50"])).toBe("10.00");
+  });
+
+  it("is zero for nothing", () => {
+    expect(sumMoney([])).toBe("0.00");
+  });
+
+  it.each(["12,00", "1.234", "abc", ""])("refuses %j rather than guess (PD-18)", (bad) => {
+    expect(sumMoney(["1.00", bad])).toBeNull();
   });
 });

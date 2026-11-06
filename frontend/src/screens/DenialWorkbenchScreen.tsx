@@ -6,6 +6,7 @@ import { useDenial } from "@/api/queries";
 import type { DenialWorkbench, DeniedLine } from "@/api/types";
 import { DenialCodeChip } from "@/components/domain/DenialCodeChip";
 import { MoneyDisplay } from "@/components/domain/MoneyDisplay";
+import { WriteOffPanel } from "@/components/domain/WriteOffPanel";
 import { EmptyState } from "@/components/states/EmptyState";
 import { ErrorPanel } from "@/components/states/ErrorPanel";
 import { LoadStatus } from "@/components/states/LoadStatus";
@@ -282,7 +283,10 @@ function DenialContent({ workItemId }: { workItemId: string }) {
                 </p>
               )}
             </div>
-            <Summary denial={denial} />
+            <div className="flex flex-col gap-6">
+              <WriteOffPanel denial={denial} />
+              <Summary denial={denial} />
+            </div>
           </div>
         </>
       )}

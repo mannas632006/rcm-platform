@@ -31,3 +31,6 @@ export type TimelineEvent = Schemas["TimelineEventOut"];
 export type Decision = Schemas["DecisionOut"];
 export type DenialWorkbench = Schemas["DenialWorkbenchOut"];
 export type DeniedLine = Schemas["DeniedLineOut"];
+export type WriteOffSummary = Schemas["WriteOffSummaryOut"];
+export type WriteOffReason = Schemas["DispositionIn"]["reason"];
+export type WriteOffResult = Schemas["WriteOffOut"];

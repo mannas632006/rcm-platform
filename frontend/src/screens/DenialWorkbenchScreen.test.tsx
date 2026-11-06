@@ -1,4 +1,5 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { keys } from "@/api/queries";
@@ -10,6 +11,28 @@ const ID = "44444444-0000-4000-8000-000000000004";
 const CLAIM_ID = "11111111-0000-4000-8000-000000000001";
 const PATH = `/denials/${ID}`;
 const DENIER = { ...ME, roles: ["DENIAL_SPECIALIST"], permissions: ["claim:read", "denial:read"] };
+const DISPOSER = {
+  ...ME,
+  subject: "den.dana",
+  roles: ["DENIAL_SPECIALIST"],
+  permissions: ["claim:read", "denial:read", "denial:disposition"],
+};
+const APPROVER = {
+  ...ME,
+  subject: "ops.omar",
+  roles: ["OPERATIONS_MANAGER"],
+  permissions: ["claim:read", "denial:read", "denial:disposition", "write_off:approve"],
+};
+const WAITING = {
+  write_off_id: "55555555-0000-4000-8000-000000000005",
+  status: "PENDING_APPROVAL" as const,
+  amount: "420.00",
+  reason: "APPEAL_NOT_VIABLE",
+  note: "",
+  requested_by: "den.dana",
+  requested_at: "2026-11-06T10:00:00Z",
+  decided_by: null,
+};
 
 const DENIAL: DenialWorkbench = {
   work_item_id: ID,
@@ -71,6 +94,7 @@ const DENIAL: DenialWorkbench = {
     },
   ],
   claim_adjustments: [],
+  write_offs: [],
 };
 
 function api(denial: { status?: number; body: unknown } = { body: DENIAL }, me: unknown = DENIER) {
@@ -85,6 +109,98 @@ function api(denial: { status?: number; body: unknown } = { body: DENIAL }, me: 
 function region(name: RegExp | string) {
   return within(screen.getByRole("region", { name }));
 }
+
+function withDisposition(me: unknown, denial: unknown = DENIAL) {
+  return mockApi({
+    "/api/v1/me": { body: me },
+    "/api/v1/work-queues": { body: { queues: [] } },
+    "/api/v1/alerts/deadline-risk": { body: { claims: 0, charges: "0.00" } },
+    [`/api/v1/denials/${ID}`]: { body: denial },
+    [`/api/v1/denials/${ID}/disposition`]: {
+      body: {
+        write_off_id: WAITING.write_off_id,
+        status: "PENDING_APPROVAL",
+        amount: "420.00",
+        threshold: "0.00",
+      },
+    },
+    [`/api/v1/write-offs/${WAITING.write_off_id}/decision`]: {
+      body: { write_off_id: WAITING.write_off_id, status: "APPLIED" },
+    },
+  });
+}
+
+async function posted(fetchMock: ReturnType<typeof mockApi>, path: string) {
+  const calls = fetchMock.mock.calls
+    .map(([input]) => input)
+    .filter((input): input is Request => input instanceof Request && input.url.endsWith(path));
+  return Promise.all(
+    calls.map(async (request) => ({
+      method: request.method,
+      key: request.headers.get("Idempotency-Key"),
+      body: (await request.clone().json()) as unknown,
+    })),
+  );
+}
+
+describe("denial write-off (M5.7, BR-M11-05)", () => {
+  it("writes off the payer share only after a separate confirm step (UR-37)", async () => {
+    const fetchMock = withDisposition(DISPOSER);
+    renderApp(<App />, { path: PATH });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Write off" }));
+    await user.selectOptions(screen.getByLabelText("Reason"), "APPEAL_NOT_VIABLE");
+    await user.click(screen.getByRole("button", { name: "Review write-off" }));
+    expect(await posted(fetchMock, "/disposition")).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "Confirm write-off of $420.00" }));
+    expect(await screen.findByText(/Sent for approval/)).toBeInTheDocument();
+    const sent = await posted(fetchMock, "/disposition");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.method).toBe("POST");
+    expect(sent[0]?.key).toBeTruthy();
+    expect(sent[0]?.body).toEqual({ action: "WRITE_OFF", reason: "APPEAL_NOT_VIABLE", note: "" });
+  });
+
+  it("asks for words when the reason is Other (FR-WORK-04)", async () => {
+    withDisposition(DISPOSER);
+    renderApp(<App />, { path: PATH });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Write off" }));
+    await user.selectOptions(screen.getByLabelText("Reason"), "OTHER");
+    const review = screen.getByRole("button", { name: "Review write-off" });
+    expect(review).toBeDisabled();
+    await user.type(screen.getByLabelText(/Note/), "Payer closed the account");
+    expect(review).toBeEnabled();
+  });
+
+  it("lets a named approver, not the requester, decide a waiting write-off", async () => {
+    const fetchMock = withDisposition(APPROVER, { ...DENIAL, write_offs: [WAITING] });
+    renderApp(<App />, { path: PATH });
+    const user = userEvent.setup();
+    expect(await screen.findByText(/waiting for approval/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Approve write-off" }));
+    await user.click(screen.getByRole("button", { name: "Confirm approval of $420.00" }));
+    await waitFor(async () => {
+      expect(await posted(fetchMock, "/decision")).toHaveLength(1);
+    });
+    expect((await posted(fetchMock, "/decision"))[0]?.body).toEqual({ approve: true, note: "" });
+  });
+
+  it("does not offer the requester their own approval", async () => {
+    withDisposition({ ...APPROVER, subject: "den.dana" }, { ...DENIAL, write_offs: [WAITING] });
+    renderApp(<App />, { path: PATH });
+    expect(await screen.findByText(/waiting for approval/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve write-off" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Write off" })).toBeNull();
+  });
+
+  it("offers no action to a role that cannot dispose of denials", async () => {
+    withDisposition(DENIER);
+    renderApp(<App />, { path: PATH });
+    await screen.findByRole("heading", { level: 1 });
+    expect(screen.queryByRole("button", { name: "Write off" })).toBeNull();
+  });
+});
 
 describe("denial workbench (S-04, M5.7)", () => {
   it("names the claim and links to its full detail", async () => {
