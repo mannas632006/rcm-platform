@@ -23,7 +23,9 @@ export function StaleNotice({ what, error, onRetry, className }: StaleNoticeProp
         className,
       )}
     >
-      <span className="min-w-0 flex-1">
+      {/* WCAG 4.1.3: polite, and on the words only, so "Retry" is not read
+          out as part of the message. */}
+      <span role="status" className="min-w-0 flex-1">
         <span className="font-semibold">{what} may be out of date.</span> The last refresh failed:{" "}
         {error.message}
       </span>

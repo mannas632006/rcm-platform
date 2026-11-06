@@ -27,7 +27,7 @@ COMPOSE := docker compose
 .PHONY: help venv install up down migrate seed openapi \
         lint typecheck test test-unit test-property test-integration \
         test-security test-contract coverage verify clean frontend-install frontend-lint \
-        frontend
+        frontend test-db
 # `frontend` must be phony: a directory of that name exists, and without this
 # make treats the gate as already built and silently skips it.
 
@@ -103,23 +103,38 @@ typecheck: ## mypy strict
 # of its statements was in fact covered. Per-suite files also keep each run
 # honest -- pytest-cov erases its own file at the start, so a deleted test stops
 # counting instead of lingering in an appended total.
+# The suites truncate the tables they use, so locally they run against
+# `rcm_test` (infra/postgres/02-test-database.sql) and never wipe the corpus
+# in `rcm` that the operator UI shows. Override TEST_DB to point elsewhere.
+# CI runs pytest directly against its own ephemeral database.
+#
+# The test URLs are the developer's own RCM_*DATABASE_URL with the database
+# name swapped, so no connection string -- password included -- is written in
+# this file (S-8; gitleaks refuses one). Both variables must be set.
+TEST_DB ?= rcm_test
+TEST_ENV := RCM_DATABASE_URL=$(patsubst %/rcm,%/$(TEST_DB),$(RCM_DATABASE_URL)) \
+            RCM_MIGRATION_DATABASE_URL=$(patsubst %/rcm,%/$(TEST_DB),$(RCM_MIGRATION_DATABASE_URL))
+
+test-db: ## Bring the test database's schema to head
+	$(TEST_ENV) $(BIN)/alembic upgrade head
+
 test-unit: ## Unit tests
-	COVERAGE_FILE=.coverage.unit $(BIN)/pytest tests/unit --cov --cov-report=term-missing
+	$(TEST_ENV) COVERAGE_FILE=.coverage.unit $(BIN)/pytest tests/unit --cov --cov-report=term-missing
 
 test-property: ## Hypothesis property tests (empty until M1.1 -- see tools/run_suite.py)
-	COVERAGE_FILE=.coverage.property $(PYTHON) tools/run_suite.py tests/property --subject src/rcm/ingestion/x12 --milestone M1.1 --pytest-args="-q --cov --cov-report="
+	$(TEST_ENV) COVERAGE_FILE=.coverage.property $(PYTHON) tools/run_suite.py tests/property --subject src/rcm/ingestion/x12 --milestone M1.1 --pytest-args="-q --cov --cov-report="
 
-test-integration: ## Integration tests (needs `make up`; empty until M3)
-	COVERAGE_FILE=.coverage.integration $(PYTHON) tools/run_suite.py tests/integration --subject src/rcm/domain --milestone M3 --pytest-args="-q -m integration --cov --cov-report="
+test-integration: test-db ## Integration tests (needs `make up`; empty until M3)
+	$(TEST_ENV) COVERAGE_FILE=.coverage.integration $(PYTHON) tools/run_suite.py tests/integration --subject src/rcm/domain --milestone M3 --pytest-args="-q -m integration --cov --cov-report="
 
 test-synthetic: ## Generator contract: the corpus contains every edge case M1 needs
 	$(PYTHON) -m pytest tests/unit/test_synthetic_generator.py -q
 
-test-security: ## Security control tests (CLAUDE.md section 6.3)
-	COVERAGE_FILE=.coverage.security $(BIN)/pytest tests/security -m security --cov --cov-report=
+test-security: test-db ## Security control tests (CLAUDE.md section 6.3)
+	$(TEST_ENV) COVERAGE_FILE=.coverage.security $(BIN)/pytest tests/security -m security --cov --cov-report=
 
-test-leakage: ## PD-11 leakage suite; builds the warehouse twice (M2.4)
-	COVERAGE_FILE=.coverage.leakage $(BIN)/pytest tests/leakage -m leakage --cov --cov-report=
+test-leakage: test-db ## PD-11 leakage suite; builds the warehouse twice (M2.4)
+	$(TEST_ENV) COVERAGE_FILE=.coverage.leakage $(BIN)/pytest tests/leakage -m leakage --cov --cov-report=
 
 dbt: ## Build the warehouse: staging -> core -> marts, with its tests
 	$(PYTHON) tools/run_dbt.py build --select staging core marts

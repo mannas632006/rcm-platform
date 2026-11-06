@@ -7,6 +7,8 @@ and the real database.
 
 from __future__ import annotations
 
+import base64
+import json
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -19,9 +21,11 @@ from sqlalchemy import Engine, select, text
 
 from rcm.api.main import create_app
 from rcm.domain.claim import Claim
+from rcm.platform.audit import AuditEvent
 from rcm.platform.auth import Role, issue_dev_token
 from rcm.platform.config import get_settings
 from rcm.platform.db import reset_engines, session_scope
+from rcm.platform.errors import ValidationFailedError
 from rcm.work import exceptions, views
 from rcm.work.models import WorkItemKind
 from tests.integration.test_acknowledgement_loading import CHARGE, CLIENT_A, CLIENT_B, submit
@@ -165,3 +169,159 @@ def test_the_deadline_alert_needs_claim_read(api: TestClient) -> None:
     )
     assert response.status_code == 403
     assert response.headers["content-type"].startswith("application/problem+json")
+
+
+# ---------------------------------------------------------------------------
+# A queue's items (M5.3, S-02)
+# ---------------------------------------------------------------------------
+
+
+def scored(owner_engine: Engine, key: str, score: int) -> None:
+    """Give a raised item a priority score, as prioritisation would."""
+    with owner_engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE work_item SET priority_score = :s, prioritised_at = now() "
+                "WHERE source_key = :k"
+            ),
+            {"s": score, "k": key},
+        )
+
+
+def items(api: TestClient, queue: str, **params: str) -> dict[str, object]:
+    response = api.get(
+        f"/api/v1/work-queues/{queue}/items", params=params, headers=bearer(CLIENT_A)
+    )
+    assert response.status_code == 200, response.text
+    body: dict[str, object] = response.json()
+    return body
+
+
+def titles(page: dict[str, object]) -> list[str]:
+    rows = page["items"]
+    assert isinstance(rows, list)
+    # Titles read "<problem>, <key> (claim abcd1234)": keep the key.
+    return [str(row["title"]).rsplit(", ", 1)[-1].split(" (", 1)[0] for row in rows]
+
+
+@pytest.mark.invariant
+def test_a_queue_lists_its_items_best_first(api: TestClient, owner_engine: Engine) -> None:
+    """UR-02: priority, not age. The order is priority.queue_order's."""
+    for key, score in (("low", 10), ("high", 90), ("mid", 50)):
+        raise_item(CLIENT_A, WorkItemKind.DATA_QUALITY, key)
+        scored(owner_engine, key, score)
+    assert titles(items(api, "data-quality")) == ["high", "mid", "low"]
+
+
+@pytest.mark.invariant
+def test_pages_never_repeat_or_skip_an_item(api: TestClient, owner_engine: Engine) -> None:
+    """FR-API-02: keyset pages, so the whole queue is read exactly once."""
+    keys = [f"item-{n}" for n in range(7)]
+    for n, key in enumerate(keys):
+        raise_item(CLIENT_A, WorkItemKind.DATA_QUALITY, key)
+        scored(owner_engine, key, 10 + n)
+    seen: list[str] = []
+    page = items(api, "data-quality", limit="3")
+    while True:
+        seen.extend(titles(page))
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+        page = items(api, "data-quality", limit="3", cursor=str(cursor))
+    assert seen == list(reversed(keys))
+
+
+@pytest.mark.invariant
+def test_a_filter_never_hides_deadline_pinned_work(api: TestClient) -> None:
+    """UR-03: pinned items stay in view whatever the filter."""
+    raise_item(CLIENT_A, WorkItemKind.DEADLINE_RISK, "pinned")
+    raise_item(CLIENT_A, WorkItemKind.SUBMISSION_REJECTION, "ordinary")
+    page = items(api, "ar-follow-up", assigned="mine")
+    assert titles(page) == ["pinned"]
+    rows = page["items"]
+    assert isinstance(rows, list)
+    assert rows[0]["deadline_pinned"] is True
+
+
+def test_a_queue_shows_only_my_clients_items(api: TestClient) -> None:
+    """PD-20."""
+    raise_item(CLIENT_A, WorkItemKind.DATA_QUALITY, "mine")
+    raise_item(CLIENT_B, WorkItemKind.DATA_QUALITY, "theirs")
+    assert titles(items(api, "data-quality")) == ["mine"]
+
+
+def test_a_queue_or_cursor_that_is_not_mine_is_refused(api: TestClient) -> None:
+    """A queue the role may not see looks like no queue at all; a cursor we
+    did not issue is refused, never read as "from the start" (PD-18)."""
+    coder = bearer(CLIENT_A, role=Role.CODER)
+    assert api.get("/api/v1/work-queues/denials/items", headers=coder).status_code == 404
+    assert api.get("/api/v1/work-queues/nonsense/items", headers=coder).status_code == 404
+    bad = api.get(
+        "/api/v1/work-queues/data-quality/items",
+        params={"cursor": "not-a-cursor"},
+        headers=bearer(CLIENT_A),
+    )
+    assert bad.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [
+        # The id as a number, not a string.
+        ["1", "0", "1", "-50", "2026-11-10T00:00:00+00:00", "2026-11-01T00:00:00+00:00", 5],
+        # Infinity: json.loads accepts it; int() of it overflows.
+        [
+            "1",
+            "0",
+            "1",
+            "Infinity",
+            "2026-11-10T00:00:00+00:00",
+            "2026-11-01T00:00:00+00:00",
+            str(uuid.uuid4()),
+        ],
+        # No offset: would be read in the session's zone.
+        [
+            "1",
+            "0",
+            "1",
+            "-50",
+            "2026-11-10T00:00:00",
+            "2026-11-01T00:00:00+00:00",
+            str(uuid.uuid4()),
+        ],
+        {"not": "a list"},
+    ],
+)
+def test_a_tampered_cursor_is_refused_by_name(keys: object) -> None:
+    """PD-18: a forged cursor gets the named 422, never a bare 500."""
+    raw = json.dumps(keys).replace('"Infinity"', "Infinity")
+    cursor = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+    with pytest.raises(ValidationFailedError):
+        views._decode(cursor)
+
+
+@pytest.mark.invariant
+def test_reading_a_queue_is_audited(api: TestClient) -> None:
+    """PD-2: rows carry claim identifiers and dates of service."""
+    subject = f"auditor.{uuid.uuid4().hex[:8]}"
+    response = api.get(
+        "/api/v1/work-queues/data-quality/items", headers=bearer(CLIENT_A, subject=subject)
+    )
+    assert response.status_code == 200
+    with session_scope() as session:
+        actions = session.scalars(
+            select(AuditEvent.action).where(AuditEvent.actor_id == subject)
+        ).all()
+    assert actions == ["GET /api/v1/work-queues/data-quality/items"]
+
+
+@pytest.mark.invariant
+def test_a_read_that_cannot_be_audited_is_refused(api: TestClient) -> None:
+    """PD-2 / PD-18: the audit row is written before anything is read. If it
+    cannot be written -- here a subject too long for the audit column -- the
+    request fails; it never returns PHI with no record of the access."""
+    response = api.get(
+        "/api/v1/work-queues/data-quality/items", headers=bearer(CLIENT_A, subject="x" * 200)
+    )
+    assert response.status_code == 500
+    assert "items" not in response.json()

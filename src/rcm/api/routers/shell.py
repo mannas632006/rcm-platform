@@ -1,18 +1,30 @@
 """What every screen's shell reads: who is signed in, the queues they may
 see, and the filing-deadline alert (M5.1, SRS 10.4.0, UR-26).
 
-Counts and charges only -- no PHI -- so these read an ordinary session, not
-an audited one. Client scope is applied in `rcm.work.views` (PD-20).
+The counts, charges and the caller's own identity carry no PHI and read an
+ordinary session. A queue's items carry claim identifiers and dates of
+service, so that route reads an audited one (PD-2). Client scope is applied
+in `rcm.work.views` for all of them (PD-20).
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
-from rcm.api.dependencies import CurrentPrincipal, DbSession, require_permission
-from rcm.api.schemas import AUTH_ERRORS, DeadlineRiskOut, Me, QueueSummaryOut, WorkQueues
+from rcm.api.dependencies import AuditedSession, CurrentPrincipal, DbSession, require_permission
+from rcm.api.schemas import (
+    AUTH_ERRORS,
+    QUEUE_ERRORS,
+    DeadlineRiskOut,
+    Me,
+    QueueItemOut,
+    QueueItemsPage,
+    QueueSummaryOut,
+    WorkQueues,
+)
 from rcm.platform.auth import Permission
 from rcm.work import views
 
@@ -48,6 +60,43 @@ def list_work_queues(principal: CurrentPrincipal, session: DbSession) -> WorkQue
             )
             for s in summaries
         ]
+    )
+
+
+@router.get(
+    "/work-queues/{queue_key}/items",
+    operation_id="listQueueItems",
+    summary="A queue's items, best first",
+    responses=QUEUE_ERRORS,
+)
+def list_queue_items(
+    queue_key: str,
+    principal: CurrentPrincipal,
+    session: AuditedSession,
+    cursor: Annotated[str | None, Query(description="From the previous page.")] = None,
+    limit: Annotated[int, Query(ge=1, le=views.MAX_PAGE)] = 200,
+    assigned: Annotated[views.Assignment, Query()] = views.Assignment.ANY,
+    payer_id: Annotated[str | None, Query(max_length=80)] = None,
+) -> QueueItemsPage:
+    """S-02: the queue in priority order (UR-02), deadline-pinned items first
+    and never filtered out (UR-03). Cursor-paginated (FR-API-02).
+
+    Rows carry claim identifiers and dates of service, so the read is
+    audited (PD-2).
+    """
+    page = views.queue_items(
+        session,
+        principal=principal,
+        key=queue_key,
+        now=datetime.now(UTC),
+        cursor=cursor,
+        limit=limit,
+        assignment=assigned,
+        payer_id=payer_id,
+    )
+    return QueueItemsPage(
+        items=[QueueItemOut.model_validate(item, from_attributes=True) for item in page.items],
+        next_cursor=page.next_cursor,
     )
 
 

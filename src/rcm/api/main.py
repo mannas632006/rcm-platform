@@ -20,7 +20,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from rcm.api.routers import shell
+from rcm.api.routers import insight, shell
 from rcm.platform.config import Settings, get_settings
 from rcm.platform.errors import PlatformError
 from rcm.platform.idempotency import IdempotencyMiddleware
@@ -143,6 +143,7 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(shell.router)
+    app.include_router(insight.router)
     return app
 
 

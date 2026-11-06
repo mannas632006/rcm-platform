@@ -25,6 +25,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * KPIs for my clients
+         * @description Denial rate, first-pass clean rate, claims by state and queue health.
+         */
+        get: operations["getDashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -37,6 +57,46 @@ export interface paths {
          * @description The signed-in operator's roles, permissions and client scope.
          */
         get: operations["getMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payer-registry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Payer registry, with staleness
+         * @description Current registry entries, each flagged when past [TBD-42] (M4.10).
+         */
+        get: operations["listPayerRegistry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Rules, latest version each
+         * @description Each rule's latest version, status and latest backtest (M4.4-M4.6).
+         */
+        get: operations["listRules"];
         put?: never;
         post?: never;
         delete?: never;
@@ -58,6 +118,30 @@ export interface paths {
          *     the operator's client scope (SRS 7.2, PD-20).
          */
         get: operations["listWorkQueues"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/work-queues/{queue_key}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A queue's items, best first
+         * @description S-02: the queue in priority order (UR-02), deadline-pinned items first
+         *     and never filtered out (UR-03). Cursor-paginated (FR-API-02).
+         *
+         *     Rows carry claim identifiers and dates of service, so the read is
+         *     audited (PD-2).
+         */
+        get: operations["listQueueItems"];
         put?: never;
         post?: never;
         delete?: never;
@@ -95,6 +179,48 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * Assignment
+         * @enum {string}
+         */
+        Assignment: "any" | "mine" | "unassigned";
+        /**
+         * DashboardOut
+         * @description KPIs for the signed-in operator's clients. Counts and rates only.
+         */
+        DashboardOut: {
+            /** Adjudicated Claims */
+            adjudicated_claims: number;
+            /** Claims By State */
+            claims_by_state: components["schemas"]["StateCount"][];
+            /**
+             * Denial Rate
+             * @description Denied over adjudicated claims, per claim (BR-DATA-03), as a percentage.
+             */
+            denial_rate: string | null;
+            /** Denied Claims */
+            denied_claims: number;
+            /** First Pass Claims */
+            first_pass_claims: number;
+            /** First Pass Clean */
+            first_pass_clean: number;
+            /**
+             * First Pass Clean Rate
+             * @description First submissions neither rejected nor denied, as a percentage.
+             */
+            first_pass_clean_rate: string | null;
+            /** Open Work */
+            open_work: number;
+            /** Overdue Work */
+            overdue_work: number;
+            /** Pinned Work */
+            pinned_work: number;
+            /**
+             * Steps Awaiting Review
+             * @description Automatic claim steps waiting for the submitter's approval (ADR-0006).
+             */
+            steps_awaiting_review: number;
+        };
+        /**
          * DeadlineRiskOut
          * @description UR-26: the alert bar that cannot be dismissed while claims are at risk.
          */
@@ -120,6 +246,13 @@ export interface components {
             roles: components["schemas"]["Role"][];
             /** Subject */
             subject: string;
+        };
+        /** PayerRegistryOut */
+        PayerRegistryOut: {
+            /** Entries */
+            entries: components["schemas"]["RegistryEntryOut"][];
+            /** Staleness Days */
+            staleness_days: number;
         };
         /**
          * Permission
@@ -155,6 +288,75 @@ export interface components {
             /** Type */
             type: string;
         };
+        /**
+         * QueueItemOut
+         * @description One row of a queue (S-02). Charges are billed charges, to the cent.
+         */
+        QueueItemOut: {
+            /** Assigned To */
+            assigned_to: string | null;
+            /** Bulk Handling */
+            bulk_handling: boolean;
+            /** Charges */
+            charges: string | null;
+            /** Claim Id */
+            claim_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Date Of Service */
+            date_of_service: string | null;
+            /** Days To Deadline */
+            days_to_deadline: number | null;
+            /**
+             * Deadline Pinned
+             * @description PD-15: always first, never filtered out (UR-03).
+             */
+            deadline_pinned: boolean;
+            /** Kind */
+            kind: string;
+            /** Overdue */
+            overdue: boolean;
+            /** Payer Id */
+            payer_id: string | null;
+            /** Payer Name */
+            payer_name: string | null;
+            /** Priority Score */
+            priority_score: number;
+            /**
+             * Recovery Probability
+             * @description ML-3's P(recovery). Null until the model exists (M6): the UI shows it as unavailable, never as zero (SRS 10.8 PARTIAL).
+             */
+            recovery_probability?: number | null;
+            /**
+             * Sla Due At
+             * Format: date-time
+             */
+            sla_due_at: string;
+            /** State */
+            state: string;
+            /** Submitter Claim Id */
+            submitter_claim_id: string | null;
+            /** Title */
+            title: string;
+            /**
+             * Work Item Id
+             * Format: uuid
+             */
+            work_item_id: string;
+        };
+        /** QueueItemsPage */
+        QueueItemsPage: {
+            /** Items */
+            items: components["schemas"]["QueueItemOut"][];
+            /**
+             * Next Cursor
+             * @description Pass back as `cursor` for the next page.
+             */
+            next_cursor: string | null;
+        };
         /** QueueSummaryOut */
         QueueSummaryOut: {
             /**
@@ -184,6 +386,31 @@ export interface components {
             /** Unassigned */
             unassigned: number;
         };
+        /** RegistryEntryOut */
+        RegistryEntryOut: {
+            /** Cpt */
+            cpt: string;
+            /**
+             * Last Verified Date
+             * Format: date
+             */
+            last_verified_date: string;
+            /** Payer Id */
+            payer_id: string;
+            /** Payer Name */
+            payer_name: string;
+            /** Plan Type */
+            plan_type: string;
+            /** Prior Auth Required */
+            prior_auth_required: boolean | null;
+            /**
+             * Stale
+             * @description Past [TBD-42]: cannot drive a BLOCKING decision (BR-REG-02).
+             */
+            stale: boolean;
+            /** Version */
+            version: number;
+        };
         /**
          * Role
          * @description Operator roles (SRS section 11.5).
@@ -193,6 +420,43 @@ export interface components {
          * @enum {string}
          */
         Role: "AR_SPECIALIST" | "DENIAL_SPECIALIST" | "CODER" | "OPERATIONS_MANAGER" | "RULES_AUTHOR" | "ADMINISTRATOR" | "SYSTEM";
+        /** RuleOut */
+        RuleOut: {
+            /** Backtest Flagged */
+            backtest_flagged: number | null;
+            /**
+             * Backtest Fp Rate
+             * @description False-positive rate of the latest backtest, 0-1; null when none has run.
+             */
+            backtest_fp_rate: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Layer */
+            layer: string;
+            /** Rule Id */
+            rule_id: string;
+            /** Severity */
+            severity: string;
+            /** Status */
+            status: string;
+            /** Version */
+            version: number;
+        };
+        /** RulesOut */
+        RulesOut: {
+            /** Rules */
+            rules: components["schemas"]["RuleOut"][];
+        };
+        /** StateCount */
+        StateCount: {
+            /** Count */
+            count: number;
+            /** State */
+            state: string;
+        };
         /** WorkQueues */
         WorkQueues: {
             /** Queues */
@@ -223,6 +487,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeadlineRiskOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardOut"];
                 };
             };
             /** @description No valid bearer token. */
@@ -283,6 +585,82 @@ export interface operations {
             };
         };
     };
+    listPayerRegistry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayerRegistryOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listWorkQueues: {
         parameters: {
             query?: never;
@@ -312,6 +690,70 @@ export interface operations {
             };
             /** @description The token lacks the permission this route needs. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listQueueItems: {
+        parameters: {
+            query?: {
+                /** @description From the previous page. */
+                cursor?: string | null;
+                limit?: number;
+                assigned?: components["schemas"]["Assignment"];
+                payer_id?: string | null;
+            };
+            header?: never;
+            path: {
+                queue_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueItemsPage"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such queue, or not one this role may see. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A cursor, limit or filter that is not valid. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
