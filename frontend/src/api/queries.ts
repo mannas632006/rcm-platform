@@ -6,6 +6,7 @@ import { api, unwrap } from "./client";
 import type {
   Assignment,
   ClaimDetail,
+  DenialWorkbench,
   Dashboard,
   DeadlineRisk,
   Me,
@@ -30,6 +31,7 @@ export const keys = {
   rules: ["rules"] as const,
   payerRegistry: ["payer-registry"] as const,
   claim: (claimId: string) => ["claims", claimId] as const,
+  denial: (workItemId: string) => ["denials", workItemId] as const,
 };
 
 export function useMe() {
@@ -128,6 +130,20 @@ export function useClaim(claimId: string) {
     queryFn: async (): Promise<ClaimDetail> =>
       unwrap(
         await api.GET("/api/v1/claims/{claim_id}", { params: { path: { claim_id: claimId } } }),
+      ),
+    refetchInterval: QUEUE_POLL_MS,
+  });
+}
+
+/** S-04. Polls with the queues: another operator may resolve the denial. */
+export function useDenial(workItemId: string) {
+  return useQuery({
+    queryKey: keys.denial(workItemId),
+    queryFn: async (): Promise<DenialWorkbench> =>
+      unwrap(
+        await api.GET("/api/v1/denials/{work_item_id}", {
+          params: { path: { work_item_id: workItemId } },
+        }),
       ),
     refetchInterval: QUEUE_POLL_MS,
   });

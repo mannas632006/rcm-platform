@@ -29,3 +29,5 @@ export type Adjustment = Schemas["AdjustmentOut"];
 export type Filing = Schemas["FilingOut"];
 export type TimelineEvent = Schemas["TimelineEventOut"];
 export type Decision = Schemas["DecisionOut"];
+export type DenialWorkbench = Schemas["DenialWorkbenchOut"];
+export type DeniedLine = Schemas["DeniedLineOut"];

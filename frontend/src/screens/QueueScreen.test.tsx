@@ -116,6 +116,18 @@ describe("work queue screen (S-02)", () => {
     expect(within(table).queryByRole("link", { name: "CLM-2" })).toBeNull();
   });
 
+  it("opens a denial in the Denial Workbench from its title (S-04)", async () => {
+    const denial = item(1, { kind: "DENIAL", title: "Payer denied CO-50" });
+    api([denial, item(2)]);
+    renderApp(<App />, { path: "/queues/data-quality" });
+    const table = await screen.findByRole("table", { name: /Data Quality items/ });
+    expect(within(table).getByRole("link", { name: "Payer denied CO-50" })).toHaveAttribute(
+      "href",
+      `/denials/${denial.work_item_id}`,
+    );
+    expect(within(table).queryByRole("link", { name: "Problem 2" })).toBeNull();
+  });
+
   it("keeps the filter in the URL and asks the server for it (UR-22)", async () => {
     const fetchMock = api([item(1)]);
     renderApp(<App />, { path: "/queues/data-quality" });
