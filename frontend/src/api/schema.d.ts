@@ -25,6 +25,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/claims/{claim_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One claim, everything needed to decide on it
+         * @description S-03: header and filing countdown (UR-07), service lines, each 835
+         *     payment with its adjustments group and reason together (UR-08, PD-3),
+         *     the resubmission chain (PD-7), the state history, and every automated
+         *     decision with its version and inputs (UR-06).
+         */
+        get: operations["getClaim"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dashboard": {
         parameters: {
             query?: never;
@@ -179,10 +202,104 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * AdjustmentOut
+         * @description One CAS adjustment (PD-6). The group code is never absent (PD-3).
+         */
+        AdjustmentOut: {
+            /** Amount */
+            amount: string;
+            /** Claim Level */
+            claim_level: boolean;
+            /** Group Code */
+            group_code: string;
+            /** Reason Code */
+            reason_code: string;
+        };
+        /**
          * Assignment
          * @enum {string}
          */
         Assignment: "any" | "mine" | "unassigned";
+        /** ChainLinkOut */
+        ChainLinkOut: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /** State */
+            state: string;
+            /** Submitter Claim Id */
+            submitter_claim_id: string;
+        };
+        /** ClaimDetailOut */
+        ClaimDetailOut: {
+            /** Balance */
+            balance: string;
+            /**
+             * Chain
+             * @description Every submission of this claim (PD-7).
+             */
+            chain: components["schemas"]["ChainLinkOut"][];
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /** Date Of Service */
+            date_of_service: string | null;
+            /** Decisions */
+            decisions: components["schemas"]["DecisionOut"][];
+            /** Diagnoses */
+            diagnoses: string[];
+            filing: components["schemas"]["FilingOut"];
+            /** Lines */
+            lines: components["schemas"]["ClaimLineOut"][];
+            /**
+             * Member Id Masked
+             * @description Last four characters only (S-6); null when the claim carries none.
+             */
+            member_id_masked: string | null;
+            /** Next Action Due */
+            next_action_due: string | null;
+            /** Payer Id */
+            payer_id: string;
+            /** Payer Name */
+            payer_name: string | null;
+            /** Payments */
+            payments: components["schemas"]["PaymentOut"][];
+            /** Place Of Service */
+            place_of_service: string;
+            /** State */
+            state: string;
+            /** Submitted On */
+            submitted_on: string | null;
+            /** Submitter Claim Id */
+            submitter_claim_id: string;
+            /** Timeline */
+            timeline: components["schemas"]["TimelineEventOut"][];
+            /** Total Charge */
+            total_charge: string;
+        };
+        /** ClaimLineOut */
+        ClaimLineOut: {
+            /** Charge */
+            charge: string;
+            /** Diagnosis Pointers */
+            diagnosis_pointers: number[];
+            /** Line Number */
+            line_number: number;
+            /** Modifiers */
+            modifiers: string[];
+            /** Procedure Code */
+            procedure_code: string;
+            /** Service Date */
+            service_date: string | null;
+            /** Units */
+            units: string;
+        };
         /**
          * DashboardOut
          * @description KPIs for the signed-in operator's clients. Counts and rates only.
@@ -234,6 +351,63 @@ export interface components {
             claims: number;
         };
         /**
+         * DecisionOut
+         * @description UR-06: what was decided, by which logic version, on what inputs, when.
+         */
+        DecisionOut: {
+            /** Confidence */
+            confidence: number | null;
+            /**
+             * Decided At
+             * Format: date-time
+             */
+            decided_at: string;
+            /** Decided By */
+            decided_by: string;
+            /**
+             * Decision Id
+             * Format: uuid
+             */
+            decision_id: string;
+            /** Decision Type */
+            decision_type: string;
+            /**
+             * Entity Id
+             * Format: uuid
+             */
+            entity_id: string;
+            /** Entity Type */
+            entity_type: string;
+            /** Inputs */
+            inputs: {
+                [key: string]: unknown;
+            };
+            /** Logic Version */
+            logic_version: string;
+            /** Output */
+            output: {
+                [key: string]: unknown;
+            };
+        };
+        /** FilingOut */
+        FilingOut: {
+            /**
+             * Days Left
+             * @description Negative once the deadline has passed.
+             */
+            days_left: number | null;
+            /**
+             * Status
+             * @description RUNNING (days_left set), FILED (the payer took it), UNKNOWN (no term or no date of service -- never a guessed deadline), or NOT_APPLICABLE (never filed and no longer will be: cancelled, auth denied, replaced, written off).
+             */
+            status: string;
+        };
+        /** HTTPValidationError */
+        HTTPValidationError: {
+            /** Detail */
+            detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
          * Me
          * @description Who is signed in, and what they may do. No PHI: a staff identity.
          */
@@ -247,12 +421,67 @@ export interface components {
             /** Subject */
             subject: string;
         };
+        /** PaidLineOut */
+        PaidLineOut: {
+            /** Adjustments */
+            adjustments: components["schemas"]["AdjustmentOut"][];
+            /** Allowed */
+            allowed: string | null;
+            /** Charge */
+            charge: string;
+            /** Line Number */
+            line_number: number;
+            /** Modifiers */
+            modifiers: string[];
+            /** Paid */
+            paid: string;
+            /** Procedure Code */
+            procedure_code: string;
+            /** Remark Codes */
+            remark_codes: string[];
+        };
         /** PayerRegistryOut */
         PayerRegistryOut: {
             /** Entries */
             entries: components["schemas"]["RegistryEntryOut"][];
             /** Staleness Days */
             staleness_days: number;
+        };
+        /**
+         * PaymentOut
+         * @description One 835 claim payment, as the payer sent it.
+         */
+        PaymentOut: {
+            /** Attempt */
+            attempt: number;
+            /** Claim Adjustments */
+            claim_adjustments: components["schemas"]["AdjustmentOut"][];
+            /**
+             * Claim Payment Id
+             * Format: uuid
+             */
+            claim_payment_id: string;
+            /** Is Reversal */
+            is_reversal: boolean;
+            /** Lines */
+            lines: components["schemas"]["PaidLineOut"][];
+            /** Patient Responsibility */
+            patient_responsibility: string;
+            /** Payer Control Number */
+            payer_control_number: string;
+            /** Payment Date */
+            payment_date: string | null;
+            /** Status Code */
+            status_code: string;
+            /**
+             * Submitter Claim Id
+             * @description The submission this payment answers (PD-7).
+             */
+            submitter_claim_id: string;
+            /** Total Charge */
+            total_charge: string;
+            /** Total Paid */
+            total_paid: string;
         };
         /**
          * Permission
@@ -426,7 +655,7 @@ export interface components {
             backtest_flagged: number | null;
             /**
              * Backtest Fp Rate
-             * @description False-positive rate of the latest backtest, 0-1; null when none has run.
+             * @description False-positive rate, 0-1, of the backtest promotion judges by: each client's latest that saw a claim, the worst of them (M4.6). Null when none has run or one flagged nothing.
              */
             backtest_fp_rate: string | null;
             /**
@@ -456,6 +685,41 @@ export interface components {
             count: number;
             /** State */
             state: string;
+        };
+        /** TimelineEventOut */
+        TimelineEventOut: {
+            /** Actor Id */
+            actor_id: string;
+            /** Actor Type */
+            actor_type: string;
+            /** Note */
+            note: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Reason */
+            reason: string;
+            /** Review Status */
+            review_status: string;
+            /** Source State */
+            source_state: string;
+            /** Target State */
+            target_state: string;
+        };
+        /** ValidationError */
+        ValidationError: {
+            /** Context */
+            ctx?: Record<string, never>;
+            /** Input */
+            input?: unknown;
+            /** Location */
+            loc: (string | number)[];
+            /** Message */
+            msg: string;
+            /** Error Type */
+            type: string;
         };
         /** WorkQueues */
         WorkQueues: {
@@ -505,6 +769,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getClaim: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimDetailOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such claim, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

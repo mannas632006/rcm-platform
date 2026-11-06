@@ -5,6 +5,7 @@ import { hasPermission } from "@/lib/permissions";
 import { api, unwrap } from "./client";
 import type {
   Assignment,
+  ClaimDetail,
   Dashboard,
   DeadlineRisk,
   Me,
@@ -28,6 +29,7 @@ export const keys = {
   dashboard: ["dashboard"] as const,
   rules: ["rules"] as const,
   payerRegistry: ["payer-registry"] as const,
+  claim: (claimId: string) => ["claims", claimId] as const,
 };
 
 export function useMe() {
@@ -116,5 +118,17 @@ export function usePayerRegistry() {
     queryKey: keys.payerRegistry,
     queryFn: async (): Promise<PayerRegistry> =>
       unwrap(await api.GET("/api/v1/payer-registry")),
+  });
+}
+
+/** S-03. Polls with the queues: a claim's state moves as its work does. */
+export function useClaim(claimId: string) {
+  return useQuery({
+    queryKey: keys.claim(claimId),
+    queryFn: async (): Promise<ClaimDetail> =>
+      unwrap(
+        await api.GET("/api/v1/claims/{claim_id}", { params: { path: { claim_id: claimId } } }),
+      ),
+    refetchInterval: QUEUE_POLL_MS,
   });
 }

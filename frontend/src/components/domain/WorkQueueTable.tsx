@@ -1,6 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AlertTriangle, Clock } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef } from "react";
+import { Link } from "react-router-dom";
 
 import type { QueueItem } from "@/api/types";
 import { MoneyDisplay } from "@/components/domain/MoneyDisplay";
@@ -178,7 +179,16 @@ const QueueRow = memo(function QueueRow({ item, index, start, today }: QueueRowP
               {item.title}
             </span>
             <span role="cell" className="tabular truncate">
-              {item.submitter_claim_id ?? "—"}
+              {item.claim_id && item.submitter_claim_id ? (
+                <Link
+                  to={`/claims/${item.claim_id}`}
+                  className="text-accent underline-offset-2 hover:underline"
+                >
+                  {item.submitter_claim_id}
+                </Link>
+              ) : (
+                (item.submitter_claim_id ?? "—")
+              )}
             </span>
             <span role="cell" className="truncate" title={item.payer_name ?? undefined}>
               {item.payer_name ?? item.payer_id ?? "—"}
