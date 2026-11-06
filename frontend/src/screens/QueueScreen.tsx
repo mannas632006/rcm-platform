@@ -25,6 +25,12 @@ function parseAssigned(raw: string | null): Assignment {
 /** S-02: one queue, best first, with its filter in the URL (UR-22). */
 export default function QueueScreen() {
   const { queueKey = "" } = useParams();
+  // Keyed so each queue starts fresh: React would otherwise reuse the screen
+  // between queues and compare the new queue's counts with the old one's.
+  return <Queue key={queueKey} queueKey={queueKey} />;
+}
+
+function Queue({ queueKey }: { queueKey: string }) {
   const [params, setParams] = useSearchParams();
   const assigned = parseAssigned(params.get("assigned"));
   const queues = useWorkQueues();

@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { queueItemsKey } from "@/api/queries";
 import { App } from "@/App";
 import { ME, mockApi, queue, renderApp } from "@/test/render";
 
@@ -64,6 +65,43 @@ describe("work queue screen (S-02)", () => {
     // UR-25: an icon and words, not colour alone.
     expect(rows[0]).toHaveTextContent("filing deadline risk");
     expect(rows[0]).toHaveTextContent("$125.00");
+  });
+
+  it("does not carry one queue's change tracking into the next (UR-23)", async () => {
+    // Moving between queues keeps the same route, so React reuses the screen.
+    // The counts it had seen were the old queue's; compared with the new
+    // queue's they look like a change that never happened.
+    mockApi({
+      "/api/v1/me": { body: ME },
+      "/api/v1/work-queues": {
+        body: {
+          queues: [
+            queue("data-quality", "Data Quality", { open: 3 }),
+            queue("denials", "Denial Workbench", { open: 90 }),
+          ],
+        },
+      },
+      "/api/v1/alerts/deadline-risk": { body: { claims: 0, charges: "0.00" } },
+      "/api/v1/work-queues/data-quality/items": { body: { items: [item(1)], next_cursor: null } },
+      "/api/v1/work-queues/denials/items": { body: { items: [item(2)], next_cursor: null } },
+    });
+    renderApp(<App />, {
+      path: "/queues/data-quality",
+      // Denials was scrolled deep on an earlier visit: two pages in cache.
+      seed: (client) => {
+        client.setQueryData(queueItemsKey("denials", "any"), {
+          pages: [
+            { items: [item(2)], next_cursor: "c1" },
+            { items: [item(3)], next_cursor: null },
+          ],
+          pageParams: [null, "c1"],
+        });
+      },
+    });
+    await screen.findByRole("table", { name: /Data Quality items/ });
+    await userEvent.click(screen.getByRole("link", { name: /Denial Workbench/ }));
+    await screen.findByRole("table", { name: /Denial Workbench items/ });
+    expect(screen.queryByText("This queue has changed since you loaded it.")).toBeNull();
   });
 
   it("keeps the filter in the URL and asks the server for it (UR-22)", async () => {

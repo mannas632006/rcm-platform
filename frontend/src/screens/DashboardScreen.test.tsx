@@ -201,7 +201,9 @@ describe("dashboard (INSIGHT, M5.11)", () => {
         client.setQueryData(keys.dashboard, DASHBOARD);
       },
     });
-    expect(await screen.findByText(/These figures may be out of date/)).toBeInTheDocument();
+    const notice = await screen.findByText(/These figures may be out of date/);
+    // WCAG 4.1.3: a screen reader is told, not only a sighted operator.
+    expect(notice.closest('[role="status"]')).not.toBeNull();
     expect(within(await card("Denial rate")).getByText("12.5%")).toBeInTheDocument();
   });
 
