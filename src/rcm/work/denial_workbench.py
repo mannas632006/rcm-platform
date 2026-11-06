@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -43,6 +43,9 @@ from rcm.domain.remittance import (
 from rcm.platform.auth import Principal, scoped_query
 from rcm.platform.errors import ResourceNotFoundError
 from rcm.work.claim_detail import Adjustment
+
+if TYPE_CHECKING:
+    from rcm.work.appeals import AppealView
 from rcm.work.models import (
     WorkItem,
     WorkItemKind,
@@ -199,6 +202,8 @@ class DenialWorkbench:
     claim_adjustments: list[Adjustment]
     #: Every write-off asked of this denial, newest first.
     write_offs: list[WriteOffSummary]
+    #: The denial's appeal, if one was drafted (ADR-0017).
+    appeal: AppealView | None
 
 
 def _payment_id(item: WorkItem) -> uuid.UUID:
@@ -333,7 +338,15 @@ def denial_workbench(
             for a in adjustments[None]
         ],
         write_offs=_write_offs(session, item=item),
+        appeal=_appeal(session, item=item),
     )
+
+
+def _appeal(session: Session, *, item: WorkItem) -> AppealView | None:
+    # Imported here: rcm.work.appeals reads this module to draft a letter.
+    from rcm.work.appeals import current_appeal
+
+    return current_appeal(session, item=item)
 
 
 def _write_offs(session: Session, *, item: WorkItem) -> list[WriteOffSummary]:

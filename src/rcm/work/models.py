@@ -408,3 +408,75 @@ class WriteOffDecision(Base):
         ),
         CheckConstraint("length(trim(decided_by)) > 0", name="write_off_decision_names_its_maker"),
     )
+
+
+class Appeal(Base):
+    """An appeal of one denial (M5.7, BR-M11-04, ADR-0017).
+
+    The letter lives in `appeal_version` rows and the send in
+    `appeal_signoff`; all three are insert-only by grant, so what was
+    drafted, changed and signed -- by whom -- cannot be rewritten.
+    """
+
+    __tablename__ = "appeal"
+
+    appeal_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    client_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    work_item_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("work_item.work_item_id"), nullable=False
+    )
+    claim_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("claim.claim_id"), nullable=False
+    )
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("length(trim(created_by)) > 0", name="appeal_names_its_author"),
+        Index("ix_appeal_item", "client_id", "work_item_id"),
+    )
+
+
+class AppealVersion(Base):
+    """One text of an appeal letter. A change is a new version."""
+
+    __tablename__ = "appeal_version"
+
+    appeal_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("appeal.appeal_id"), primary_key=True
+    )
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    letter: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    written_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    written_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="appeal_version_is_positive"),
+        CheckConstraint("length(trim(letter)) > 0", name="appeal_version_has_a_letter"),
+        CheckConstraint("length(trim(written_by)) > 0", name="appeal_version_names_its_writer"),
+    )
+
+
+class AppealSignoff(Base):
+    """UR-09: the person who read one exact version and sent it. One per
+    appeal; the SHA-256 of the text proves which words were signed."""
+
+    __tablename__ = "appeal_signoff"
+
+    appeal_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("appeal.appeal_id"), primary_key=True
+    )
+    client_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    letter_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    signed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    signed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("length(letter_sha256) = 64", name="appeal_signoff_hash_is_sha256"),
+        CheckConstraint("length(trim(signed_by)) > 0", name="appeal_signoff_names_its_signer"),
+    )

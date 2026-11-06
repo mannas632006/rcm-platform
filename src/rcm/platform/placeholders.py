@@ -184,6 +184,17 @@ REGISTRY: Final[dict[str, Placeholder]] = {
         provisional="0.00",
         source="DOC-02 Appendix A",
     ),
+    "appeal_follow_up_days": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Days after an appeal is sent before it is followed up "
+        "(BR-STATE-04: every claim needs a next action). Payers typically answer "
+        "in 30-60 days; Medicare redeterminations in 60.",
+        owner="Muhammad Anas",
+        # The early end of the range: a follow-up too soon costs a call; too
+        # late can miss the next appeal level's window.
+        provisional=30,
+        source="none -- raised at M5.7 (ADR-0017)",
+    ),
     "exception_trend_min_count": Placeholder(
         tbd_id="UNREGISTERED",
         description="Minimum exceptions in the latest window before a trend can "

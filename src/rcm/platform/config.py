@@ -97,6 +97,9 @@ class Settings(BaseSettings):
     preventable_denial_defect_threshold: int = Field(default=3)
     #: TBD-48 (BR-M11-05). Placeholder 0.00 -- see placeholders.py.
     write_off_approval_threshold: Decimal = Field(default=Decimal("0.00"), ge=0)
+    #: Unregistered placeholder (ADR-0017): days after an appeal is sent
+    #: before it is followed up. Payers typically answer in 30-60 days.
+    appeal_follow_up_days: int = Field(default=30, ge=1)
     # M3.5. No specification gives exception SLAs or a trend threshold;
     # these are labelled placeholders, keyed by ExceptionCategory.
     exception_sla_hours: dict[str, int] = Field(
