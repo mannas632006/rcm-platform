@@ -22,7 +22,7 @@ together (PD-3), and an evidence checklist for the denial's category. It
 leaves bracketed prompts: `[State why the denial should be reversed…]` and
 `[Name, title and contact details…]`.
 
-Signing is refused while any `[…]` prompt remains. An unreviewed draft
+Signing is refused while any `[` or `]` remains, after full-width brackets are folded to ASCII. A prompt broken over lines, or half deleted, is still an unreviewed prompt. An unreviewed draft
 cannot be sent; `test_appeal_requires_human_signoff` fails without this check
 (shown).
 
@@ -46,7 +46,7 @@ channel.
 ## Consequences
 
 - One open appeal per denial. Drafting again opens the existing draft.
-- No appeal while a write-off of the same denial waits for approval.
+- One decision at a time. No appeal is drafted or sent while a write-off of the same denial waits for approval, and no write-off is requested while an appeal draft is open. Otherwise sending the appeal would close the denial and leave the write-off stuck waiting.
 - The appeal-level deadline (each payer's appeal window) is not tracked yet.
   The payer registry has no field for it.
 - Appeal outcomes arrive as new 835s and run through the existing

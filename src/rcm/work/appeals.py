@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -49,8 +50,15 @@ from rcm.work.dispositions import close_item, denial_item, waiting_write_off
 from rcm.work.models import Appeal, AppealSignoff, AppealVersion, WorkItem
 from rcm.work.state import WorkItemOutcome
 
-#: A prompt left for a person: "[State why ...]". Signing refuses any.
-PROMPT: Final = re.compile(r"\[[^\]\n]*\]")
+#: A prompt left for a person: "[State why ...]". Signing refuses any bracket
+#: at all, after NFKC folds full-width ones to ASCII: a prompt broken over
+#: lines, or half deleted, is still an unreviewed prompt (UR-09).
+PROMPT: Final = re.compile(r"[\[\]]")
+
+
+def has_prompt(text: str) -> bool:
+    return PROMPT.search(unicodedata.normalize("NFKC", text)) is not None
+
 
 #: What the payer will want enclosed, by denial category (DOC-02 8.1).
 EVIDENCE: Final[dict[DenialCategory, list[str]]] = {
@@ -328,10 +336,17 @@ def sign_and_send(
     )
     if text is None:
         raise ResourceNotFoundError(entity="appeal_version", entity_id=f"{appeal_id}/{version}")
-    if PROMPT.search(text):
+    if has_prompt(text):
         raise ValidationFailedError(
             field="letter",
             reason="replace every [bracketed] prompt before signing; the letter is not reviewed",
+        )
+    if waiting_write_off(session, item=item) is not None:
+        # Sending closes the denial; a waiting write-off would be stranded.
+        raise StateTransitionError(
+            source="write-off awaiting approval",
+            target=str(ClaimState.APPEALING),
+            reason="a write-off of this denial is waiting for approval; decide that first",
         )
     _require_denied(session, item=item)
 

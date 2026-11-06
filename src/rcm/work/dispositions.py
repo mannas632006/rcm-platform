@@ -45,6 +45,8 @@ from rcm.platform.errors import (
 from rcm.work import queue
 from rcm.work.denial_workbench import DENIAL_KEY
 from rcm.work.models import (
+    Appeal,
+    AppealSignoff,
     WorkItem,
     WorkItemKind,
     WriteOff,
@@ -176,6 +178,21 @@ def request_write_off(
         raise ValidationFailedError(
             field="work_item_id",
             reason="the denied payment names no claim on file; find the claim first",
+        )
+    if session.scalar(
+        select(Appeal.appeal_id)
+        .outerjoin(AppealSignoff, AppealSignoff.appeal_id == Appeal.appeal_id)
+        .where(
+            Appeal.client_id == item.client_id,
+            Appeal.work_item_id == item.work_item_id,
+            AppealSignoff.appeal_id.is_(None),
+        )
+    ):
+        # One decision at a time: an appeal of this denial is being drafted.
+        raise StateTransitionError(
+            source="appeal in draft",
+            target="write-off",
+            reason="an appeal of this denial is being drafted; send it or decide against it first",
         )
     if waiting_write_off(session, item=item) is not None:
         raise StateTransitionError(

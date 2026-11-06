@@ -199,3 +199,41 @@ def test_signing_through_the_api_twice_sends_once(api: TestClient, root: Path) -
     assert first.json()["status"] == "SENT"
     with session_scope() as session:
         assert len(session.scalars(select(AppealSignoff)).all()) == 1
+
+
+@pytest.mark.parametrize(
+    "left",
+    [
+        "Dear payer,\n[State why the denial\nshould be reversed]\nThanks",
+        "Dear payer, State why the denial should be reversed] Thanks",
+        "Dear payer, [ please reconsider. Thanks",
+        "Dear payer, \uff3bState why\uff3d Thanks",
+    ],
+)
+def test_a_half_edited_prompt_cannot_be_signed(root: Path, left: str) -> None:
+    """UR-09: a prompt broken over lines, a lone bracket or a full-width one
+    is still an unreviewed prompt."""
+    view = draft(denied(root))
+    revised = revise(view.appeal_id, left)
+    with pytest.raises(ValidationFailedError):
+        sign(revised.appeal_id, revised.version)
+
+
+def test_no_appeal_is_sent_while_a_write_off_waits(root: Path) -> None:
+    """One decision at a time: sending would close the denial and strand the
+    write-off waiting for its approver."""
+    item = denied(root)
+    view = draft(item)
+    reviewed = revise(view.appeal_id, REVIEWED)
+    # A draft open blocks a write-off request outright ...
+    with session_scope() as session, pytest.raises(StateTransitionError):
+        dispositions.request_write_off(
+            session,
+            principal=SPECIALIST,
+            work_item_id=item,
+            reason=dispositions.WriteOffReason.APPEAL_NOT_VIABLE,
+            note="",
+            now=NOW,
+        )
+    # ... and the appeal is still signable.
+    assert sign(reviewed.appeal_id, reviewed.version).status == "SENT"
