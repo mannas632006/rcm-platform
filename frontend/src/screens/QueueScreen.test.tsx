@@ -104,6 +104,18 @@ describe("work queue screen (S-02)", () => {
     expect(screen.queryByText("This queue has changed since you loaded it.")).toBeNull();
   });
 
+  it("opens the claim from its number, and leaves a claimless item as text (S-03)", async () => {
+    const claimId = "11111111-0000-4000-8000-000000000001";
+    api([item(1, { claim_id: claimId }), item(2)]);
+    renderApp(<App />, { path: "/queues/data-quality" });
+    const table = await screen.findByRole("table", { name: /Data Quality items/ });
+    expect(within(table).getByRole("link", { name: "CLM-1" })).toHaveAttribute(
+      "href",
+      `/claims/${claimId}`,
+    );
+    expect(within(table).queryByRole("link", { name: "CLM-2" })).toBeNull();
+  });
+
   it("keeps the filter in the URL and asks the server for it (UR-22)", async () => {
     const fetchMock = api([item(1)]);
     renderApp(<App />, { path: "/queues/data-quality" });
