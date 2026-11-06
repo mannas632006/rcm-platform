@@ -6,13 +6,17 @@ client's numbers stay that client's), RBAC for every route.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import Engine, text
 
 from rcm.decision.registry import record_entry
+from rcm.decision.rules.definition import RuleStatus
 from rcm.domain.payer import Payer
 from rcm.platform.auth import Role
 from rcm.platform.config import get_settings
@@ -28,6 +32,9 @@ from tests.integration.test_acknowledgement_loading import (
 )
 from tests.integration.test_api_shell import api, bearer, clean  # noqa: F401 - fixtures
 from tests.integration.test_claim_progression import advance, resubmit
+from tests.integration.test_rule_backtest import ALL as BACKTEST_TABLES
+from tests.integration.test_rule_backtest import corpus, draft, load, run
+from tests.integration.test_rule_lifecycle import move
 
 pytestmark = pytest.mark.integration
 
@@ -137,3 +144,35 @@ def test_rules_list_answers_with_its_shape(api: TestClient) -> None:  # noqa: F8
     response = api.get("/api/v1/rules", headers=bearer(CLIENT_A, role=Role.OPERATIONS_MANAGER))
     assert response.status_code == 200
     assert isinstance(response.json()["rules"], list)
+
+
+@pytest.fixture
+def rule_tables(owner_engine: Engine) -> Iterator[None]:
+    def wipe() -> None:
+        with owner_engine.begin() as conn:
+            conn.execute(text(f"TRUNCATE {BACKTEST_TABLES} RESTART IDENTITY CASCADE"))
+
+    wipe()
+    yield
+    wipe()
+
+
+@pytest.mark.usefixtures("rule_tables")
+def test_rules_show_the_backtest_promotion_judges_by(api: TestClient, root: Path) -> None:  # noqa: F811
+    """M4.6 judges a rule by its worst client's latest backtest. The screen
+    shows that one too -- not whichever client happened to run last -- so
+    it never says a rule is under the cap when promotion will refuse it."""
+    corpus(root)  # client A: one true and one false positive -> 50%
+    draft()
+    move(RuleStatus.BACKTESTING)
+    assert run(1, CLIENT_A).tally.fp_rate == Decimal("0.5000")
+    load("CLM-B1", "900.00", root, control="0098", client=CLIENT_B)
+    remit(denial_for("CLM-B1", control="0098"), root, client=CLIENT_B, name="b1.835")
+    assert run(1, CLIENT_B).tally.fp_rate == Decimal("0.0000")  # newer, and better
+
+    body = api.get(
+        "/api/v1/rules", headers=bearer(CLIENT_A, CLIENT_B, role=Role.RULES_AUTHOR)
+    ).json()
+    (rule,) = body["rules"]
+    assert Decimal(rule["backtest_fp_rate"]) == Decimal("0.5000")
+    assert rule["backtest_flagged"] == 2

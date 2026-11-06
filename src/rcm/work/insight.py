@@ -13,6 +13,7 @@ ids and payer ids only.
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -163,9 +164,23 @@ class RuleRow:
     backtest_fp_rate: Decimal | None
 
 
+def _deciding(backtests: list[RuleBacktest]) -> RuleBacktest | None:
+    """The backtest M4.6 would judge promotion by: an unmeasured one first (a
+    rule that flagged nothing has shown nothing), else the worst FP rate. It
+    mirrors `lifecycle._evidence_for_blocking`, so the screen never says a
+    rule is under the cap when promotion will refuse it."""
+    if not backtests:
+        return None
+    unmeasured = [b for b in backtests if b.fp_rate is None]
+    if unmeasured:
+        return unmeasured[0]
+    return max(backtests, key=lambda b: b.fp_rate or Decimal(0))
+
+
 def rules(session: Session, *, principal: Principal) -> list[RuleRow]:
-    """The latest version of each rule, with its latest backtest inside the
-    principal's client scope (a backtest is a client's history)."""
+    """The latest version of each rule, with the backtest promotion would
+    judge it by, inside the principal's client scope (a backtest is a
+    client's history): each client's latest that saw a claim, worst first."""
     latest = (
         select(RuleVersion.rule_id, func.max(RuleVersion.version).label("version"))
         .group_by(RuleVersion.rule_id)
@@ -180,18 +195,37 @@ def rules(session: Session, *, principal: Principal) -> list[RuleRow]:
         .order_by(RuleVersion.rule_id)
     ).all()
 
+    newest = (
+        select(
+            RuleBacktest.rule_id,
+            RuleBacktest.version,
+            RuleBacktest.client_id,
+            func.max(RuleBacktest.ran_at).label("ran_at"),
+        )
+        .where(
+            RuleBacktest.client_id.in_(principal.client_ids),
+            RuleBacktest.claims_evaluated > 0,
+        )
+        .group_by(RuleBacktest.rule_id, RuleBacktest.version, RuleBacktest.client_id)
+        .subquery()
+    )
+    per_client: dict[tuple[str, int], list[RuleBacktest]] = defaultdict(list)
+    for found in session.scalars(
+        select(RuleBacktest).join(
+            newest,
+            and_(
+                RuleBacktest.rule_id == newest.c.rule_id,
+                RuleBacktest.version == newest.c.version,
+                RuleBacktest.client_id == newest.c.client_id,
+                RuleBacktest.ran_at == newest.c.ran_at,
+            ),
+        )
+    ):
+        per_client[(found.rule_id, found.version)].append(found)
+
     out: list[RuleRow] = []
     for rule in versions:
-        backtest = session.scalar(
-            select(RuleBacktest)
-            .where(
-                RuleBacktest.rule_id == rule.rule_id,
-                RuleBacktest.version == rule.version,
-                RuleBacktest.client_id.in_(principal.client_ids),
-            )
-            .order_by(RuleBacktest.ran_at.desc())
-            .limit(1)
-        )
+        backtest = _deciding(per_client.get((rule.rule_id, rule.version), []))
         out.append(
             RuleRow(
                 rule_id=rule.rule_id,
