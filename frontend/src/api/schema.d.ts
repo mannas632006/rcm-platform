@@ -259,9 +259,9 @@ export interface components {
             lines: components["schemas"]["ClaimLineOut"][];
             /**
              * Member Id Masked
-             * @description Last four characters only (S-6).
+             * @description Last four characters only (S-6); null when the claim carries none.
              */
-            member_id_masked: string;
+            member_id_masked: string | null;
             /** Next Action Due */
             next_action_due: string | null;
             /** Payer Id */
@@ -371,6 +371,11 @@ export interface components {
             decision_id: string;
             /** Decision Type */
             decision_type: string;
+            /**
+             * Entity Id
+             * Format: uuid
+             */
+            entity_id: string;
             /** Entity Type */
             entity_type: string;
             /** Inputs */
@@ -393,7 +398,7 @@ export interface components {
             days_left: number | null;
             /**
              * Status
-             * @description RUNNING (days_left set), FILED (the payer took it), or UNKNOWN (no term or no date of service -- never a guessed deadline).
+             * @description RUNNING (days_left set), FILED (the payer took it), UNKNOWN (no term or no date of service -- never a guessed deadline), or NOT_APPLICABLE (never filed and no longer will be: cancelled, auth denied, replaced, written off).
              */
             status: string;
         };
@@ -447,6 +452,8 @@ export interface components {
          * @description One 835 claim payment, as the payer sent it.
          */
         PaymentOut: {
+            /** Attempt */
+            attempt: number;
             /** Claim Adjustments */
             claim_adjustments: components["schemas"]["AdjustmentOut"][];
             /**
@@ -466,6 +473,11 @@ export interface components {
             payment_date: string | null;
             /** Status Code */
             status_code: string;
+            /**
+             * Submitter Claim Id
+             * @description The submission this payment answers (PD-7).
+             */
+            submitter_claim_id: string;
             /** Total Charge */
             total_charge: string;
             /** Total Paid */

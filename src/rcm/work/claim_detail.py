@@ -21,6 +21,7 @@ screen.
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -56,6 +57,34 @@ class FilingStatus(StrEnum):
     FILED = "FILED"
     #: No term recorded for the payer, or no date of service. Never a guess.
     UNKNOWN = "UNKNOWN"
+    #: The claim was never filed and no longer will be (cancelled, auth
+    #: denied, replaced, written off). Not "filed": that would be untrue.
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+#: The payer received the claim: everything from acceptance on.
+FILED_STATES: frozenset[ClaimState] = frozenset(
+    {
+        ClaimState.IN_ADJUDICATION,
+        ClaimState.PAID,
+        ClaimState.PARTIALLY_PAID,
+        ClaimState.DENIED,
+        ClaimState.APPEALING,
+        ClaimState.PATIENT_BALANCE,
+        ClaimState.CLOSED,
+        ClaimState.REOPENED,
+    }
+)
+#: No filing clock applies. A replaced submission's clock lives on in its
+#: replacement; a written-off claim is no longer being pursued.
+NO_FILING_STATES: frozenset[ClaimState] = frozenset(
+    {
+        ClaimState.AUTH_DENIED,
+        ClaimState.CANCELLED,
+        ClaimState.REPLACED,
+        ClaimState.WRITTEN_OFF,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +127,9 @@ class PaidLine:
 @dataclass(frozen=True, slots=True)
 class Payment:
     claim_payment_id: uuid.UUID
+    #: Which submission of the claim the payer answered (PD-7).
+    submitter_claim_id: str
+    attempt: int
     payer_control_number: str
     status_code: str
     payment_date: date | None
@@ -134,6 +166,7 @@ class Decision:
     decision_id: uuid.UUID
     decided_at: datetime
     entity_type: str
+    entity_id: uuid.UUID
     decision_type: str
     decided_by: str
     logic_version: str
@@ -154,7 +187,7 @@ class ClaimDetail:
     next_action_due: date | None
     total_charge: Decimal
     balance: Decimal
-    member_id_masked: str
+    member_id_masked: str | None
     place_of_service: str
     diagnoses: list[str]
     filing: Filing
@@ -165,8 +198,12 @@ class ClaimDetail:
     decisions: list[Decision]
 
 
-def mask(identifier: str) -> str:
-    """The last four characters, the rest hidden; short ids hide entirely."""
+def mask(identifier: str) -> str | None:
+    """The last four characters, the rest hidden; short ids hide entirely.
+    None when there is no id: a mask would make a missing id look present."""
+    identifier = identifier.strip()
+    if not identifier:
+        return None
     if len(identifier) <= 4:
         return MASK * 4
     return MASK * 4 + identifier[-4:]
@@ -177,8 +214,10 @@ def filing(
 ) -> Filing:
     """UR-07's countdown, by the queue's formula (`rcm.work.priority`):
     `term - (today - date of service)`, so the screen and the queue agree."""
-    if state not in FILING_CLOCK_STATES:
+    if state in FILED_STATES:
         return Filing(FilingStatus.FILED, None)
+    if state not in FILING_CLOCK_STATES:
+        return Filing(FilingStatus.NOT_APPLICABLE, None)
     if term is None or service_date is None:
         return Filing(FilingStatus.UNKNOWN, None)
     return Filing(FilingStatus.RUNNING, term - (today - service_date).days)
@@ -206,12 +245,19 @@ def claim_detail(
     line_dates = [line.service_date for line in lines if line.service_date]
     service_date = claim.date_of_service or (min(line_dates) if line_dates else None)
 
-    payments = _payments(session, client=client, submitter_claim_id=claim.submitter_claim_id)
+    # PD-7: one claim across its submissions. The payer answers each by its
+    # own CLP01, so the remittance and the decisions are the whole chain's,
+    # not only the submission that happens to be open.
     chain = session.scalars(
         select(Claim)
         .where(Claim.client_id == client, Claim.root_claim_id == claim.root_claim_id)
         .order_by(Claim.submission_attempt)
     ).all()
+    payments = _payments(
+        session,
+        client=client,
+        attempts={link.submitter_claim_id: link.submission_attempt for link in chain},
+    )
 
     return ClaimDetail(
         claim_id=claim.claim_id,
@@ -275,7 +321,7 @@ def claim_detail(
         decisions=_decisions(
             session,
             client=client,
-            claim_id=claim.claim_id,
+            claim_ids=[link.claim_id for link in chain],
             payment_ids=[p.claim_payment_id for p in payments],
         ),
     )
@@ -290,35 +336,47 @@ def _adjustment(row: RemittanceAdjustment) -> Adjustment:
     )
 
 
-def _payments(session: Session, *, client: uuid.UUID, submitter_claim_id: str) -> list[Payment]:
-    """Each 835 claim payment for this claim (CLP01), reversals included."""
+def _payments(session: Session, *, client: uuid.UUID, attempts: dict[str, int]) -> list[Payment]:
+    """Every 835 claim payment for the chain's submissions (CLP01), reversals
+    included, each labelled with the submission it answers. Three queries
+    however many payments: lines and adjustments are fetched together."""
     rows = session.execute(
         select(ClaimPayment, Remittance.payment_date)
         .join(Remittance, Remittance.remittance_id == ClaimPayment.remittance_id)
-        .where(ClaimPayment.client_id == client, ClaimPayment.claim_id == submitter_claim_id)
+        .where(ClaimPayment.client_id == client, ClaimPayment.claim_id.in_(attempts))
         .order_by(ClaimPayment.created_at)
     ).all()
-    out: list[Payment] = []
-    for payment, paid_on in rows:
-        svc = session.scalars(
+    ids = [payment.claim_payment_id for payment, _ in rows]
+    lines: dict[uuid.UUID, list[RemittanceServiceLine]] = defaultdict(list)
+    adjustments: dict[uuid.UUID, list[RemittanceAdjustment]] = defaultdict(list)
+    if ids:
+        for line in session.scalars(
             select(RemittanceServiceLine)
             .where(
                 RemittanceServiceLine.client_id == client,
-                RemittanceServiceLine.claim_payment_id == payment.claim_payment_id,
+                RemittanceServiceLine.claim_payment_id.in_(ids),
             )
             .order_by(RemittanceServiceLine.line_number)
-        ).all()
-        adjustments = session.scalars(
+        ):
+            lines[line.claim_payment_id].append(line)
+        for adjustment in session.scalars(
             select(RemittanceAdjustment)
             .where(
                 RemittanceAdjustment.client_id == client,
-                RemittanceAdjustment.claim_payment_id == payment.claim_payment_id,
+                RemittanceAdjustment.claim_payment_id.in_(ids),
             )
             .order_by(RemittanceAdjustment.sequence)
-        ).all()
+        ):
+            adjustments[adjustment.claim_payment_id].append(adjustment)
+
+    out: list[Payment] = []
+    for payment, paid_on in rows:
+        cas = adjustments[payment.claim_payment_id]
         out.append(
             Payment(
                 claim_payment_id=payment.claim_payment_id,
+                submitter_claim_id=payment.claim_id,
+                attempt=attempts[payment.claim_id],
                 payer_control_number=payment.payer_control_number,
                 status_code=payment.status_code,
                 payment_date=paid_on,
@@ -335,24 +393,29 @@ def _payments(session: Session, *, client: uuid.UUID, submitter_claim_id: str) -
                         allowed=line.allowed_amount,
                         paid=line.paid_amount,
                         remark_codes=list(line.remark_codes),
+                        # The schema keeps a claim-level adjustment off every
+                        # line and a line's on its line, so none is dropped.
                         adjustments=[
-                            _adjustment(a)
-                            for a in adjustments
-                            if a.service_line_id == line.service_line_id
+                            _adjustment(a) for a in cas if a.service_line_id == line.service_line_id
                         ],
                     )
-                    for line in svc
+                    for line in lines[payment.claim_payment_id]
                 ],
-                claim_adjustments=[_adjustment(a) for a in adjustments if a.claim_level],
+                claim_adjustments=[_adjustment(a) for a in cas if a.claim_level],
             )
         )
     return out
 
 
 def _decisions(
-    session: Session, *, client: uuid.UUID, claim_id: uuid.UUID, payment_ids: list[uuid.UUID]
+    session: Session,
+    *,
+    client: uuid.UUID,
+    claim_ids: list[uuid.UUID],
+    payment_ids: list[uuid.UUID],
 ) -> list[Decision]:
-    """Decisions about the claim, its payments, their lines and its work.
+    """Decisions about the chain's claims, their payments, those lines and
+    their work.
 
     `decision_record` carries no client id; every id asked for here was read
     through the claim's own client, so the scope holds by construction.
@@ -370,12 +433,12 @@ def _decisions(
     item_ids = list(
         session.scalars(
             select(WorkItem.work_item_id).where(
-                WorkItem.client_id == client, WorkItem.claim_id == claim_id
+                WorkItem.client_id == client, WorkItem.claim_id.in_(claim_ids)
             )
         ).all()
     )
     wanted: list[tuple[str, list[uuid.UUID]]] = [
-        ("claim", [claim_id]),
+        ("claim", claim_ids),
         ("claim_payment", payment_ids),
         ("remittance_service_line", line_ids),
         ("work_item", item_ids),
@@ -398,6 +461,7 @@ def _decisions(
             decision_id=row.decision_id,
             decided_at=row.decided_at,
             entity_type=row.entity_type,
+            entity_id=row.entity_id,
             decision_type=row.decision_type,
             decided_by=row.decided_by,
             logic_version=row.logic_version,

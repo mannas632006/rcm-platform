@@ -195,8 +195,9 @@ CLAIM_ERRORS: dict[int | str, dict[str, Any]] = {
 
 class FilingOut(_Out):
     status: str = Field(
-        description="RUNNING (days_left set), FILED (the payer took it), or UNKNOWN "
-        "(no term or no date of service -- never a guessed deadline)."
+        description="RUNNING (days_left set), FILED (the payer took it), UNKNOWN "
+        "(no term or no date of service -- never a guessed deadline), or NOT_APPLICABLE "
+        "(never filed and no longer will be: cancelled, auth denied, replaced, written off)."
     )
     days_left: int | None = Field(description="Negative once the deadline has passed.")
 
@@ -235,6 +236,8 @@ class PaymentOut(_Out):
     """One 835 claim payment, as the payer sent it."""
 
     claim_payment_id: uuid.UUID
+    submitter_claim_id: str = Field(description="The submission this payment answers (PD-7).")
+    attempt: int
     payer_control_number: str
     status_code: str
     payment_date: date | None
@@ -270,6 +273,7 @@ class DecisionOut(_Out):
     decision_id: uuid.UUID
     decided_at: datetime
     entity_type: str
+    entity_id: uuid.UUID
     decision_type: str
     decided_by: str
     logic_version: str
@@ -289,7 +293,9 @@ class ClaimDetailOut(_Out):
     next_action_due: date | None
     total_charge: Decimal
     balance: Decimal
-    member_id_masked: str = Field(description="Last four characters only (S-6).")
+    member_id_masked: str | None = Field(
+        description="Last four characters only (S-6); null when the claim carries none."
+    )
     place_of_service: str
     diagnoses: list[str]
     filing: FilingOut

@@ -149,6 +149,22 @@ def test_a_resubmission_shows_as_one_claim_with_its_chain(
 
 
 @pytest.mark.invariant
+def test_a_resubmission_shows_the_whole_chains_remittance_and_decisions(
+    api: TestClient,  # noqa: F811
+    root: Path,
+) -> None:
+    """PD-7: one claim across its submissions. Opened on the replacement,
+    the original's denial and the decisions about it are still there,
+    each labelled with the submission it belongs to."""
+    original = denied(root, "CLM-O")
+    resubmit("CLM-O2", "CLM-O", root, frequency="7")
+    body = detail(api, claim_named("CLM-O2")).json()
+    assert [(p["submitter_claim_id"], p["attempt"]) for p in body["payments"]] == [("CLM-O", 1)]
+    on_original = [d for d in body["decisions"] if d["entity_id"] == str(original)]
+    assert on_original, "the original's decisions belong to this claim too"
+
+
+@pytest.mark.invariant
 def test_every_automated_decision_on_the_claim_is_shown(
     api: TestClient,  # noqa: F811
     root: Path,

@@ -26,7 +26,11 @@ interface DenialCodeChipProps {
  */
 export function DenialCodeChip({ adjustment, className }: DenialCodeChipProps) {
   const reason = adjustment.reason_code.trim();
-  const meaning = GROUPS[adjustment.group_code];
+  // Own keys only: "constructor" or "toString" from a bad 835 must not find
+  // an inherited property and pass for a group.
+  const meaning = Object.hasOwn(GROUPS, adjustment.group_code)
+    ? GROUPS[adjustment.group_code]
+    : undefined;
   if (!meaning || !reason) {
     return (
       <Chip tone="warn" className={className} title="The payer's group or reason code is missing">

@@ -49,13 +49,13 @@ function plural(n: number, word: string): string {
 /** UR-07: where the filing clock stands, in words and colour. Never a guessed deadline. */
 function FilingChip({ filing }: { filing: Filing }) {
   if (filing.status === "FILED") return <Chip tone="success">Filed with the payer</Chip>;
+  if (filing.status === "NOT_APPLICABLE")
+    return <Chip tone="muted">No filing deadline applies</Chip>;
   if (filing.status !== "RUNNING" || filing.days_left === null) {
     return <Chip tone="warn">Filing deadline unknown</Chip>;
   }
   if (filing.days_left < 0) {
-    return (
-      <Chip tone="danger">Filing deadline passed {plural(-filing.days_left, "day")} ago</Chip>
-    );
+    return <Chip tone="danger">Filing deadline passed {plural(-filing.days_left, "day")} ago</Chip>;
   }
   return (
     <Chip tone={filing.days_left <= 14 ? "danger" : "warn"}>
@@ -78,7 +78,10 @@ function dateOrDash(iso: string | null) {
 function when(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+  return date.toLocaleString("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
@@ -101,7 +104,11 @@ function Context({ claim }: { claim: ClaimDetail }) {
             <span className="block text-sm text-muted">Payer ID {claim.payer_id}</span>
           </Fact>
           <Fact label="Member ID">
-            <span className="tabular">{claim.member_id_masked}</span>
+            {claim.member_id_masked === null ? (
+              <span className="text-muted">Not recorded</span>
+            ) : (
+              <span className="tabular">{claim.member_id_masked}</span>
+            )}
           </Fact>
           <Fact label="Place of service">
             <span className="tabular">{claim.place_of_service}</span>
@@ -185,7 +192,16 @@ function ServiceLines({ claim }: { claim: ClaimDetail }) {
               <th scope="row" className="tabular px-3 text-left font-medium">
                 {line.procedure_code}
               </th>
-              <td className="tabular px-3">{line.modifiers.join(", ") || "—"}</td>
+              <td className="tabular px-3">
+                {line.modifiers.length > 0 ? (
+                  line.modifiers.join(", ")
+                ) : (
+                  <>
+                    <span aria-hidden="true">—</span>
+                    <span className="sr-only">None</span>
+                  </>
+                )}
+              </td>
               <td className="tabular px-3 text-right">{line.units}</td>
               <td className="px-3">{dateOrDash(line.service_date)}</td>
               <td className="px-3 text-right">
@@ -225,6 +241,11 @@ function PaymentBlock({ payment }: { payment: ClaimPayment }) {
         <span className="font-semibold">
           {payment.is_reversal ? "Reversal" : "835 payment"} ·{" "}
           {payment.payment_date ? formatDate(payment.payment_date) : "date not given"}
+        </span>
+        <span className="tabular">
+          {`for ${
+            payment.attempt === 1 ? "original" : `resubmission ${String(payment.attempt - 1)}`
+          } ${payment.submitter_claim_id}`}
         </span>
         <span className="text-muted">Payer control {payment.payer_control_number}</span>
         <span className="ml-auto flex gap-4">
@@ -438,8 +459,8 @@ function NotFound() {
           </Button>
         }
       >
-        There is no claim with this ID among your clients. Check the link, or search for the
-        claim by its number.
+        There is no claim with this ID among your clients. Check the link, or search for the claim
+        by its number.
       </EmptyState>
     </Card>
   );

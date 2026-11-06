@@ -19,7 +19,7 @@ describe("DenialCodeChip (M5.6, UR-08, PD-3)", () => {
     expect(screen.getByText(`${group}-45`)).toBeInTheDocument();
   });
 
-  it.each(["", "  ", "XX", "co"])(
+  it.each(["", "  ", "XX", "co", "constructor", "toString", "__proto__"])(
     "never shows a CARC alone when the group is %j (PD-18)",
     (group) => {
       const { container } = render(

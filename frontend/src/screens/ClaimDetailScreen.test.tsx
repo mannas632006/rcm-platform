@@ -38,6 +38,8 @@ const CLAIM: ClaimDetail = {
   payments: [
     {
       claim_payment_id: "22222222-0000-4000-8000-000000000002",
+      submitter_claim_id: "CLM-88214",
+      attempt: 1,
       payer_control_number: "PCN-1",
       status_code: "4",
       payment_date: "2026-10-01",
@@ -55,15 +57,32 @@ const CLAIM: ClaimDetail = {
           paid: "0.00",
           remark_codes: ["N290"],
           adjustments: [
-            { group_code: "CO", reason_code: "97", amount: "300.00", claim_level: false },
-            { group_code: "PR", reason_code: "1", amount: "120.00", claim_level: false },
+            {
+              group_code: "CO",
+              reason_code: "97",
+              amount: "300.00",
+              claim_level: false,
+            },
+            {
+              group_code: "PR",
+              reason_code: "1",
+              amount: "120.00",
+              claim_level: false,
+            },
           ],
         },
       ],
       claim_adjustments: [],
     },
   ],
-  chain: [{ claim_id: ID, submitter_claim_id: "CLM-88214", attempt: 1, state: "Denied" }],
+  chain: [
+    {
+      claim_id: ID,
+      submitter_claim_id: "CLM-88214",
+      attempt: 1,
+      state: "Denied",
+    },
+  ],
   timeline: [
     {
       occurred_at: "2026-10-01T10:00:00Z",
@@ -81,6 +100,7 @@ const CLAIM: ClaimDetail = {
       decision_id: "33333333-0000-4000-8000-000000000003",
       decided_at: "2026-10-01T10:00:00Z",
       entity_type: "claim",
+      entity_id: ID,
       decision_type: "STATE_TRANSITION",
       decided_by: "system:progression",
       logic_version: "progression-v1",
@@ -140,10 +160,25 @@ describe("claim detail (S-03, M5.5)", () => {
     [{ status: "RUNNING", days_left: -3 }, "Filing deadline passed 3 days ago"],
     [{ status: "UNKNOWN", days_left: null }, "Filing deadline unknown"],
     [{ status: "FILED", days_left: null }, "Filed with the payer"],
+    [{ status: "NOT_APPLICABLE", days_left: null }, "No filing deadline applies"],
   ])("says where the filing clock stands: %j (UR-07)", async (filing, words) => {
     api({ body: { ...CLAIM, filing } });
     renderApp(<App />, { path: PATH });
     expect(await screen.findByText(words)).toBeInTheDocument();
+  });
+
+  it("says a missing member id is not recorded, not a mask (PD-18)", async () => {
+    api({ body: { ...CLAIM, member_id_masked: null } });
+    renderApp(<App />, { path: PATH });
+    await screen.findByRole("heading", { level: 1 });
+    expect(section("Coverage").getByText("Not recorded")).toBeInTheDocument();
+  });
+
+  it("labels each payment with the submission it answers (PD-7)", async () => {
+    api({ body: { ...CLAIM, submitter_claim_id: "CLM-88214-R1" } });
+    renderApp(<App />, { path: PATH });
+    await screen.findByRole("heading", { level: 1 });
+    expect(section(/Remittance/).getByText(/for original CLM-88214/)).toBeInTheDocument();
   });
 
   it("says a claim it cannot find is not found, not that something broke", async () => {
@@ -154,7 +189,10 @@ describe("claim detail (S-03, M5.5)", () => {
   });
 
   it("keeps the claim on screen when a refresh fails, marked out of date (PARTIAL)", async () => {
-    api({ status: 503, body: { title: "Service Unavailable", detail: "Timed out" } });
+    api({
+      status: 503,
+      body: { title: "Service Unavailable", detail: "Timed out" },
+    });
     renderApp(<App />, {
       path: PATH,
       seed: (client) => {
