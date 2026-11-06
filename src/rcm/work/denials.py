@@ -158,6 +158,17 @@ def _raise_denial(
     denial a person has worked does not come back. The title names the codes
     -- group and reason together (PD-3) -- never the patient.
     """
+    source_key = f"{DENIAL_KEY}{claim_payment_id}"
+    if session.scalar(
+        select(WorkItem.work_item_id).where(
+            WorkItem.client_id == client_id,
+            WorkItem.kind == str(WorkItemKind.DENIAL),
+            WorkItem.source_key == source_key,
+        )
+    ):
+        # Ever raised -- open or finished. A payment classified afresh (a new
+        # taxonomy version) must not bring back a denial a person worked.
+        return
     payment = session.scalar(
         select(ClaimPayment).where(
             ClaimPayment.client_id == client_id,
@@ -172,6 +183,7 @@ def _raise_denial(
                 select(DenialClassification.cas_group_code, DenialClassification.carc_code).where(
                     DenialClassification.client_id == client_id,
                     DenialClassification.claim_payment_id == claim_payment_id,
+                    DenialClassification.taxonomy_version == denials.TAXONOMY_VERSION,
                 )
             ).all()
         )
@@ -190,7 +202,7 @@ def _raise_denial(
             "correct, appeal, bill the patient or write off"
         ),
         record=exceptions.RecordRef("claim_payment", claim_payment_id),
-        source_key=f"{DENIAL_KEY}{claim_payment_id}",
+        source_key=source_key,
         now=now,
         # None when the 835 names a claim this client never submitted; the
         # item is still raised, and a person finds the claim (PD-18).

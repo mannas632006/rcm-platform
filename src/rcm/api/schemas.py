@@ -345,6 +345,10 @@ class SimilarDenialsOut(_Out):
 
 class DeniedLineOut(_Out):
     line_number: int
+    status: str = Field(
+        description="DENIED (classified), UNCLASSIFIED (paid nothing for a refusal the "
+        "taxonomy does not hold yet -- a denial awaiting a category), or NOT_DENIED."
+    )
     procedure_code: str
     modifiers: list[str]
     charge: Decimal
@@ -387,3 +391,4 @@ class DenialWorkbenchOut(_Out):
     )
     payment: DenialPaymentOut
     lines: list[DeniedLineOut]
+    claim_adjustments: list[AdjustmentOut] = Field(description="CAS at claim level (PD-6).")

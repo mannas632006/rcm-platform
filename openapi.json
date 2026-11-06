@@ -649,6 +649,14 @@
             ],
             "description": "Null when the 835 names a claim this client never submitted."
           },
+          "claim_adjustments": {
+            "description": "CAS at claim level (PD-6).",
+            "items": {
+              "$ref": "#/components/schemas/AdjustmentOut"
+            },
+            "title": "Claim Adjustments",
+            "type": "array"
+          },
           "lines": {
             "items": {
               "$ref": "#/components/schemas/DeniedLineOut"
@@ -693,7 +701,8 @@
           "outcome",
           "claim",
           "payment",
-          "lines"
+          "lines",
+          "claim_adjustments"
         ],
         "title": "DenialWorkbenchOut",
         "type": "object"
@@ -760,10 +769,16 @@
                 "type": "null"
               }
             ]
+          },
+          "status": {
+            "description": "DENIED (classified), UNCLASSIFIED (paid nothing for a refusal the taxonomy does not hold yet -- a denial awaiting a category), or NOT_DENIED.",
+            "title": "Status",
+            "type": "string"
           }
         },
         "required": [
           "line_number",
+          "status",
           "procedure_code",
           "modifiers",
           "charge",

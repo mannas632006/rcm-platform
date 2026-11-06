@@ -37,6 +37,7 @@ const DENIAL: DenialWorkbench = {
   lines: [
     {
       line_number: 1,
+      status: "DENIED",
       procedure_code: "99214",
       modifiers: [],
       charge: "420.00",
@@ -58,6 +59,7 @@ const DENIAL: DenialWorkbench = {
     },
     {
       line_number: 2,
+      status: "NOT_DENIED",
       procedure_code: "36415",
       modifiers: [],
       charge: "20.00",
@@ -68,6 +70,7 @@ const DENIAL: DenialWorkbench = {
       similar: null,
     },
   ],
+  claim_adjustments: [],
 };
 
 function api(denial: { status?: number; body: unknown } = { body: DENIAL }, me: unknown = DENIER) {
@@ -132,6 +135,42 @@ describe("denial workbench (S-04, M5.7)", () => {
     await screen.findByRole("heading", { level: 1 });
     expect(screen.queryByRole("region", { name: "Line 2, 36415" })).toBeNull();
     expect(screen.getByText(/1 other line was not denied/)).toBeInTheDocument();
+  });
+
+  it("shows a denied line awaiting a category as a denial, never as paid (PD-18)", async () => {
+    const lines = DENIAL.lines.map((line) =>
+      line.line_number === 2
+        ? {
+            ...line,
+            status: "UNCLASSIFIED",
+            paid: "0.00",
+            adjustments: [
+              { group_code: "CO", reason_code: "A1", amount: "20.00", claim_level: false },
+            ],
+          }
+        : line,
+    );
+    api({ body: { ...DENIAL, lines } });
+    renderApp(<App />, { path: PATH });
+    await screen.findByRole("heading", { level: 1 });
+    const line = region("Line 2, 36415");
+    expect(line.getByText(/not yet classified/)).toBeInTheDocument();
+    expect(line.getByText("CO-A1")).toBeInTheDocument();
+    expect(screen.queryByText(/was not denied/)).toBeNull();
+  });
+
+  it("shows claim-level adjustments (PD-6)", async () => {
+    api({
+      body: {
+        ...DENIAL,
+        claim_adjustments: [
+          { group_code: "OA", reason_code: "23", amount: "20.00", claim_level: true },
+        ],
+      },
+    });
+    renderApp(<App />, { path: PATH });
+    await screen.findByRole("heading", { level: 1 });
+    expect(region("Claim and payment").getByText("OA-23")).toBeInTheDocument();
   });
 
   it("says a denial it cannot find is not found", async () => {

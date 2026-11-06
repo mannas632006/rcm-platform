@@ -57,10 +57,50 @@ function Similar({ line }: { line: DeniedLine }) {
   );
 }
 
+function Adjustments({ line }: { line: DeniedLine }) {
+  return (
+    <ul className="flex flex-col gap-1">
+      {line.adjustments.map((a, i) => (
+        // PD-6: each adjustment on its own, never summed.
+        <li key={i} className="flex items-center gap-2 text-sm">
+          <DenialCodeChip adjustment={a} />
+          <MoneyDisplay amount={a.amount} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** PD-18: a refusal the taxonomy does not hold is a denial still waiting
+ * for a category -- shown as such, never as a line the payer paid. */
+function UnclassifiedLine({ line, id }: { line: DeniedLine; id: string }) {
+  return (
+    <Card aria-labelledby={id}>
+      <CardHeader
+        id={id}
+        title={`Line ${String(line.line_number)}, ${line.procedure_code}`}
+        description={
+          <>
+            Charged <MoneyDisplay amount={line.charge} />, paid <MoneyDisplay amount={line.paid} />
+          </>
+        }
+        actions={<Chip tone="warn">Denied, not yet classified</Chip>}
+      />
+      <div className="flex flex-col gap-3 p-4">
+        <Adjustments line={line} />
+        <p className="text-sm text-muted">
+          The payer&apos;s code is not in the denial taxonomy yet. A person sets its category from
+          the Data Quality queue; until then there is no category, guidance or history for it.
+        </p>
+      </div>
+    </Card>
+  );
+}
+
 function LineCard({ line }: { line: DeniedLine }) {
   const id = `line-${String(line.line_number)}`;
   const classification = line.classification;
-  if (!classification) return null;
+  if (!classification) return <UnclassifiedLine line={line} id={id} />;
   return (
     <Card aria-labelledby={id}>
       <CardHeader
@@ -84,15 +124,7 @@ function LineCard({ line }: { line: DeniedLine }) {
               Classified under {classification.taxonomy_version}
             </span>
           </div>
-          <ul className="flex flex-col gap-1">
-            {line.adjustments.map((a, i) => (
-              // PD-6: each adjustment on its own, never summed.
-              <li key={i} className="flex items-center gap-2 text-sm">
-                <DenialCodeChip adjustment={a} />
-                <MoneyDisplay amount={a.amount} />
-              </li>
-            ))}
-          </ul>
+          <Adjustments line={line} />
           {line.guidance && (
             <div className="rounded-control bg-surface p-3 text-sm">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -137,6 +169,21 @@ function Summary({ denial }: { denial: DenialWorkbench }) {
         <dd>
           <MoneyDisplay amount={denial.payment.patient_responsibility} />
         </dd>
+        {denial.claim_adjustments.length > 0 && (
+          <>
+            <dt className="text-muted">Claim-level</dt>
+            <dd>
+              <ul className="flex flex-col gap-1">
+                {denial.claim_adjustments.map((a, i) => (
+                  <li key={i} className="flex items-center gap-2">
+                    <DenialCodeChip adjustment={a} />
+                    <MoneyDisplay amount={a.amount} />
+                  </li>
+                ))}
+              </ul>
+            </dd>
+          </>
+        )}
         {claim && (
           <>
             <dt className="text-muted">Balance</dt>
@@ -181,7 +228,7 @@ function DenialContent({ workItemId }: { workItemId: string }) {
   useDocumentTitle(denial?.claim ? `Denial on ${denial.claim.submitter_claim_id}` : "Denial");
   // Out of scope and never raised read the same (PD-20): "not found", not an outage.
   const missing = query.error instanceof ApiError && query.error.status === 404;
-  const denied = denial?.lines.filter((l) => l.classification !== null) ?? [];
+  const denied = denial?.lines.filter((l) => l.status !== "NOT_DENIED") ?? [];
   const others = (denial?.lines.length ?? 0) - denied.length;
 
   return (

@@ -23,13 +23,15 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from enum import StrEnum
 from typing import Final
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from rcm.analytics.denials import is_refusal
 from rcm.decision.denial_models import DenialClassification
-from rcm.decision.denials import DenialCategory
+from rcm.decision.denials import TAXONOMY_VERSION, DenialCategory
 from rcm.domain.claim import Claim
 from rcm.domain.payer import Payer
 from rcm.domain.remittance import (
@@ -116,9 +118,20 @@ class Similar:
     outcomes: dict[str, int]
 
 
+class LineStatus(StrEnum):
+    #: Denied, and classified under the current taxonomy.
+    DENIED = "DENIED"
+    #: Paid nothing for a refusal the taxonomy does not hold yet: a denial
+    #: waiting for a person to set its category -- never shown as paid.
+    UNCLASSIFIED = "UNCLASSIFIED"
+    #: Not denied: paid, or paid nothing only for the patient's cost share.
+    NOT_DENIED = "NOT_DENIED"
+
+
 @dataclass(frozen=True, slots=True)
 class DeniedLine:
     line_number: int
+    status: LineStatus
     procedure_code: str
     modifiers: list[str]
     charge: Decimal
@@ -162,6 +175,8 @@ class DenialWorkbench:
     claim: ClaimSummary | None
     payment: PaymentSummary
     lines: list[DeniedLine]
+    #: CAS at claim level (PD-6): an adjustment like any other.
+    claim_adjustments: list[Adjustment]
 
 
 def _payment_id(item: WorkItem) -> uuid.UUID:
@@ -222,16 +237,23 @@ def denial_workbench(
             select(DenialClassification).where(
                 DenialClassification.client_id == client,
                 DenialClassification.claim_payment_id == payment_id,
+                # BR-TAX-01: one category per denial -- the current table's.
+                DenialClassification.taxonomy_version == TAXONOMY_VERSION,
             )
         )
     }
 
+    # UR-11's window: the year before this denial, by the payer's date --
+    # not by when the classifier ran (a back-load would count everything).
+    anchor = paid_on or now.date()
+    chain = _chain_submitter_ids(session, client=client, submitter_claim_id=payment.claim_id)
     out: list[DeniedLine] = []
     for line in lines:
         found = classified.get(line.service_line_id)
         out.append(
             DeniedLine(
                 line_number=line.line_number,
+                status=_status(found, line, refused=_refused(adjustments[line.service_line_id])),
                 procedure_code=line.procedure_code,
                 modifiers=list(line.modifiers),
                 charge=line.charge_amount,
@@ -256,7 +278,8 @@ def denial_workbench(
                         payer_id=payer_id,
                         procedure_code=line.procedure_code,
                         found=found,
-                        since=now - timedelta(days=SIMILAR_WINDOW_DAYS),
+                        window=(anchor - timedelta(days=SIMILAR_WINDOW_DAYS), anchor),
+                        chain=chain,
                     )
                 ),
             )
@@ -278,6 +301,50 @@ def denial_workbench(
             patient_responsibility=payment.patient_responsibility,
         ),
         lines=out,
+        claim_adjustments=[
+            Adjustment(
+                group_code=a.cas_group_code,
+                reason_code=a.reason_code,
+                amount=a.amount,
+                claim_level=a.claim_level,
+            )
+            for a in adjustments[None]
+        ],
+    )
+
+
+def _refused(adjustments: list[RemittanceAdjustment]) -> bool:
+    return any(is_refusal(a.cas_group_code, a.reason_code) for a in adjustments)
+
+
+def _status(
+    found: DenialClassification | None, line: RemittanceServiceLine, *, refused: bool
+) -> LineStatus:
+    if found is not None:
+        return LineStatus.DENIED
+    if line.paid_amount == 0 and refused:
+        return LineStatus.UNCLASSIFIED
+    return LineStatus.NOT_DENIED
+
+
+def _chain_submitter_ids(
+    session: Session, *, client: uuid.UUID, submitter_claim_id: str
+) -> list[str]:
+    """Every CLP01 of the claim this payment answers (PD-7): the original and
+    its resubmissions are one claim, so none is another's similar denial."""
+    root = session.scalar(
+        select(Claim.root_claim_id).where(
+            Claim.client_id == client, Claim.submitter_claim_id == submitter_claim_id
+        )
+    )
+    if root is None:
+        return [submitter_claim_id]
+    return list(
+        session.scalars(
+            select(Claim.submitter_claim_id).where(
+                Claim.client_id == client, Claim.root_claim_id == root
+            )
+        ).all()
     )
 
 
@@ -329,10 +396,11 @@ def _similar(
     payer_id: str,
     procedure_code: str,
     found: DenialClassification,
-    since: datetime,
+    window: tuple[date, date],
+    chain: list[str],
 ) -> Similar:
-    """Other claim payments with the same payer, procedure, group and reason,
-    classified in the window -- and the outcomes their denial items ended in."""
+    """Other claims' payments with the same payer, procedure, group and reason,
+    paid in the window -- and the outcomes their denial items ended in."""
     payments = list(
         session.scalars(
             select(DenialClassification.claim_payment_id)
@@ -350,8 +418,10 @@ def _similar(
                 DenialClassification.client_id == client,
                 DenialClassification.cas_group_code == found.cas_group_code,
                 DenialClassification.carc_code == found.carc_code,
-                DenialClassification.classified_at >= since,
-                DenialClassification.claim_payment_id != found.claim_payment_id,
+                DenialClassification.taxonomy_version == TAXONOMY_VERSION,
+                Remittance.payment_date >= window[0],
+                Remittance.payment_date <= window[1],
+                ClaimPayment.claim_id.not_in(chain),
                 RemittanceServiceLine.procedure_code == procedure_code,
                 Remittance.payer_id == payer_id,
             )

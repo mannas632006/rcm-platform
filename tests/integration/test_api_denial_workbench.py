@@ -10,6 +10,7 @@ same denial went before (UR-11).
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -18,20 +19,25 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from rcm.decision.denial_models import DenialClassification
+from rcm.domain.remittance import ClaimPayment
 from rcm.platform.audit import AuditEvent
 from rcm.platform.auth import Role
 from rcm.platform.db import session_scope
+from rcm.work import denials as work_denials
 from rcm.work import queue
 from rcm.work.models import WorkItem, WorkItemKind
 from rcm.work.state import WorkItemOutcome
 from tests.integration.test_acknowledgement_loading import (
+    CHARGE,
     CLIENT_A,
     CLIENT_B,
+    _remittance,
     denial_for,
     remit,
     submit,
 )
 from tests.integration.test_api_shell import api, bearer, clean, raise_item  # noqa: F401
+from tests.integration.test_claim_progression import resubmit
 from tests.integration.test_denial_classification import NOW, route
 
 pytestmark = pytest.mark.integration
@@ -156,3 +162,123 @@ def test_similar_denials_and_how_they_ended_are_shown(
     assert similar["denials"] == 2  # the other two, not this one
     assert similar["outcomes"] == {"WRITTEN_OFF": 1}
     assert similar["window_days"] == 365
+
+
+def test_similar_denials_count_only_the_year_before_this_one(
+    api: TestClient,  # noqa: F811
+    root: Path,
+) -> None:
+    """The window is the year before this denial's 835, by payment date --
+    not by when the classifier happened to run."""
+    submit("CLM-OLD", root, control="0001")
+    old = denial_for("CLM-OLD", control="0001").replace(b"20240131", b"20220131")
+    remit(old, root, name="old.835")
+    route()
+    latest = denied(root, "CLM-NEW", "0002")
+    (line,) = workbench(api, latest).json()["lines"]
+    assert line["similar"]["denials"] == 0
+
+
+def test_a_resubmission_is_not_its_own_similar_denial(
+    api: TestClient,  # noqa: F811
+    root: Path,
+) -> None:
+    """PD-7: the original's denial is the same claim, not another one."""
+    denied(root, "CLM-O", "0001")
+    resubmit("CLM-O2", "CLM-O", root, frequency="7")
+    remit(denial_for("CLM-O2", control="0002"), root, name="o2.835")
+    route()
+    with session_scope() as session:
+        payment = session.scalar(
+            select(ClaimPayment.claim_payment_id).where(ClaimPayment.claim_id == "CLM-O2")
+        )
+        item = session.scalar(
+            select(WorkItem.work_item_id).where(WorkItem.source_key == f"denial:{payment}")
+        )
+    assert item is not None
+    (line,) = workbench(api, item).json()["lines"]
+    assert line["similar"]["denials"] == 0
+
+
+@pytest.mark.invariant
+def test_a_denied_line_not_yet_classified_is_not_shown_as_paid(
+    api: TestClient,  # noqa: F811
+    root: Path,
+) -> None:
+    """PD-18: a refusal outside the taxonomy is a denial still waiting for a
+    category -- never a line the payer paid."""
+    submit("CLM-MX", root, control="0001")
+    body = [
+        f"CLP*CLM-MX*4*{2 * CHARGE}*0.00**MB*PCNCLM-MX*11~",
+        "NM1*QC*1*Castellanos*Andre****MI*VAZ957419823~",
+        f"SVC*HC:99203*{CHARGE}*0.00**1~",
+        f"CAS*CO*50*{CHARGE}~",
+        f"SVC*HC:99204*{CHARGE}*0.00**1~",
+        f"CAS*CO*A1*{CHARGE}~",
+    ]
+    remit(_remittance(body, control="0001", check=Decimal("0.00")), root, name="mx.835")
+    route()
+    with session_scope() as session:
+        item = session.scalar(
+            select(WorkItem.work_item_id).where(WorkItem.kind == str(WorkItemKind.DENIAL))
+        )
+    assert item is not None
+    lines = {line["procedure_code"]: line for line in workbench(api, item).json()["lines"]}
+    assert lines["99203"]["status"] == "DENIED"
+    assert lines["99204"]["status"] == "UNCLASSIFIED"
+    assert lines["99204"]["classification"] is None
+
+
+def test_claim_level_adjustments_are_shown(
+    api: TestClient,  # noqa: F811
+    root: Path,
+) -> None:
+    """PD-6: a claim-level CAS is an adjustment like any other. Each line
+    balances on its own; the claim pays its lines less the OA-23."""
+    submit("CLM-CL", root, control="0001")
+    body = [
+        "CLP*CLM-CL*2*400.00*80.00**MB*PCNCLM-CL*11~",
+        "NM1*QC*1*Castellanos*Andre****MI*VAZ957419823~",
+        "CAS*OA*23*20.00~",
+        "SVC*HC:99213*200.00*100.00**1~",
+        "CAS*CO*45*100.00~",
+        "SVC*HC:99203*200.00*0.00**1~",
+        "CAS*CO*50*200.00~",
+    ]
+    remit(_remittance(body, control="0001", check=Decimal("80.00")), root, name="cl.835")
+    route()
+    with session_scope() as session:
+        item = session.scalar(
+            select(WorkItem.work_item_id).where(WorkItem.kind == str(WorkItemKind.DENIAL))
+        )
+    assert item is not None
+    found = workbench(api, item).json()
+    assert found["claim_adjustments"] == [
+        {"group_code": "OA", "reason_code": "23", "amount": "20.00", "claim_level": True}
+    ]
+    statuses = {line["procedure_code"]: line["status"] for line in found["lines"]}
+    assert statuses == {"99213": "NOT_DENIED", "99203": "DENIED"}
+
+
+def test_a_resolved_denial_is_never_raised_again(root: Path) -> None:
+    """Even if its payment is classified afresh (a new taxonomy version),
+    a denial a person has finished does not come back."""
+    item = denied(root, "CLM-RR", "0001")
+    with session_scope() as session:
+        queue.auto_resolve(
+            session,
+            work_item_id=item,
+            client_id=CLIENT_A,
+            outcome=WorkItemOutcome.WRITTEN_OFF,
+            now=NOW,
+        )
+        payment = session.scalar(
+            select(ClaimPayment.claim_payment_id).where(ClaimPayment.claim_id == "CLM-RR")
+        )
+    assert payment is not None
+    with session_scope() as session:
+        work_denials._raise_denial(session, client_id=CLIENT_A, claim_payment_id=payment, now=NOW)
+        items = session.scalars(
+            select(WorkItem.work_item_id).where(WorkItem.kind == str(WorkItemKind.DENIAL))
+        ).all()
+    assert items == [item]

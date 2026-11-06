@@ -484,6 +484,11 @@ export interface components {
             assigned_to: string | null;
             /** @description Null when the 835 names a claim this client never submitted. */
             claim: components["schemas"]["DenialClaimOut"] | null;
+            /**
+             * Claim Adjustments
+             * @description CAS at claim level (PD-6).
+             */
+            claim_adjustments: components["schemas"]["AdjustmentOut"][];
             /** Lines */
             lines: components["schemas"]["DeniedLineOut"][];
             /** Outcome */
@@ -520,6 +525,11 @@ export interface components {
             /** Procedure Code */
             procedure_code: string;
             similar: components["schemas"]["SimilarDenialsOut"] | null;
+            /**
+             * Status
+             * @description DENIED (classified), UNCLASSIFIED (paid nothing for a refusal the taxonomy does not hold yet -- a denial awaiting a category), or NOT_DENIED.
+             */
+            status: string;
         };
         /** FilingOut */
         FilingOut: {
