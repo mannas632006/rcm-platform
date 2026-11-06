@@ -17,8 +17,17 @@ from rcm.domain.payer import Payer
 from rcm.platform.auth import Role
 from rcm.platform.config import get_settings
 from rcm.platform.db import session_scope
-from tests.integration.test_acknowledgement_loading import CLIENT_A, CLIENT_B, submit
+from tests.integration.test_acknowledgement_loading import (
+    CLIENT_A,
+    CLIENT_B,
+    ack_277ca,
+    acknowledge,
+    denial_for,
+    remit,
+    submit,
+)
 from tests.integration.test_api_shell import api, bearer, clean  # noqa: F401 - fixtures
+from tests.integration.test_claim_progression import advance, resubmit
 
 pytestmark = pytest.mark.integration
 
@@ -51,6 +60,28 @@ def test_the_dashboard_counts_only_my_clients_claims(api: TestClient, root: Path
 
     both = api.get("/api/v1/dashboard", headers=bearer(CLIENT_A, CLIENT_B)).json()
     assert sum(row["count"] for row in both["claims_by_state"]) == 3
+
+
+@pytest.mark.invariant
+def test_the_dashboard_counts_a_resubmitted_claim_once(api: TestClient, root: Path) -> None:  # noqa: F811
+    """PD-7: a resubmission is the same claim, so claims by state shows one
+    claim, in the live submission's state (ADR-0006) -- the original until
+    the payer takes the replacement, the replacement after."""
+
+    def by_state() -> dict[str, int]:
+        body = api.get("/api/v1/dashboard", headers=bearer(CLIENT_A)).json()
+        return {row["state"]: row["count"] for row in body["claims_by_state"]}
+
+    submit("CLM-O", root, control="0001")
+    acknowledge(ack_277ca(("CLM-O", "A2:20")), root, name="277ca.edi")
+    remit(denial_for("CLM-O", control="0001"), root, name="835.edi")
+    resubmit("CLM-O2", "CLM-O", root, frequency="7")
+    advance()
+    assert by_state() == {"Denied": 1}
+
+    acknowledge(ack_277ca(("CLM-O2", "A2:20"), control="0002"), root, name="277ca-2.edi")
+    advance()
+    assert by_state() == {"InAdjudication": 1}
 
 
 def test_an_empty_dashboard_says_no_rate_rather_than_zero(api: TestClient) -> None:  # noqa: F811

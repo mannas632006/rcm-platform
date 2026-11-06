@@ -18,6 +18,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import and_, func, select
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.orm import Session
 
 from rcm.analytics.denials import denial_rate, denied_submitter_claim_ids
@@ -30,6 +31,7 @@ from rcm.domain.acknowledgement import (
     ClaimAcknowledgement,
 )
 from rcm.domain.claim import Claim
+from rcm.domain.claim_state import ClaimState
 from rcm.domain.claim_state_log import ClaimStateTransition, ReviewStatus
 from rcm.domain.payer import Payer
 from rcm.domain.remittance import ClaimPayment
@@ -74,12 +76,19 @@ def dashboard(session: Session, *, principal: Principal, now: datetime) -> Dashb
         first_pass += total
         first_clean += clean
 
-    by_state = dict(
+    # PD-7: one claim per chain, not one per submission row. The chain's state
+    # is its live submission's (ADR-0006): the earliest not yet Replaced -- the
+    # original until the payer takes the replacement, the replacement after.
+    live = (
+        select(Claim.root_claim_id, Claim.state)
+        .where(Claim.client_id.in_(clients), Claim.state != str(ClaimState.REPLACED))
+        .ext(distinct_on(Claim.root_claim_id))
+        .order_by(Claim.root_claim_id, Claim.submission_attempt)
+        .subquery()
+    )
+    by_state: dict[str, int] = dict(
         session.execute(
-            select(Claim.state, func.count())
-            .where(Claim.client_id.in_(clients))
-            .group_by(Claim.state)
-            .order_by(Claim.state)
+            select(live.c.state, func.count()).group_by(live.c.state).order_by(live.c.state)
         ).all()
     )
     queues = views.queue_summaries(session, principal=principal, now=now)
