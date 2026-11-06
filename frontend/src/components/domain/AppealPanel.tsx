@@ -8,8 +8,13 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
 import { hasPermission } from "@/lib/permissions";
 
-/** A prompt left for a person, as the server checks it (ADR-0017). */
-const PROMPT = /\[[^\]\n]*\]/;
+/** A prompt left for a person, as the server checks it (ADR-0017): any
+ * bracket at all once full-width ones are folded to ASCII (NFKC). */
+const BRACKET = /[[\]]/;
+
+function hasPrompt(text: string): boolean {
+  return BRACKET.test(text.normalize("NFKC"));
+}
 
 function newKey(): string {
   return crypto.randomUUID();
@@ -36,7 +41,7 @@ function Editor({ appeal, workItemId }: { appeal: Appeal; workItemId: string }) 
 
   const saved = revise.data ?? appeal;
   const dirty = text !== saved.letter;
-  const prompts = PROMPT.test(saved.letter);
+  const prompts = hasPrompt(saved.letter);
   const canSign = hasPermission(me.data, "appeal:sign");
 
   if (sign.isSuccess) return <Sent appeal={sign.data} />;
