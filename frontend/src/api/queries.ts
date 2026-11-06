@@ -193,3 +193,19 @@ export function useDecideWriteOff(workItemId: string) {
     onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
   });
 }
+
+/** ADR-0016: bill a denial's PR share to the patient; never a CO amount (PD-19). */
+export function useBillPatient(workItemId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { idempotencyKey: string }) =>
+      unwrap(
+        await api.POST("/api/v1/denials/{work_item_id}/patient-responsibility", {
+          params: { path: { work_item_id: workItemId } },
+          body: { note: "" },
+          headers: { "Idempotency-Key": input.idempotencyKey },
+        }),
+      ),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
+  });
+}

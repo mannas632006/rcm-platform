@@ -124,6 +124,7 @@ function withDisposition(me: unknown, denial: unknown = DENIAL) {
         threshold: "0.00",
       },
     },
+    [`/api/v1/denials/${ID}/patient-responsibility`]: { body: { amount: "50.00" } },
     [`/api/v1/write-offs/${WAITING.write_off_id}/decision`]: {
       body: { write_off_id: WAITING.write_off_id, status: "APPLIED" },
     },
@@ -192,6 +193,43 @@ describe("denial write-off (M5.7, BR-M11-05)", () => {
     expect(await screen.findByText(/waiting for approval/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve write-off" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Write off" })).toBeNull();
+  });
+
+  it("bills only the patient's share, after a confirm step (PD-19, ADR-0016)", async () => {
+    const withPatientShare = {
+      ...DENIAL,
+      lines: DENIAL.lines.map((line) =>
+        line.line_number === 1
+          ? {
+              ...line,
+              adjustments: [
+                { group_code: "CO", reason_code: "50", amount: "370.00", claim_level: false },
+                { group_code: "PR", reason_code: "1", amount: "50.00", claim_level: false },
+              ],
+            }
+          : line,
+      ),
+    };
+    const fetchMock = withDisposition(DISPOSER, withPatientShare);
+    renderApp(<App />, { path: PATH });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Bill patient $50.00" }));
+    expect(await posted(fetchMock, "/patient-responsibility")).toEqual([]);
+    await user.click(
+      screen.getByRole("button", { name: "Confirm billing $50.00 to the patient" }),
+    );
+    expect(await screen.findByText(/Billed to the patient/)).toBeInTheDocument();
+    const sent = await posted(fetchMock, "/patient-responsibility");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.key).toBeTruthy();
+    expect(sent[0]?.body).toEqual({ note: "" });
+  });
+
+  it("offers no patient billing when nothing is the patient's (PD-19)", async () => {
+    withDisposition(DISPOSER);
+    renderApp(<App />, { path: PATH });
+    await screen.findByRole("button", { name: "Write off" });
+    expect(screen.queryByRole("button", { name: /Bill patient/ })).toBeNull();
   });
 
   it("offers no action to a role that cannot dispose of denials", async () => {
