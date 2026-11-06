@@ -548,6 +548,11 @@ export interface components {
              * Format: uuid
              */
             work_item_id: string;
+            /**
+             * Write Offs
+             * @description Every write-off asked of this denial, newest first.
+             */
+            write_offs: components["schemas"]["WriteOffSummaryOut"][];
         };
         /** DeniedLineOut */
         DeniedLineOut: {
@@ -987,6 +992,34 @@ export interface components {
              * @description [TBD-48] when asked. Above it, a specialist's write-off waits for a named approver (BR-M11-05).
              */
             threshold: string;
+            /**
+             * Write Off Id
+             * Format: uuid
+             */
+            write_off_id: string;
+        };
+        /** WriteOffSummaryOut */
+        WriteOffSummaryOut: {
+            /** Amount */
+            amount: string;
+            /** Decided By */
+            decided_by: string | null;
+            /** Note */
+            note: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Requested By */
+            requested_by: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "APPLIED" | "PENDING_APPROVAL" | "REJECTED";
             /**
              * Write Off Id
              * Format: uuid

@@ -380,6 +380,17 @@ class DenialPaymentOut(_Out):
     patient_responsibility: Decimal
 
 
+class WriteOffSummaryOut(_Out):
+    write_off_id: uuid.UUID
+    status: Literal["APPLIED", "PENDING_APPROVAL", "REJECTED"]
+    amount: Decimal
+    reason: str
+    note: str
+    requested_by: str
+    requested_at: datetime
+    decided_by: str | None
+
+
 class DenialWorkbenchOut(_Out):
     work_item_id: uuid.UUID
     state: str
@@ -392,6 +403,9 @@ class DenialWorkbenchOut(_Out):
     payment: DenialPaymentOut
     lines: list[DeniedLineOut]
     claim_adjustments: list[AdjustmentOut] = Field(description="CAS at claim level (PD-6).")
+    write_offs: list[WriteOffSummaryOut] = Field(
+        description="Every write-off asked of this denial, newest first."
+    )
 
 
 class _In(BaseModel):

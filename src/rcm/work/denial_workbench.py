@@ -43,7 +43,13 @@ from rcm.domain.remittance import (
 from rcm.platform.auth import Principal, scoped_query
 from rcm.platform.errors import ResourceNotFoundError
 from rcm.work.claim_detail import Adjustment
-from rcm.work.models import WorkItem, WorkItemKind
+from rcm.work.models import (
+    WorkItem,
+    WorkItemKind,
+    WriteOff,
+    WriteOffDecision,
+    WriteOffDecisionKind,
+)
 from rcm.work.priority import outstanding_balance
 
 GUIDANCE_VERSION: Final = "denial-guidance-v1"
@@ -165,6 +171,20 @@ class PaymentSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class WriteOffSummary:
+    write_off_id: uuid.UUID
+    #: APPLIED, PENDING_APPROVAL or REJECTED -- read from the insert-only
+    #: request and its decision, never stored as a mutable flag.
+    status: str
+    amount: Decimal
+    reason: str
+    note: str
+    requested_by: str
+    requested_at: datetime
+    decided_by: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class DenialWorkbench:
     work_item_id: uuid.UUID
     state: str
@@ -177,6 +197,8 @@ class DenialWorkbench:
     lines: list[DeniedLine]
     #: CAS at claim level (PD-6): an adjustment like any other.
     claim_adjustments: list[Adjustment]
+    #: Every write-off asked of this denial, newest first.
+    write_offs: list[WriteOffSummary]
 
 
 def _payment_id(item: WorkItem) -> uuid.UUID:
@@ -310,7 +332,40 @@ def denial_workbench(
             )
             for a in adjustments[None]
         ],
+        write_offs=_write_offs(session, item=item),
     )
+
+
+def _write_offs(session: Session, *, item: WorkItem) -> list[WriteOffSummary]:
+    rows = session.execute(
+        select(WriteOff, WriteOffDecision)
+        .outerjoin(WriteOffDecision, WriteOffDecision.write_off_id == WriteOff.write_off_id)
+        .where(WriteOff.client_id == item.client_id, WriteOff.work_item_id == item.work_item_id)
+        .order_by(WriteOff.requested_at.desc())
+    ).all()
+    out: list[WriteOffSummary] = []
+    for write_off, joined in rows:
+        # An outer join: no decision yet reads as None, whatever the row type says.
+        decision: WriteOffDecision | None = joined
+        if decision is not None:
+            status = (
+                "APPLIED" if decision.decision == str(WriteOffDecisionKind.APPROVED) else "REJECTED"
+            )
+        else:
+            status = "PENDING_APPROVAL" if write_off.needs_approval else "APPLIED"
+        out.append(
+            WriteOffSummary(
+                write_off_id=write_off.write_off_id,
+                status=status,
+                amount=write_off.amount,
+                reason=write_off.reason,
+                note=write_off.note,
+                requested_by=write_off.requested_by,
+                requested_at=write_off.requested_at,
+                decided_by=decision.decided_by if decision is not None else None,
+            )
+        )
+    return out
 
 
 def _refused(adjustments: list[RemittanceAdjustment]) -> bool:

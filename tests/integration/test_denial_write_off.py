@@ -255,8 +255,10 @@ def post_disposition(
 def test_a_retried_write_off_writes_off_once(api: TestClient, root: Path) -> None:  # noqa: F811
     """PD-14: same key, one effect -- and the same answer."""
     item = denied(root)
-    first = post_disposition(api, item, "wo-key-1")
-    again = post_disposition(api, item, "wo-key-1")
+    # Unique per run: idempotency keys live in Redis across test runs.
+    key = f"wo-{uuid.uuid4()}"
+    first = post_disposition(api, item, key)
+    again = post_disposition(api, item, key)
     assert first.status_code == again.status_code == 200
     assert first.json() == again.json()
     with session_scope() as session:
@@ -265,7 +267,9 @@ def test_a_retried_write_off_writes_off_once(api: TestClient, root: Path) -> Non
 
 def test_a_write_off_needs_denial_disposition(api: TestClient, root: Path) -> None:  # noqa: F811
     item = denied(root)
-    assert post_disposition(api, item, "wo-key-2", role=Role.RULES_AUTHOR).status_code == 403
+    assert (
+        post_disposition(api, item, f"wo-{uuid.uuid4()}", role=Role.RULES_AUTHOR).status_code == 403
+    )
 
 
 @pytest.mark.usefixtures("threshold")
@@ -273,7 +277,7 @@ def test_a_write_off_is_audited_with_its_amount(api: TestClient, root: Path) -> 
     """S-07: who wrote off how much, and why -- in the same transaction."""
     item = denied(root)
     subject = f"den.{uuid.uuid4().hex[:8]}"
-    assert post_disposition(api, item, "wo-key-3", subject=subject).status_code == 200
+    assert post_disposition(api, item, f"wo-{uuid.uuid4()}", subject=subject).status_code == 200
     with session_scope() as session:
         events = session.scalars(
             select(AuditEvent).where(
@@ -284,3 +288,34 @@ def test_a_write_off_is_audited_with_its_amount(api: TestClient, root: Path) -> 
     assert event.after_state is not None
     assert event.after_state["amount"] == "150.00"
     assert event.after_state["reason"] == "APPEAL_NOT_VIABLE"
+
+
+def test_the_workbench_shows_a_write_off_waiting_for_approval(
+    api: TestClient,  # noqa: F811
+    root: Path,
+) -> None:
+    """The page must say a write-off waits, after a reload too -- otherwise a
+    second person asks again, or the denial looks untouched."""
+    item = denied(root)
+    asked = write_off(item)
+    body = api.get(
+        f"/api/v1/denials/{item}", headers=bearer(CLIENT_A, role=Role.DENIAL_SPECIALIST)
+    ).json()
+    assert body["write_offs"] == [
+        {
+            "write_off_id": str(asked.write_off_id),
+            "status": "PENDING_APPROVAL",
+            "amount": "150.00",
+            "reason": "APPEAL_NOT_VIABLE",
+            "note": "",
+            "requested_by": SPECIALIST.subject,
+            "requested_at": body["write_offs"][0]["requested_at"],
+            "decided_by": None,
+        }
+    ]
+    decide(asked.write_off_id, MANAGER, approve=False)
+    body = api.get(
+        f"/api/v1/denials/{item}", headers=bearer(CLIENT_A, role=Role.DENIAL_SPECIALIST)
+    ).json()
+    assert body["write_offs"][0]["status"] == "REJECTED"
+    assert body["write_offs"][0]["decided_by"] == MANAGER.subject

@@ -691,6 +691,14 @@
             "format": "uuid",
             "title": "Work Item Id",
             "type": "string"
+          },
+          "write_offs": {
+            "description": "Every write-off asked of this denial, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/WriteOffSummaryOut"
+            },
+            "title": "Write Offs",
+            "type": "array"
           }
         },
         "required": [
@@ -702,7 +710,8 @@
           "claim",
           "payment",
           "lines",
-          "claim_adjustments"
+          "claim_adjustments",
+          "write_offs"
         ],
         "title": "DenialWorkbenchOut",
         "type": "object"
@@ -1783,6 +1792,68 @@
           "threshold"
         ],
         "title": "WriteOffOut",
+        "type": "object"
+      },
+      "WriteOffSummaryOut": {
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "title": "Requested At",
+            "type": "string"
+          },
+          "requested_by": {
+            "title": "Requested By",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "APPLIED",
+              "PENDING_APPROVAL",
+              "REJECTED"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "write_off_id": {
+            "format": "uuid",
+            "title": "Write Off Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "write_off_id",
+          "status",
+          "amount",
+          "reason",
+          "note",
+          "requested_by",
+          "requested_at",
+          "decided_by"
+        ],
+        "title": "WriteOffSummaryOut",
         "type": "object"
       }
     },
