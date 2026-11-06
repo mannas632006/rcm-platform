@@ -1,6 +1,35 @@
 {
   "components": {
     "schemas": {
+      "AdjustmentOut": {
+        "description": "One CAS adjustment (PD-6). The group code is never absent (PD-3).",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "claim_level": {
+            "title": "Claim Level",
+            "type": "boolean"
+          },
+          "group_code": {
+            "title": "Group Code",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group_code",
+          "reason_code",
+          "amount",
+          "claim_level"
+        ],
+        "title": "AdjustmentOut",
+        "type": "object"
+      },
       "Assignment": {
         "enum": [
           "any",
@@ -9,6 +38,246 @@
         ],
         "title": "Assignment",
         "type": "string"
+      },
+      "ChainLinkOut": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "claim_id": {
+            "format": "uuid",
+            "title": "Claim Id",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "submitter_claim_id": {
+            "title": "Submitter Claim Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_id",
+          "submitter_claim_id",
+          "attempt",
+          "state"
+        ],
+        "title": "ChainLinkOut",
+        "type": "object"
+      },
+      "ClaimDetailOut": {
+        "properties": {
+          "balance": {
+            "title": "Balance",
+            "type": "string"
+          },
+          "chain": {
+            "description": "Every submission of this claim (PD-7).",
+            "items": {
+              "$ref": "#/components/schemas/ChainLinkOut"
+            },
+            "title": "Chain",
+            "type": "array"
+          },
+          "claim_id": {
+            "format": "uuid",
+            "title": "Claim Id",
+            "type": "string"
+          },
+          "date_of_service": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Of Service"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionOut"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "diagnoses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Diagnoses",
+            "type": "array"
+          },
+          "filing": {
+            "$ref": "#/components/schemas/FilingOut"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimLineOut"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "member_id_masked": {
+            "description": "Last four characters only (S-6).",
+            "title": "Member Id Masked",
+            "type": "string"
+          },
+          "next_action_due": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Action Due"
+          },
+          "payer_id": {
+            "title": "Payer Id",
+            "type": "string"
+          },
+          "payer_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payer Name"
+          },
+          "payments": {
+            "items": {
+              "$ref": "#/components/schemas/PaymentOut"
+            },
+            "title": "Payments",
+            "type": "array"
+          },
+          "place_of_service": {
+            "title": "Place Of Service",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "submitted_on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted On"
+          },
+          "submitter_claim_id": {
+            "title": "Submitter Claim Id",
+            "type": "string"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineEventOut"
+            },
+            "title": "Timeline",
+            "type": "array"
+          },
+          "total_charge": {
+            "title": "Total Charge",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_id",
+          "submitter_claim_id",
+          "state",
+          "payer_id",
+          "payer_name",
+          "date_of_service",
+          "submitted_on",
+          "next_action_due",
+          "total_charge",
+          "balance",
+          "member_id_masked",
+          "place_of_service",
+          "diagnoses",
+          "filing",
+          "lines",
+          "payments",
+          "chain",
+          "timeline",
+          "decisions"
+        ],
+        "title": "ClaimDetailOut",
+        "type": "object"
+      },
+      "ClaimLineOut": {
+        "properties": {
+          "charge": {
+            "title": "Charge",
+            "type": "string"
+          },
+          "diagnosis_pointers": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Diagnosis Pointers",
+            "type": "array"
+          },
+          "line_number": {
+            "title": "Line Number",
+            "type": "integer"
+          },
+          "modifiers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Modifiers",
+            "type": "array"
+          },
+          "procedure_code": {
+            "title": "Procedure Code",
+            "type": "string"
+          },
+          "service_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Date"
+          },
+          "units": {
+            "title": "Units",
+            "type": "string"
+          }
+        },
+        "required": [
+          "line_number",
+          "procedure_code",
+          "modifiers",
+          "units",
+          "charge",
+          "service_date",
+          "diagnosis_pointers"
+        ],
+        "title": "ClaimLineOut",
+        "type": "object"
       },
       "DashboardOut": {
         "description": "KPIs for the signed-in operator's clients. Counts and rates only.",
@@ -114,6 +383,111 @@
         "title": "DeadlineRiskOut",
         "type": "object"
       },
+      "DecisionOut": {
+        "description": "UR-06: what was decided, by which logic version, on what inputs, when.",
+        "properties": {
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "decided_at": {
+            "format": "date-time",
+            "title": "Decided At",
+            "type": "string"
+          },
+          "decided_by": {
+            "title": "Decided By",
+            "type": "string"
+          },
+          "decision_id": {
+            "format": "uuid",
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "decision_type": {
+            "title": "Decision Type",
+            "type": "string"
+          },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "inputs": {
+            "additionalProperties": true,
+            "title": "Inputs",
+            "type": "object"
+          },
+          "logic_version": {
+            "title": "Logic Version",
+            "type": "string"
+          },
+          "output": {
+            "additionalProperties": true,
+            "title": "Output",
+            "type": "object"
+          }
+        },
+        "required": [
+          "decision_id",
+          "decided_at",
+          "entity_type",
+          "decision_type",
+          "decided_by",
+          "logic_version",
+          "inputs",
+          "output",
+          "confidence"
+        ],
+        "title": "DecisionOut",
+        "type": "object"
+      },
+      "FilingOut": {
+        "properties": {
+          "days_left": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Negative once the deadline has passed.",
+            "title": "Days Left"
+          },
+          "status": {
+            "description": "RUNNING (days_left set), FILED (the payer took it), or UNKNOWN (no term or no date of service -- never a guessed deadline).",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "days_left"
+        ],
+        "title": "FilingOut",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
       "Me": {
         "description": "Who is signed in, and what they may do. No PHI: a staff identity.",
         "properties": {
@@ -153,6 +527,70 @@
         "title": "Me",
         "type": "object"
       },
+      "PaidLineOut": {
+        "properties": {
+          "adjustments": {
+            "items": {
+              "$ref": "#/components/schemas/AdjustmentOut"
+            },
+            "title": "Adjustments",
+            "type": "array"
+          },
+          "allowed": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed"
+          },
+          "charge": {
+            "title": "Charge",
+            "type": "string"
+          },
+          "line_number": {
+            "title": "Line Number",
+            "type": "integer"
+          },
+          "modifiers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Modifiers",
+            "type": "array"
+          },
+          "paid": {
+            "title": "Paid",
+            "type": "string"
+          },
+          "procedure_code": {
+            "title": "Procedure Code",
+            "type": "string"
+          },
+          "remark_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Remark Codes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "line_number",
+          "procedure_code",
+          "modifiers",
+          "charge",
+          "allowed",
+          "paid",
+          "remark_codes",
+          "adjustments"
+        ],
+        "title": "PaidLineOut",
+        "type": "object"
+      },
       "PayerRegistryOut": {
         "properties": {
           "entries": {
@@ -172,6 +610,80 @@
           "staleness_days"
         ],
         "title": "PayerRegistryOut",
+        "type": "object"
+      },
+      "PaymentOut": {
+        "description": "One 835 claim payment, as the payer sent it.",
+        "properties": {
+          "claim_adjustments": {
+            "items": {
+              "$ref": "#/components/schemas/AdjustmentOut"
+            },
+            "title": "Claim Adjustments",
+            "type": "array"
+          },
+          "claim_payment_id": {
+            "format": "uuid",
+            "title": "Claim Payment Id",
+            "type": "string"
+          },
+          "is_reversal": {
+            "title": "Is Reversal",
+            "type": "boolean"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/PaidLineOut"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "patient_responsibility": {
+            "title": "Patient Responsibility",
+            "type": "string"
+          },
+          "payer_control_number": {
+            "title": "Payer Control Number",
+            "type": "string"
+          },
+          "payment_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Date"
+          },
+          "status_code": {
+            "title": "Status Code",
+            "type": "string"
+          },
+          "total_charge": {
+            "title": "Total Charge",
+            "type": "string"
+          },
+          "total_paid": {
+            "title": "Total Paid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_payment_id",
+          "payer_control_number",
+          "status_code",
+          "payment_date",
+          "total_charge",
+          "total_paid",
+          "patient_responsibility",
+          "is_reversal",
+          "lines",
+          "claim_adjustments"
+        ],
+        "title": "PaymentOut",
         "type": "object"
       },
       "Permission": {
@@ -596,7 +1108,7 @@
                 "type": "null"
               }
             ],
-            "description": "False-positive rate of the latest backtest, 0-1; null when none has run.",
+            "description": "False-positive rate, 0-1, of the backtest promotion judges by: each client's latest that saw a claim, the worst of them (M4.6). Null when none has run or one flagged nothing.",
             "title": "Backtest Fp Rate"
           },
           "created_at": {
@@ -670,6 +1182,95 @@
           "count"
         ],
         "title": "StateCount",
+        "type": "object"
+      },
+      "TimelineEventOut": {
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "actor_type": {
+            "title": "Actor Type",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "review_status": {
+            "title": "Review Status",
+            "type": "string"
+          },
+          "source_state": {
+            "title": "Source State",
+            "type": "string"
+          },
+          "target_state": {
+            "title": "Target State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "source_state",
+          "target_state",
+          "reason",
+          "note",
+          "actor_type",
+          "actor_id",
+          "review_status"
+        ],
+        "title": "TimelineEventOut",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
         "type": "object"
       },
       "WorkQueues": {
@@ -746,6 +1347,85 @@
         "summary": "Claims at filing-deadline risk",
         "tags": [
           "shell"
+        ]
+      }
+    },
+    "/api/v1/claims/{claim_id}": {
+      "get": {
+        "description": "S-03: header and filing countdown (UR-07), service lines, each 835\npayment with its adjustments group and reason together (UR-08, PD-3),\nthe resubmission chain (PD-7), the state history, and every automated\ndecision with its version and inputs (UR-06).",
+        "operationId": "getClaim",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Claim Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such claim, or not one in your clients."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "One claim, everything needed to decide on it",
+        "tags": [
+          "claims"
         ]
       }
     },
