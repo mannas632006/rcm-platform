@@ -12,6 +12,7 @@ import type {
   Appeal,
   Assignment,
   ClaimDetail,
+  ClaimSearch,
   CorrectionInput,
   CorrectionPreview,
   CorrectionResult,
@@ -20,10 +21,12 @@ import type {
   DeadlineRisk,
   Me,
   PayerRegistry,
+  PlainOutcome,
   QueueItemsPage,
   RulesList,
   WriteOffReason,
   WriteOffResult,
+  WorkItemHolding,
   WorkQueues,
 } from "./types";
 
@@ -42,6 +45,7 @@ export const keys = {
   rules: ["rules"] as const,
   payerRegistry: ["payer-registry"] as const,
   claim: (claimId: string) => ["claims", claimId] as const,
+  claimSearch: (q: string) => ["claims", "search", q] as const,
   denial: (workItemId: string) => ["denials", workItemId] as const,
 };
 
@@ -76,7 +80,7 @@ export function queueItemsKey(queueKey: string, assigned: Assignment) {
  * queue is dozens of requests every interval. The queue's counts poll
  * instead (UR-23), and the screen refreshes the rows when they change.
  */
-export function useQueueItems(queueKey: string, assigned: Assignment) {
+export function useQueueItems(queueKey: string, assigned: Assignment, enabled = true) {
   return useInfiniteQuery({
     queryKey: queueItemsKey(queueKey, assigned),
     queryFn: async ({ pageParam }): Promise<QueueItemsPage> =>
@@ -95,6 +99,7 @@ export function useQueueItems(queueKey: string, assigned: Assignment) {
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_cursor,
     refetchOnWindowFocus: false,
+    enabled,
   });
 }
 
@@ -328,5 +333,56 @@ export function useResubmitCorrection(workItemId: string, claimId: string) {
       await client.invalidateQueries({ queryKey: keys.denial(workItemId) });
       await client.invalidateQueries({ queryKey: keys.claim(claimId) });
     },
+  });
+}
+
+/**
+ * M5.4 (`a`): take an item for myself (FR-WORK-01). The caller refreshes
+ * the queue once its batch settles, not once per item.
+ */
+export function useTakeWorkItem() {
+  return useMutation({
+    mutationFn: async (input: {
+      workItemId: string;
+      idempotencyKey: string;
+    }): Promise<WorkItemHolding> =>
+      unwrap(
+        await api.POST("/api/v1/work-items/{work_item_id}/take", {
+          params: { path: { work_item_id: input.workItemId } },
+          headers: { "Idempotency-Key": input.idempotencyKey },
+        }),
+      ),
+  });
+}
+
+/** M5.4 (`r`): close an item that needs nothing more, saying why (FR-WORK-04). */
+export function useResolveWorkItem() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      workItemId: string;
+      outcome: PlainOutcome;
+      note: string;
+      idempotencyKey: string;
+    }): Promise<WorkItemHolding> =>
+      unwrap(
+        await api.POST("/api/v1/work-items/{work_item_id}/resolution", {
+          params: { path: { work_item_id: input.workItemId } },
+          body: { outcome: input.outcome, note: input.note },
+          headers: { "Idempotency-Key": input.idempotencyKey },
+        }),
+      ),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.workQueues }),
+  });
+}
+
+/** The top bar's search (S-01): by claim number or payer, in my clients. */
+export function useClaimSearch(q: string) {
+  const text = q.trim();
+  return useQuery({
+    queryKey: keys.claimSearch(text),
+    queryFn: async (): Promise<ClaimSearch> =>
+      unwrap(await api.GET("/api/v1/claims", { params: { query: { q: text } } })),
+    enabled: text.length >= 2,
   });
 }

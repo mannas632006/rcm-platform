@@ -545,3 +545,60 @@ class CorrectionOut(_Out):
     claim_id: uuid.UUID = Field(description="The replacement claim, chained to the original.")
     submitter_claim_id: str
     changes: list[CorrectionChangeOut]
+
+
+# --- M5.4: taking and resolving queue items ----------------------------------
+
+WORK_ITEM_ERRORS: dict[int | str, dict[str, Any]] = {
+    404: {
+        "model": Problem,
+        "description": "No such item, not one in your clients, or not one your role works.",
+    },
+    409: {"model": Problem, "description": "Another operator holds the item, or it is closed."},
+    422: {"model": Problem, "description": "An outcome or note that is not valid here."},
+}
+
+
+class WorkItemHoldingOut(_Out):
+    """Who holds an item now, and until when (FR-WORK-01, FR-WORK-02)."""
+
+    work_item_id: uuid.UUID
+    state: str
+    assigned_to: str | None
+    lock_expires_at: datetime | None
+    outcome: str | None
+
+
+class WorkItemResolutionIn(_In):
+    """FR-WORK-04: a structured outcome, and why. A denial is resolved by its
+    disposition in the Denial Workbench, never here."""
+
+    outcome: Literal["NO_ACTION_NEEDED", "DUPLICATE"]
+    note: str = Field(min_length=1, max_length=2000)
+
+
+# --- GATE M5: claim search ----------------------------------------------------
+
+
+class ClaimHitOut(_Out):
+    claim_id: uuid.UUID
+    submitter_claim_id: str
+    submission_attempt: int
+    state: str
+    payer_id: str
+    payer_name: str | None
+    date_of_service: date | None
+    total_charge: Decimal
+
+
+class ClaimSearchOut(_Out):
+    """Claims matching the search, newest service first; `truncated` when
+    more matched than are listed."""
+
+    hits: list[ClaimHitOut]
+    truncated: bool
+
+
+CLAIM_SEARCH_ERRORS: dict[int | str, dict[str, Any]] = {
+    422: {"model": Problem, "description": "Search text shorter than 2 or longer than 80."},
+}

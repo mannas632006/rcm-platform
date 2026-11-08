@@ -1,10 +1,12 @@
-import { Suspense, useEffect, useRef } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { ScreenErrorBoundary } from "@/components/states/ScreenErrorBoundary";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useShortcuts } from "@/lib/keyboard";
 
 import { DeadlineAlertBar } from "./DeadlineAlertBar";
+import { ShortcutHelp } from "./ShortcutHelp";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 
@@ -20,6 +22,21 @@ export function AppShell() {
   const { pathname } = useLocation();
   const main = useRef<HTMLElement>(null);
   const first = useRef(true);
+  const navigate = useNavigate();
+  const [help, setHelp] = useState(false);
+
+  // SRS 10.9's global keys. `/` lives with the search box (TopBar).
+  useShortcuts({
+    "g q": () => {
+      navigate("/");
+    },
+    "g d": () => {
+      navigate("/dashboard");
+    },
+    "?": () => {
+      setHelp(true);
+    },
+  });
 
   // WCAG 2.4.3: after navigating, focus moves to the new screen, so a
   // screen reader starts there instead of on the link just pressed.
@@ -63,6 +80,13 @@ export function AppShell() {
           </ScreenErrorBoundary>
         </main>
       </div>
+      {help && (
+        <ShortcutHelp
+          onClose={() => {
+            setHelp(false);
+          }}
+        />
+      )}
     </div>
   );
 }

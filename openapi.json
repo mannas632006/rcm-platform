@@ -342,6 +342,70 @@
         "title": "ClaimDetailOut",
         "type": "object"
       },
+      "ClaimHitOut": {
+        "properties": {
+          "claim_id": {
+            "format": "uuid",
+            "title": "Claim Id",
+            "type": "string"
+          },
+          "date_of_service": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Of Service"
+          },
+          "payer_id": {
+            "title": "Payer Id",
+            "type": "string"
+          },
+          "payer_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payer Name"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "submission_attempt": {
+            "title": "Submission Attempt",
+            "type": "integer"
+          },
+          "submitter_claim_id": {
+            "title": "Submitter Claim Id",
+            "type": "string"
+          },
+          "total_charge": {
+            "title": "Total Charge",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_id",
+          "submitter_claim_id",
+          "submission_attempt",
+          "state",
+          "payer_id",
+          "payer_name",
+          "date_of_service",
+          "total_charge"
+        ],
+        "title": "ClaimHitOut",
+        "type": "object"
+      },
       "ClaimLineOut": {
         "properties": {
           "charge": {
@@ -397,6 +461,28 @@
           "diagnosis_pointers"
         ],
         "title": "ClaimLineOut",
+        "type": "object"
+      },
+      "ClaimSearchOut": {
+        "description": "Claims matching the search, newest service first; `truncated` when\nmore matched than are listed.",
+        "properties": {
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimHitOut"
+            },
+            "title": "Hits",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hits",
+          "truncated"
+        ],
+        "title": "ClaimSearchOut",
         "type": "object"
       },
       "CorrectionChangeOut": {
@@ -2118,6 +2204,89 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "WorkItemHoldingOut": {
+        "description": "Who holds an item now, and until when (FR-WORK-01, FR-WORK-02).",
+        "properties": {
+          "assigned_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned To"
+          },
+          "lock_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lock Expires At"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "work_item_id": {
+            "format": "uuid",
+            "title": "Work Item Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_item_id",
+          "state",
+          "assigned_to",
+          "lock_expires_at",
+          "outcome"
+        ],
+        "title": "WorkItemHoldingOut",
+        "type": "object"
+      },
+      "WorkItemResolutionIn": {
+        "additionalProperties": false,
+        "description": "FR-WORK-04: a structured outcome, and why. A denial is resolved by its\ndisposition in the Denial Workbench, never here.",
+        "properties": {
+          "note": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Note",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "NO_ACTION_NEEDED",
+              "DUPLICATE"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "note"
+        ],
+        "title": "WorkItemResolutionIn",
+        "type": "object"
+      },
       "WorkQueues": {
         "properties": {
           "queues": {
@@ -2530,6 +2699,88 @@
         "summary": "Save a change to an appeal letter as a new version",
         "tags": [
           "denials"
+        ]
+      }
+    },
+    "/api/v1/claims": {
+      "get": {
+        "description": "The top bar's search (S-01): a claim number's start, a payer id, or\npart of a payer's name, inside your clients (PD-20). Dates of service\nare listed, so the read is audited (PD-2).",
+        "operationId": "searchClaims",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 80,
+              "minLength": 2,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimSearchOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Search text shorter than 2 or longer than 80."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Find claims by claim number or payer",
+        "tags": [
+          "claims"
         ]
       }
     },
@@ -3361,6 +3612,283 @@
         "summary": "Rules, latest version each",
         "tags": [
           "insight"
+        ]
+      }
+    },
+    "/api/v1/work-items/{work_item_id}/release": {
+      "post": {
+        "description": "Only the holder may give an item back.",
+        "operationId": "releaseWorkItem",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Work Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItemHoldingOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such item, not one in your clients, or not one your role works."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Another operator holds the item, or it is closed."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "An outcome or note that is not valid here."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Give an item back to its queue",
+        "tags": [
+          "work-items"
+        ]
+      }
+    },
+    "/api/v1/work-items/{work_item_id}/resolution": {
+      "post": {
+        "description": "FR-WORK-04: no action needed, or a duplicate, with the reason. A\ndenial is refused here: it is decided in the Denial Workbench.",
+        "operationId": "resolveWorkItem",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Work Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkItemResolutionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItemHoldingOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such item, not one in your clients, or not one your role works."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Another operator holds the item, or it is closed."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "An outcome or note that is not valid here."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Resolve an item that needs nothing more",
+        "tags": [
+          "work-items"
+        ]
+      }
+    },
+    "/api/v1/work-items/{work_item_id}/take": {
+      "post": {
+        "description": "FR-WORK-01: an exclusive hold, refused by name if someone else has\nit. Taking an item already mine renews the lease (FR-WORK-02).",
+        "operationId": "takeWorkItem",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Work Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItemHoldingOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such item, not one in your clients, or not one your role works."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Another operator holds the item, or it is closed."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "An outcome or note that is not valid here."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Assign an item to me",
+        "tags": [
+          "work-items"
         ]
       }
     },

@@ -21,6 +21,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCount, formatDate, humanize } from "@/lib/format";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
+import { useQueueWalk } from "@/lib/useQueueWalk";
 
 const PREVENTABILITY_TONE: Record<string, ChipTone> = {
   PREVENTABLE: "warn",
@@ -225,10 +226,14 @@ function NotFound() {
   );
 }
 
+/** SRS 10.9 `1` `2` `3`: write off, correct and resubmit, appeal. */
+const DENIAL_PANELS = ["decide-heading", "correction-heading", "appeal-heading"] as const;
+
 function DenialContent({ workItemId }: { workItemId: string }) {
   const query = useDenial(workItemId);
   const denial = query.data;
   useDocumentTitle(denial?.claim ? `Denial on ${denial.claim.submitter_claim_id}` : "Denial");
+  useQueueWalk(DENIAL_PANELS);
   // Out of scope and never raised read the same (PD-20): "not found", not an outage.
   const missing = query.error instanceof ApiError && query.error.status === 404;
   const denied = denial?.lines.filter((l) => l.status !== "NOT_DENIED") ?? [];
