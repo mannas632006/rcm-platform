@@ -1074,6 +1074,11 @@ export interface components {
              * @description Pass back as `cursor` for the next page.
              */
             next_cursor: string | null;
+            /**
+             * Recovery Unavailable
+             * @description UR-34 PARTIAL: why this page carries no P(recovery), or null when the model answered. The queue is ordered on rules alone either way.
+             */
+            recovery_unavailable?: string | null;
         };
         /** QueueSummaryOut */
         QueueSummaryOut: {

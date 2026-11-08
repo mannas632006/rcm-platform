@@ -97,6 +97,7 @@ def list_queue_items(
     return QueueItemsPage(
         items=[QueueItemOut.model_validate(item, from_attributes=True) for item in page.items],
         next_cursor=page.next_cursor,
+        recovery_unavailable=page.recovery_unavailable,
     )
 
 

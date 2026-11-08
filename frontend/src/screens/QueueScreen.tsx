@@ -4,7 +4,10 @@ import { useParams, useSearchParams } from "react-router-dom";
 
 import { queueItemsKey, useQueueItems, useWorkQueues } from "@/api/queries";
 import type { Assignment } from "@/api/types";
-import { WorkQueueTable, WorkQueueTableSkeleton } from "@/components/domain/WorkQueueTable";
+import {
+  WorkQueueTable,
+  WorkQueueTableSkeleton,
+} from "@/components/domain/WorkQueueTable";
 import { ErrorPanel } from "@/components/states/ErrorPanel";
 import { StaleNotice } from "@/components/states/StaleNotice";
 import { Button } from "@/components/ui/button";
@@ -44,7 +47,13 @@ function Queue({ queueKey }: { queueKey: string }) {
   // move, an operator still at the top just gets the new first page, and one
   // scrolled deep is told and chooses when (their place is not yanked away).
   const signature = queue
-    ? [queue.open, queue.unassigned, queue.mine, queue.pinned, queue.overdue].join("/")
+    ? [
+        queue.open,
+        queue.unassigned,
+        queue.mine,
+        queue.pinned,
+        queue.overdue,
+      ].join("/")
     : "";
   const seen = useRef(signature);
   const pagesLoaded = items.data?.pages.length ?? 0;
@@ -59,7 +68,9 @@ function Queue({ queueKey }: { queueKey: string }) {
 
   function refresh() {
     setChanged(false);
-    void queryClient.resetQueries({ queryKey: queueItemsKey(queueKey, assigned) });
+    void queryClient.resetQueries({
+      queryKey: queueItemsKey(queueKey, assigned),
+    });
   }
 
   function setAssigned(value: Assignment) {
@@ -80,7 +91,11 @@ function Queue({ queueKey }: { queueKey: string }) {
   if (queues.isError && !queues.data) {
     return (
       <div className="p-8">
-        <ErrorPanel what="this queue" error={queues.error} onRetry={() => void queues.refetch()} />
+        <ErrorPanel
+          what="this queue"
+          error={queues.error}
+          onRetry={() => void queues.refetch()}
+        />
       </div>
     );
   }
@@ -96,6 +111,8 @@ function Queue({ queueKey }: { queueKey: string }) {
   }
 
   const rows = items.data?.pages.flatMap((page) => page.items) ?? [];
+  // The latest page speaks for the model now; an earlier page's gap may have healed.
+  const modelGap = items.data?.pages.at(-1)?.recovery_unavailable ?? null;
   const refreshError = items.error ?? queues.error;
 
   return (
@@ -105,8 +122,9 @@ function Queue({ queueKey }: { queueKey: string }) {
           <h1 className="text-xl font-semibold">{queue.label}</h1>
           <p className="tabular mt-1 text-md text-muted">
             <span className="sr-only">Whole queue: </span>
-            {queue.open.toLocaleString("en-US")} open · {queue.unassigned.toLocaleString("en-US")}{" "}
-            unassigned · {queue.overdue.toLocaleString("en-US")} past SLA
+            {queue.open.toLocaleString("en-US")} open ·{" "}
+            {queue.unassigned.toLocaleString("en-US")} unassigned ·{" "}
+            {queue.overdue.toLocaleString("en-US")} past SLA
             {queue.pinned > 0 && (
               <span className="font-semibold text-danger-strong">
                 {" "}
@@ -127,7 +145,9 @@ function Queue({ queueKey }: { queueKey: string }) {
               }}
               className={cn(
                 "h-7 cursor-pointer rounded-control border border-border-control px-3 text-md",
-                assigned === filter.value ? "bg-accent text-on-nav" : "bg-bg hover:bg-surface",
+                assigned === filter.value
+                  ? "bg-accent text-on-nav"
+                  : "bg-bg hover:bg-surface",
               )}
             >
               {filter.label}
@@ -138,8 +158,8 @@ function Queue({ queueKey }: { queueKey: string }) {
 
       {assigned !== "any" && queue.pinned > 0 && (
         <p className="text-sm text-muted">
-          Counts above are for the whole queue. Items at filing-deadline risk are always listed,
-          whoever holds them (UR-03).
+          Counts above are for the whole queue. Items at filing-deadline risk
+          are always listed, whoever holds them (UR-03).
         </p>
       )}
 
@@ -166,11 +186,11 @@ function Queue({ queueKey }: { queueKey: string }) {
         />
       )}
 
-      {/* SRS 10.8 PARTIAL / UR-34: the model is not there yet; the queue is. */}
-      {rows.length > 0 && rows.every((row) => row.recovery_probability == null) && (
-        <p className="text-sm text-muted">
-          P(rec) is unavailable for these items, so the queue is ordered by the rules-based
-          priority score.
+      {/* SRS 10.8 PARTIAL / UR-34: the model may be missing or down; the queue is not. */}
+      {rows.length > 0 && modelGap && (
+        <p role="status" className="text-sm text-muted">
+          P(rec) unavailable: {modelGap} The queue is ordered by the rules-based
+          priority score, and every item can still be worked.
         </p>
       )}
 
@@ -189,8 +209,8 @@ function Queue({ queueKey }: { queueKey: string }) {
           ) : (
             <>
               <p>
-                Nothing matches this filter. Items at filing-deadline risk would still show here
-                (UR-03).
+                Nothing matches this filter. Items at filing-deadline risk would
+                still show here (UR-03).
               </p>
               <Button
                 variant="secondary"
