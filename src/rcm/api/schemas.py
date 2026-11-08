@@ -391,6 +391,19 @@ class WriteOffSummaryOut(_Out):
     decided_by: str | None
 
 
+class AppealOut(_Out):
+    """UR-09: a DRAFT until a person signs the current text; SENT after."""
+
+    appeal_id: uuid.UUID
+    version: int
+    letter: str
+    evidence: list[str]
+    status: Literal["DRAFT", "SENT"]
+    written_by: str
+    signed_by: str | None
+    signed_at: datetime | None
+
+
 class DenialWorkbenchOut(_Out):
     work_item_id: uuid.UUID
     state: str
@@ -406,6 +419,7 @@ class DenialWorkbenchOut(_Out):
     write_offs: list[WriteOffSummaryOut] = Field(
         description="Every write-off asked of this denial, newest first."
     )
+    appeal: AppealOut | None = Field(description="The denial's appeal, if one was drafted.")
 
 
 class _In(BaseModel):
@@ -460,4 +474,14 @@ class PatientShareIn(_In):
 class PatientShareOut(_Out):
     amount: Decimal = Field(
         description="The denied lines' PR share billed to the patient. Never a CO amount (PD-19)."
+    )
+
+
+class AppealRevisionIn(_In):
+    letter: str = Field(min_length=1, max_length=20000)
+
+
+class AppealSignIn(_In):
+    version: int = Field(
+        ge=1, description="The version the signer read; it must be the current one."
     )
