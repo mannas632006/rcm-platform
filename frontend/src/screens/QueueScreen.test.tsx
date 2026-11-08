@@ -40,28 +40,45 @@ function item(n: number, overrides: Record<string, unknown> = {}) {
   };
 }
 
-const QUEUES = { queues: [queue("data-quality", "Data Quality", { open: 3, pinned: 1 })] };
+const QUEUES = {
+  queues: [queue("data-quality", "Data Quality", { open: 3, pinned: 1 })],
+};
 
-function api(items: unknown[]) {
+const NOT_DEPLOYED = "No recovery model is deployed yet (M6).";
+
+function api(
+  items: unknown[],
+  recoveryUnavailable: string | null = NOT_DEPLOYED,
+) {
   return mockApi({
     "/api/v1/me": { body: ME },
     "/api/v1/work-queues": { body: QUEUES },
     "/api/v1/alerts/deadline-risk": { body: { claims: 0, charges: "0.00" } },
-    "/api/v1/work-queues/data-quality/items": { body: { items, next_cursor: null } },
+    "/api/v1/work-queues/data-quality/items": {
+      body: {
+        items,
+        next_cursor: null,
+        recovery_unavailable: recoveryUnavailable,
+      },
+    },
   });
 }
 
 describe("work queue screen (S-02)", () => {
   it("shows items in the server's order, deadline-pinned work marked in words", async () => {
-    api([item(1, { deadline_pinned: true, days_to_deadline: 4 }), item(2), item(3)]);
-    renderApp(<App />, { path: "/queues/data-quality" });
-    const table = await screen.findByRole("table", { name: /Data Quality items/ });
-    const rows = within(table).getAllByRole("row").slice(1);
-    expect(rows.map((row) => within(row).getAllByRole("cell")[1]?.textContent)).toEqual([
-      "CLM-1",
-      "CLM-2",
-      "CLM-3",
+    api([
+      item(1, { deadline_pinned: true, days_to_deadline: 4 }),
+      item(2),
+      item(3),
     ]);
+    renderApp(<App />, { path: "/queues/data-quality" });
+    const table = await screen.findByRole("table", {
+      name: /Data Quality items/,
+    });
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(
+      rows.map((row) => within(row).getAllByRole("cell")[1]?.textContent),
+    ).toEqual(["CLM-1", "CLM-2", "CLM-3"]);
     // UR-25: an icon and words, not colour alone.
     expect(rows[0]).toHaveTextContent("filing deadline risk");
     expect(rows[0]).toHaveTextContent("$125.00");
@@ -82,8 +99,12 @@ describe("work queue screen (S-02)", () => {
         },
       },
       "/api/v1/alerts/deadline-risk": { body: { claims: 0, charges: "0.00" } },
-      "/api/v1/work-queues/data-quality/items": { body: { items: [item(1)], next_cursor: null } },
-      "/api/v1/work-queues/denials/items": { body: { items: [item(2)], next_cursor: null } },
+      "/api/v1/work-queues/data-quality/items": {
+        body: { items: [item(1)], next_cursor: null },
+      },
+      "/api/v1/work-queues/denials/items": {
+        body: { items: [item(2)], next_cursor: null },
+      },
     });
     renderApp(<App />, {
       path: "/queues/data-quality",
@@ -99,16 +120,22 @@ describe("work queue screen (S-02)", () => {
       },
     });
     await screen.findByRole("table", { name: /Data Quality items/ });
-    await userEvent.click(screen.getByRole("link", { name: /Denial Workbench/ }));
+    await userEvent.click(
+      screen.getByRole("link", { name: /Denial Workbench/ }),
+    );
     await screen.findByRole("table", { name: /Denial Workbench items/ });
-    expect(screen.queryByText("This queue has changed since you loaded it.")).toBeNull();
+    expect(
+      screen.queryByText("This queue has changed since you loaded it."),
+    ).toBeNull();
   });
 
   it("opens the claim from its number, and leaves a claimless item as text (S-03)", async () => {
     const claimId = "11111111-0000-4000-8000-000000000001";
     api([item(1, { claim_id: claimId }), item(2)]);
     renderApp(<App />, { path: "/queues/data-quality" });
-    const table = await screen.findByRole("table", { name: /Data Quality items/ });
+    const table = await screen.findByRole("table", {
+      name: /Data Quality items/,
+    });
     expect(within(table).getByRole("link", { name: "CLM-1" })).toHaveAttribute(
       "href",
       `/claims/${claimId}`,
@@ -120,11 +147,12 @@ describe("work queue screen (S-02)", () => {
     const denial = item(1, { kind: "DENIAL", title: "Payer denied CO-50" });
     api([denial, item(2)]);
     renderApp(<App />, { path: "/queues/data-quality" });
-    const table = await screen.findByRole("table", { name: /Data Quality items/ });
-    expect(within(table).getByRole("link", { name: "Payer denied CO-50" })).toHaveAttribute(
-      "href",
-      `/denials/${denial.work_item_id}`,
-    );
+    const table = await screen.findByRole("table", {
+      name: /Data Quality items/,
+    });
+    expect(
+      within(table).getByRole("link", { name: "Payer denied CO-50" }),
+    ).toHaveAttribute("href", `/denials/${denial.work_item_id}`);
     expect(within(table).queryByRole("link", { name: "Problem 2" })).toBeNull();
   });
 
@@ -132,12 +160,20 @@ describe("work queue screen (S-02)", () => {
     const fetchMock = api([item(1)]);
     renderApp(<App />, { path: "/queues/data-quality" });
     await userEvent.click(await screen.findByRole("button", { name: "Mine" }));
-    expect(screen.getByRole("button", { name: "Mine" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Mine" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await waitFor(() => {
       const asked = fetchMock.mock.calls
-        .map(([input]) => new URL(input instanceof Request ? input.url : String(input)))
+        .map(
+          ([input]) =>
+            new URL(input instanceof Request ? input.url : String(input)),
+        )
         .filter((url) => url.pathname.endsWith("/items"));
-      expect(asked.some((url) => url.searchParams.get("assigned") === "mine")).toBe(true);
+      expect(
+        asked.some((url) => url.searchParams.get("assigned") === "mine"),
+      ).toBe(true);
     });
   });
 
@@ -146,22 +182,50 @@ describe("work queue screen (S-02)", () => {
     renderApp(<App />, { path: "/queues/data-quality" });
     expect(await screen.findByText(/This queue is empty/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Unassigned" }));
-    expect(await screen.findByText(/Nothing matches this filter/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show all items" })).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Nothing matches this filter/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Show all items" }),
+    ).toBeInTheDocument();
   });
 
   it("marks P(rec) unavailable rather than zero while the model is absent (UR-34)", async () => {
     api([item(1)]);
     renderApp(<App />, { path: "/queues/data-quality" });
-    expect(await screen.findByText(/P\(rec\) is unavailable/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/P\(rec\) unavailable: No recovery model/),
+    ).toBeInTheDocument();
     const table = screen.getByRole("table");
     expect(within(table).getAllByText("unavailable")).toHaveLength(1);
+  });
+
+  it("keeps the queue workable when the model is down, and says so (M5.12)", async () => {
+    api([item(1), item(2)], "The recovery model did not answer.");
+    renderApp(<App />, { path: "/queues/data-quality" });
+    expect(
+      await screen.findByText(/did not answer.*can still be worked/),
+    ).toBeInTheDocument();
+    const table = screen.getByRole("table");
+    expect(within(table).getAllByText("unavailable")).toHaveLength(2);
+    // Both items are listed and openable: a header row plus one row each.
+    expect(within(table).getAllByRole("row")).toHaveLength(3);
+  });
+
+  it("shows the score and no notice when the model answered", async () => {
+    api([{ ...item(1), recovery_probability: 0.72 }], null);
+    renderApp(<App />, { path: "/queues/data-quality" });
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("0.72")).toBeInTheDocument();
+    expect(screen.queryByText(/P\(rec\) unavailable/)).not.toBeInTheDocument();
   });
 
   it("keeps a 10,000-row queue to a few dozen rows in the page (UR-01)", async () => {
     api(Array.from({ length: 10_000 }, (_, n) => item(n)));
     renderApp(<App />, { path: "/queues/data-quality" });
-    const table = await screen.findByRole("table", { name: /Data Quality items/ });
+    const table = await screen.findByRole("table", {
+      name: /Data Quality items/,
+    });
     const rendered = within(table).getAllByRole("row").length;
     // Rows are drawn -- this is not an empty table passing by accident --
     // but only the ones in view plus a margin, never ten thousand.
