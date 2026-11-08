@@ -282,6 +282,16 @@ class DecisionOut(_Out):
     confidence: float | None
 
 
+class OpenProblemOut(_Out):
+    work_item_id: uuid.UUID
+    kind: str
+    title: str
+    detail: str
+    owner_role: str
+    assigned_to: str | None
+    sla_due_at: datetime
+
+
 class ClaimDetailOut(_Out):
     claim_id: uuid.UUID
     submitter_claim_id: str
@@ -304,6 +314,10 @@ class ClaimDetailOut(_Out):
     chain: list[ChainLinkOut] = Field(description="Every submission of this claim (PD-7).")
     timeline: list[TimelineEventOut]
     decisions: list[DecisionOut]
+    open_problems: list[OpenProblemOut] = Field(
+        description="Open work items on any submission of this claim, soonest SLA first "
+        "(M5.8): each names its problem (BR-EXC-01)."
+    )
 
 
 # ---------------------------------------------------------------------------

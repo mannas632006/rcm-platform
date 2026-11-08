@@ -251,6 +251,14 @@
             ],
             "title": "Next Action Due"
           },
+          "open_problems": {
+            "description": "Open work items on any submission of this claim, soonest SLA first (M5.8): each names its problem (BR-EXC-01).",
+            "items": {
+              "$ref": "#/components/schemas/OpenProblemOut"
+            },
+            "title": "Open Problems",
+            "type": "array"
+          },
           "payer_id": {
             "title": "Payer Id",
             "type": "string"
@@ -328,7 +336,8 @@
           "payments",
           "chain",
           "timeline",
-          "decisions"
+          "decisions",
+          "open_problems"
         ],
         "title": "ClaimDetailOut",
         "type": "object"
@@ -1231,6 +1240,58 @@
           "client_ids"
         ],
         "title": "Me",
+        "type": "object"
+      },
+      "OpenProblemOut": {
+        "properties": {
+          "assigned_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned To"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "owner_role": {
+            "title": "Owner Role",
+            "type": "string"
+          },
+          "sla_due_at": {
+            "format": "date-time",
+            "title": "Sla Due At",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "work_item_id": {
+            "format": "uuid",
+            "title": "Work Item Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_item_id",
+          "kind",
+          "title",
+          "detail",
+          "owner_role",
+          "assigned_to",
+          "sla_due_at"
+        ],
+        "title": "OpenProblemOut",
         "type": "object"
       },
       "PaidLineOut": {

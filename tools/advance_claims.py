@@ -72,7 +72,9 @@ def main(argv: list[str] | None = None) -> int:
             select(problem, func.count())
             .where(
                 WorkItem.client_id == client_id,
-                WorkItem.kind == str(WorkItemKind.DATA_QUALITY),
+                WorkItem.kind.in_(
+                    [str(WorkItemKind.DATA_QUALITY), str(WorkItemKind.PAYMENT_EXCEPTION)]
+                ),
             )
             .group_by(problem)
             .order_by(problem)

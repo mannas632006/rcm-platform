@@ -24,6 +24,7 @@ const CLAIM: ClaimDetail = {
   place_of_service: "11",
   diagnoses: ["K21.9", "R10.13"],
   filing: { status: "FILED", days_left: null },
+  open_problems: [],
   lines: [
     {
       line_number: 1,
@@ -111,7 +112,9 @@ const CLAIM: ClaimDetail = {
   ],
 };
 
-function api(claim: { status?: number; body: unknown } | "never" = { body: CLAIM }) {
+function api(
+  claim: { status?: number; body: unknown } | "never" = { body: CLAIM },
+) {
   return mockApi({
     "/api/v1/me": { body: ME },
     "/api/v1/work-queues": { body: { queues: [] } },
@@ -128,7 +131,9 @@ describe("claim detail (S-03, M5.5)", () => {
   it("names the claim, its state and what is still owed", async () => {
     api();
     renderApp(<App />, { path: PATH });
-    expect(await screen.findByRole("heading", { level: 1, name: /CLM-88214/ })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { level: 1, name: /CLM-88214/ }),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("Denied").length).toBeGreaterThan(0);
     expect(screen.getByText("Aetna Commercial")).toBeInTheDocument();
     expect(screen.getByText("••••9301")).toBeInTheDocument();
@@ -160,11 +165,55 @@ describe("claim detail (S-03, M5.5)", () => {
     [{ status: "RUNNING", days_left: -3 }, "Filing deadline passed 3 days ago"],
     [{ status: "UNKNOWN", days_left: null }, "Filing deadline unknown"],
     [{ status: "FILED", days_left: null }, "Filed with the payer"],
-    [{ status: "NOT_APPLICABLE", days_left: null }, "No filing deadline applies"],
-  ])("says where the filing clock stands: %j (UR-07)", async (filing, words) => {
-    api({ body: { ...CLAIM, filing } });
+    [
+      { status: "NOT_APPLICABLE", days_left: null },
+      "No filing deadline applies",
+    ],
+  ])(
+    "says where the filing clock stands: %j (UR-07)",
+    async (filing, words) => {
+      api({ body: { ...CLAIM, filing } });
+      renderApp(<App />, { path: PATH });
+      expect(await screen.findByText(words)).toBeInTheDocument();
+    },
+  );
+
+  it("names each open problem on the claim, scrubber findings included (M5.8)", async () => {
+    api({
+      body: {
+        ...CLAIM,
+        open_problems: [
+          {
+            work_item_id: "99999999-0000-4000-8000-000000000009",
+            kind: "SCRUB_EXCEPTION",
+            title:
+              "Scrubber rule NO_MOD25_ON_EM v1 blocks line 1: modifier 25 needs review",
+            detail: "Found by the scrubber after the claim was sent.",
+            owner_role: "billing_specialist",
+            assigned_to: null,
+            sla_due_at: "2026-11-10T12:00:00Z",
+          },
+        ],
+      },
+    });
     renderApp(<App />, { path: PATH });
-    expect(await screen.findByText(words)).toBeInTheDocument();
+    const problems = within(
+      await screen.findByRole("region", { name: "Open problems" }),
+    );
+    expect(
+      problems.getByText(/NO_MOD25_ON_EM v1 blocks line 1/),
+    ).toBeInTheDocument();
+    expect(problems.getByText("Scrub exception")).toBeInTheDocument();
+    expect(problems.getByText(/For billing specialist/i)).toBeInTheDocument();
+  });
+
+  it("shows no problems section when nothing is open", async () => {
+    api();
+    renderApp(<App />, { path: PATH });
+    await screen.findByRole("heading", { level: 1 });
+    expect(
+      screen.queryByRole("region", { name: "Open problems" }),
+    ).not.toBeInTheDocument();
   });
 
   it("says a missing member id is not recorded, not a mask (PD-18)", async () => {
@@ -178,13 +227,17 @@ describe("claim detail (S-03, M5.5)", () => {
     api({ body: { ...CLAIM, submitter_claim_id: "CLM-88214-R1" } });
     renderApp(<App />, { path: PATH });
     await screen.findByRole("heading", { level: 1 });
-    expect(section(/Remittance/).getByText(/for original CLM-88214/)).toBeInTheDocument();
+    expect(
+      section(/Remittance/).getByText(/for original CLM-88214/),
+    ).toBeInTheDocument();
   });
 
   it("says a claim it cannot find is not found, not that something broke", async () => {
     api({ status: 404, body: { title: "Not Found", detail: "No such claim" } });
     renderApp(<App />, { path: PATH });
-    expect(await screen.findByRole("heading", { name: "Claim not found" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Claim not found" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -199,8 +252,12 @@ describe("claim detail (S-03, M5.5)", () => {
         client.setQueryData(keys.claim(ID), CLAIM);
       },
     });
-    expect(await screen.findByText(/This claim may be out of date/)).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 1, name: /CLM-88214/ })).toBeInTheDocument();
+    expect(
+      await screen.findByText(/This claim may be out of date/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 1, name: /CLM-88214/ }),
+    ).toBeInTheDocument();
   });
 
   it("tells a role without claim access plainly", async () => {
@@ -209,6 +266,8 @@ describe("claim detail (S-03, M5.5)", () => {
       "/api/v1/work-queues": { body: { queues: [] } },
     });
     renderApp(<App />, { path: PATH });
-    expect(await screen.findByText("Not available for your role")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Not available for your role"),
+    ).toBeInTheDocument();
   });
 });

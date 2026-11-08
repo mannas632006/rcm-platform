@@ -17,7 +17,8 @@ system's steps." ADR-0006.
 
 Evidence that contradicts itself, or that this module will not read (two
 835 postings, a line paid nothing for patient-responsibility reasons only,
-a void), raises a named DATA_QUALITY exception and the claim waits (PD-18).
+a void), raises a named exception -- PAYMENT_EXCEPTION for an 835 it cannot read,
+DATA_QUALITY otherwise -- and the claim waits (PD-18).
 
 A 999 moves nothing (BR-M8-02: syntax, not acceptance). Every step after an
 outcome -- appeal, write-off, secondary billing -- is a person's decision and
@@ -128,11 +129,14 @@ _VOID: Final = "8"
 class Problem:
     """Evidence that contradicts itself, or that this module will not read.
 
-    Raised as a named DATA_QUALITY exception, never guessed past (PD-18).
+    Raised as a named exception, never guessed past (PD-18): a DATA_QUALITY
+    item by default, a PAYMENT_EXCEPTION for an 835 the posting rules cannot
+    read, so the payment poster who owns 835s sees it (M5.8, ADR-0019).
     """
 
     key: str
     text: str
+    kind: WorkItemKind = WorkItemKind.DATA_QUALITY
 
 
 REJECTED_BUT_ADJUDICATED: Final = Problem(
@@ -146,15 +150,18 @@ SEVERAL_POSTINGS: Final = Problem(
     "several-835-postings",
     "More than one 835 posting is on file for this claim (split or secondary); "
     "a person sets the outcome",
+    WorkItemKind.PAYMENT_EXCEPTION,
 )
 NO_SERVICE_LINES: Final = Problem(
     "835-without-service-lines",
     "The 835 for this claim has no service lines, so the outcome cannot be read per line",
+    WorkItemKind.PAYMENT_EXCEPTION,
 )
 PATIENT_SHARE_ONLY: Final = Problem(
     "835-patient-share-only-line",
     "An 835 line was paid nothing with no refusal reason (the patient's cost share "
     "or a payment adjustment took it all); a person sets the outcome",
+    WorkItemKind.PAYMENT_EXCEPTION,
 )
 VOIDED: Final = Problem(
     "void-received", "A void was sent for this claim; a person handles voids until M4"
@@ -463,7 +470,7 @@ def _problem_open(session: Session, claim: Claim, problem: Problem) -> bool:
             select(WorkItem.work_item_id)
             .where(
                 WorkItem.client_id == claim.client_id,
-                WorkItem.kind == str(WorkItemKind.DATA_QUALITY),
+                WorkItem.kind == str(problem.kind),
                 WorkItem.source_key == f"{problem.key}:{claim.claim_id}",
                 WorkItem.state.in_([str(s) for s in OPEN_STATES]),
             )
@@ -543,7 +550,7 @@ def advance_claim(session: Session, *, claim: Claim, now: datetime) -> Advanced:
         exceptions.raise_exception(
             session,
             client_id=claim.client_id,
-            kind=WorkItemKind.DATA_QUALITY,
+            kind=problem.kind,
             problem=problem.text,
             record=exceptions.RecordRef("claim", claim.claim_id),
             source_key=f"{problem.key}:{claim.claim_id}",

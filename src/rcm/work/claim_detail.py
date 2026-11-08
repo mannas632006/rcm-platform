@@ -46,6 +46,7 @@ from rcm.platform.auth import Principal, scoped_query
 from rcm.platform.errors import ResourceNotFoundError
 from rcm.work.models import WorkItem
 from rcm.work.priority import FILING_CLOCK_STATES, outstanding_balance
+from rcm.work.state import OPEN_STATES
 
 MASK = "•"
 
@@ -176,6 +177,19 @@ class Decision:
 
 
 @dataclass(frozen=True, slots=True)
+class OpenProblem:
+    """An open work item on the claim, named as raised (BR-EXC-01)."""
+
+    work_item_id: uuid.UUID
+    kind: str
+    title: str
+    detail: str
+    owner_role: str
+    assigned_to: str | None
+    sla_due_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class ClaimDetail:
     claim_id: uuid.UUID
     submitter_claim_id: str
@@ -196,6 +210,7 @@ class ClaimDetail:
     chain: list[ChainLink]
     timeline: list[Event]
     decisions: list[Decision]
+    open_problems: list[OpenProblem]
 
 
 def mask(identifier: str) -> str | None:
@@ -221,6 +236,34 @@ def filing(
     if term is None or service_date is None:
         return Filing(FilingStatus.UNKNOWN, None)
     return Filing(FilingStatus.RUNNING, term - (today - service_date).days)
+
+
+def _open_problems(
+    session: Session, *, client: uuid.UUID, claim_ids: list[uuid.UUID]
+) -> list[OpenProblem]:
+    """M5.8: what is waiting on a person for this claim, across its chain --
+    scrubber findings, payment exceptions, denials -- soonest SLA first."""
+    rows = session.scalars(
+        select(WorkItem)
+        .where(
+            WorkItem.client_id == client,
+            WorkItem.claim_id.in_(claim_ids),
+            WorkItem.state.in_([str(s) for s in OPEN_STATES]),
+        )
+        .order_by(WorkItem.sla_due_at, WorkItem.work_item_id)
+    ).all()
+    return [
+        OpenProblem(
+            work_item_id=row.work_item_id,
+            kind=row.kind,
+            title=row.title,
+            detail=row.detail,
+            owner_role=row.owner_role,
+            assigned_to=row.assigned_to,
+            sla_due_at=row.sla_due_at,
+        )
+        for row in rows
+    ]
 
 
 def claim_detail(
@@ -323,6 +366,9 @@ def claim_detail(
             client=client,
             claim_ids=[link.claim_id for link in chain],
             payment_ids=[p.claim_payment_id for p in payments],
+        ),
+        open_problems=_open_problems(
+            session, client=client, claim_ids=[link.claim_id for link in chain]
         ),
     )
 

@@ -183,15 +183,32 @@ def resubmit(claim_id: str, original: str, root: Path, *, frequency: str) -> Non
 
 
 def problems_on(submitter_id: str) -> list[str]:
-    """The DATA_QUALITY problems raised on a claim, by the kind of problem."""
+    """The problems a hold raised on a claim, by the kind of problem. 835s the
+    posting rules cannot read go to the payment queue (ADR-0019), the rest to
+    data quality."""
     with session_scope() as session:
         keys = session.scalars(
             select(WorkItem.source_key).where(
-                WorkItem.kind == str(WorkItemKind.DATA_QUALITY),
+                WorkItem.kind.in_(
+                    [str(WorkItemKind.DATA_QUALITY), str(WorkItemKind.PAYMENT_EXCEPTION)]
+                ),
                 WorkItem.claim_id == claim_named(submitter_id),
             )
         ).all()
     return sorted(k.rsplit(":", 1)[0] for k in keys)
+
+
+def kinds_on(submitter_id: str) -> list[str]:
+    """The kinds of the problems a hold raised on a claim."""
+    with session_scope() as session:
+        return sorted(
+            session.scalars(
+                select(WorkItem.kind).where(
+                    WorkItem.claim_id == claim_named(submitter_id),
+                    WorkItem.kind != str(WorkItemKind.CLAIM_STEP_REVIEW),
+                )
+            ).all()
+        )
 
 
 def test_a_resubmission_replaces_the_original_once_the_payer_takes_it(root: Path) -> None:
@@ -313,6 +330,7 @@ def test_an_acceptance_after_a_rejection_goes_to_a_person(root: Path) -> None:
     advance()
     assert state_of("CLM-RA") is ClaimState.REJECTED
     assert problems_on("CLM-RA") == ["accepted-after-rejection"]
+    assert kinds_on("CLM-RA") == [str(WorkItemKind.DATA_QUALITY)]
 
 
 def test_two_live_835_postings_are_not_picked_between(root: Path) -> None:
@@ -325,6 +343,8 @@ def test_two_live_835_postings_are_not_picked_between(root: Path) -> None:
     advance()
     assert state_of("CLM-2X") is ClaimState.IN_ADJUDICATION
     assert problems_on("CLM-2X") == ["several-835-postings"]
+    # ADR-0019: an 835 the posting rules cannot read is the payment poster's.
+    assert kinds_on("CLM-2X") == [str(WorkItemKind.PAYMENT_EXCEPTION)]
 
 
 def test_a_line_paid_nothing_for_the_patient_share_is_not_a_denial(root: Path) -> None:
@@ -343,6 +363,7 @@ def test_a_line_paid_nothing_for_the_patient_share_is_not_a_denial(root: Path) -
     advance()
     assert state_of("CLM-DED") is ClaimState.IN_ADJUDICATION
     assert problems_on("CLM-DED") == ["835-patient-share-only-line"]
+    assert kinds_on("CLM-DED") == [str(WorkItemKind.PAYMENT_EXCEPTION)]
 
 
 def test_a_refusal_billed_to_the_patient_is_still_a_denial(root: Path) -> None:

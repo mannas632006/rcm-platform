@@ -10,6 +10,7 @@ import type {
   ClaimPayment,
   Decision,
   Filing,
+  OpenProblem,
   TimelineEvent,
 } from "@/api/types";
 import { DenialCodeChip } from "@/components/domain/DenialCodeChip";
@@ -48,14 +49,19 @@ function plural(n: number, word: string): string {
 
 /** UR-07: where the filing clock stands, in words and colour. Never a guessed deadline. */
 function FilingChip({ filing }: { filing: Filing }) {
-  if (filing.status === "FILED") return <Chip tone="success">Filed with the payer</Chip>;
+  if (filing.status === "FILED")
+    return <Chip tone="success">Filed with the payer</Chip>;
   if (filing.status === "NOT_APPLICABLE")
     return <Chip tone="muted">No filing deadline applies</Chip>;
   if (filing.status !== "RUNNING" || filing.days_left === null) {
     return <Chip tone="warn">Filing deadline unknown</Chip>;
   }
   if (filing.days_left < 0) {
-    return <Chip tone="danger">Filing deadline passed {plural(-filing.days_left, "day")} ago</Chip>;
+    return (
+      <Chip tone="danger">
+        Filing deadline passed {plural(-filing.days_left, "day")} ago
+      </Chip>
+    );
   }
   return (
     <Chip tone={filing.days_left <= 14 ? "danger" : "warn"}>
@@ -87,7 +93,9 @@ function when(iso: string): string {
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <dt className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</dt>
+      <dt className="text-xs font-semibold uppercase tracking-wide text-muted">
+        {label}
+      </dt>
       <dd className="text-base">{children}</dd>
     </div>
   );
@@ -100,8 +108,12 @@ function Context({ claim }: { claim: ClaimDetail }) {
         <CardHeader id="coverage-heading" title="Coverage" />
         <dl className="flex flex-col gap-3 p-4">
           <Fact label="Payer">
-            <span className="font-semibold">{claim.payer_name ?? claim.payer_id}</span>
-            <span className="block text-sm text-muted">Payer ID {claim.payer_id}</span>
+            <span className="font-semibold">
+              {claim.payer_name ?? claim.payer_id}
+            </span>
+            <span className="block text-sm text-muted">
+              Payer ID {claim.payer_id}
+            </span>
           </Fact>
           <Fact label="Member ID">
             {claim.member_id_masked === null ? (
@@ -133,9 +145,13 @@ function Context({ claim }: { claim: ClaimDetail }) {
                   className="flex items-center justify-between gap-2 rounded-control px-2 py-2 hover:bg-surface aria-[current=page]:bg-accent-soft"
                 >
                   <span>
-                    <span className="tabular font-medium">{link.submitter_claim_id}</span>
+                    <span className="tabular font-medium">
+                      {link.submitter_claim_id}
+                    </span>
                     <span className="block text-sm text-muted">
-                      {link.attempt === 1 ? "Original" : `Resubmission ${String(link.attempt - 1)}`}
+                      {link.attempt === 1
+                        ? "Original"
+                        : `Resubmission ${String(link.attempt - 1)}`}
                     </span>
                   </span>
                   <StateChip state={link.state} />
@@ -213,7 +229,9 @@ function ServiceLines({ claim }: { claim: ClaimDetail }) {
       </table>
       <div className="border-t border-border px-4 py-3 text-sm">
         <span className="font-semibold text-muted">Diagnoses </span>
-        <span className="tabular">{claim.diagnoses.join(" · ") || "None recorded"}</span>
+        <span className="tabular">
+          {claim.diagnoses.join(" · ") || "None recorded"}
+        </span>
       </div>
     </Card>
   );
@@ -240,25 +258,34 @@ function PaymentBlock({ payment }: { payment: ClaimPayment }) {
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 bg-surface px-4 py-2 text-sm">
         <span className="font-semibold">
           {payment.is_reversal ? "Reversal" : "835 payment"} ·{" "}
-          {payment.payment_date ? formatDate(payment.payment_date) : "date not given"}
+          {payment.payment_date
+            ? formatDate(payment.payment_date)
+            : "date not given"}
         </span>
         <span className="tabular">
           {`for ${
-            payment.attempt === 1 ? "original" : `resubmission ${String(payment.attempt - 1)}`
+            payment.attempt === 1
+              ? "original"
+              : `resubmission ${String(payment.attempt - 1)}`
           } ${payment.submitter_claim_id}`}
         </span>
-        <span className="text-muted">Payer control {payment.payer_control_number}</span>
+        <span className="text-muted">
+          Payer control {payment.payer_control_number}
+        </span>
         <span className="ml-auto flex gap-4">
           <span>
             Paid <MoneyDisplay amount={payment.total_paid} />
           </span>
           <span>
-            Patient owes <MoneyDisplay amount={payment.patient_responsibility} />
+            Patient owes{" "}
+            <MoneyDisplay amount={payment.patient_responsibility} />
           </span>
         </span>
       </div>
       <table className="w-full border-collapse text-base">
-        <caption className="sr-only">Lines the payer adjudicated, with each adjustment</caption>
+        <caption className="sr-only">
+          Lines the payer adjudicated, with each adjustment
+        </caption>
         <thead>
           <tr className={`${ROW} text-sm text-muted`}>
             <th scope="col" className={TH_NUM}>
@@ -283,9 +310,17 @@ function PaymentBlock({ payment }: { payment: ClaimPayment }) {
         </thead>
         <tbody>
           {payment.lines.map((line) => (
-            <tr key={line.line_number} className="border-b border-border align-top last:border-b-0">
-              <td className="tabular px-3 py-2 text-right">{line.line_number}</td>
-              <th scope="row" className="tabular px-3 py-2 text-left font-medium">
+            <tr
+              key={line.line_number}
+              className="border-b border-border align-top last:border-b-0"
+            >
+              <td className="tabular px-3 py-2 text-right">
+                {line.line_number}
+              </td>
+              <th
+                scope="row"
+                className="tabular px-3 py-2 text-left font-medium"
+              >
                 {line.procedure_code}
                 {line.remark_codes.length > 0 && (
                   <span className="block text-sm font-normal text-muted">
@@ -315,7 +350,9 @@ function PaymentBlock({ payment }: { payment: ClaimPayment }) {
       </table>
       {payment.claim_adjustments.length > 0 && (
         <div className="flex items-center justify-between gap-4 border-t border-border px-4 py-2 text-sm">
-          <span className="font-semibold text-muted">Claim-level adjustments</span>
+          <span className="font-semibold text-muted">
+            Claim-level adjustments
+          </span>
           <Adjustments adjustments={payment.claim_adjustments} />
         </div>
       )}
@@ -332,10 +369,49 @@ function Remittance({ payments }: { payments: ClaimPayment[] }) {
         description="As the payer sent it: each 835, its lines and every adjustment"
       />
       {payments.length === 0 ? (
-        <p className="p-4 text-muted">No remittance has been received for this claim.</p>
+        <p className="p-4 text-muted">
+          No remittance has been received for this claim.
+        </p>
       ) : (
-        payments.map((p) => <PaymentBlock key={p.claim_payment_id} payment={p} />)
+        payments.map((p) => (
+          <PaymentBlock key={p.claim_payment_id} payment={p} />
+        ))
       )}
+    </Card>
+  );
+}
+
+/** M5.8: what is waiting on a person for this claim, each by its own name
+ * (BR-EXC-01) -- a scrubber finding, a payment exception, a denial. */
+function OpenProblems({ problems }: { problems: OpenProblem[] }) {
+  if (problems.length === 0) return null;
+  return (
+    <Card aria-labelledby="problems-heading">
+      <CardHeader
+        id="problems-heading"
+        title="Open problems"
+        description={`${String(problems.length)} waiting on a person`}
+      />
+      <ul className="flex flex-col gap-3 p-4">
+        {problems.map((p) => (
+          <li
+            key={p.work_item_id}
+            className="flex flex-col gap-1 border-l-2 border-warn pl-3"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <Chip tone="warn">{humanize(p.kind)}</Chip>
+              <span className="text-xs text-muted">
+                {p.assigned_to
+                  ? `With ${p.assigned_to}`
+                  : `For ${humanize(p.owner_role)}`}{" "}
+                · due {when(p.sla_due_at)}
+              </span>
+            </div>
+            <p className="text-sm font-medium">{p.title}</p>
+            {p.detail && <p className="text-sm text-muted">{p.detail}</p>}
+          </li>
+        ))}
+      </ul>
     </Card>
   );
 }
@@ -343,7 +419,11 @@ function Remittance({ payments }: { payments: ClaimPayment[] }) {
 function History({ events }: { events: TimelineEvent[] }) {
   return (
     <Card aria-labelledby="history-heading">
-      <CardHeader id="history-heading" title="History" description="Every state change" />
+      <CardHeader
+        id="history-heading"
+        title="History"
+        description="Every state change"
+      />
       {events.length === 0 ? (
         <p className="p-4 text-muted">No state change recorded yet.</p>
       ) : (
@@ -352,13 +432,17 @@ function History({ events }: { events: TimelineEvent[] }) {
             <li key={i} className="border-l-2 border-border pl-3">
               <p className="text-base">
                 {humanize(e.source_state)} →{" "}
-                <span className="font-semibold">{humanize(e.target_state)}</span>
+                <span className="font-semibold">
+                  {humanize(e.target_state)}
+                </span>
               </p>
               <p className="text-sm text-muted">
                 {when(e.occurred_at)} · {e.actor_id}
                 {e.review_status === "PENDING" && " · awaiting review"}
               </p>
-              {(e.note || e.reason) && <p className="text-sm">{e.note || e.reason}</p>}
+              {(e.note || e.reason) && (
+                <p className="text-sm">{e.note || e.reason}</p>
+              )}
             </li>
           ))}
         </ol>
@@ -371,11 +455,19 @@ function shown(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-function Values({ label, values }: { label: string; values: Record<string, unknown> }) {
+function Values({
+  label,
+  values,
+}: {
+  label: string;
+  values: Record<string, unknown>;
+}) {
   const entries = Object.entries(values);
   return (
     <div>
-      <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+        {label}
+      </p>
       {entries.length === 0 ? (
         <p className="text-sm text-muted">None recorded</p>
       ) : (
@@ -402,7 +494,9 @@ function DecisionAudit({ decisions }: { decisions: Decision[] }) {
         description="Every automated decision on this claim"
       />
       {decisions.length === 0 ? (
-        <p className="p-4 text-muted">No automated decision has been made on this claim.</p>
+        <p className="p-4 text-muted">
+          No automated decision has been made on this claim.
+        </p>
       ) : (
         <ol className="flex flex-col">
           {[...decisions].reverse().map((d) => (
@@ -411,14 +505,18 @@ function DecisionAudit({ decisions }: { decisions: Decision[] }) {
               className="flex flex-col gap-2 border-b border-border p-4 last:border-b-0"
             >
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold">{humanize(d.decision_type)}</span>
+                <span className="font-semibold">
+                  {humanize(d.decision_type)}
+                </span>
                 <Chip tone="muted">
                   <span className="tabular">{d.logic_version}</span>
                 </Chip>
               </div>
               <p className="text-sm text-muted">
-                {when(d.decided_at)} · <span>{d.decided_by}</span> · on {humanize(d.entity_type)}
-                {d.confidence !== null && ` · confidence ${String(d.confidence)}`}
+                {when(d.decided_at)} · <span>{d.decided_by}</span> · on{" "}
+                {humanize(d.entity_type)}
+                {d.confidence !== null &&
+                  ` · confidence ${String(d.confidence)}`}
               </p>
               <Values label="Inputs" values={d.inputs} />
               <Values label="Output" values={d.output} />
@@ -435,6 +533,7 @@ function ClaimBody({ claim }: { claim: ClaimDetail }) {
     <div className="grid grid-cols-[18rem_minmax(0,1fr)_22rem] items-start gap-6">
       <Context claim={claim} />
       <div className="flex min-w-0 flex-col gap-6">
+        <OpenProblems problems={claim.open_problems} />
         <ServiceLines claim={claim} />
         <Remittance payments={claim.payments} />
       </div>
@@ -459,8 +558,8 @@ function NotFound() {
           </Button>
         }
       >
-        There is no claim with this ID among your clients. Check the link, or search for the claim
-        by its number.
+        There is no claim with this ID among your clients. Check the link, or
+        search for the claim by its number.
       </EmptyState>
     </Card>
   );
@@ -491,7 +590,11 @@ function ClaimContent({ claimId }: { claimId: string }) {
       {missing && !claim && <NotFound />}
 
       {query.isError && !claim && !missing && (
-        <ErrorPanel what="the claim" error={query.error} onRetry={() => void query.refetch()} />
+        <ErrorPanel
+          what="the claim"
+          error={query.error}
+          onRetry={() => void query.refetch()}
+        />
       )}
 
       {claim && (
@@ -499,7 +602,9 @@ function ClaimContent({ claimId }: { claimId: string }) {
           <PageHeader
             title={`Claim ${claim.submitter_claim_id}`}
             description={`${claim.payer_name ?? claim.payer_id} · service ${
-              claim.date_of_service ? formatDate(claim.date_of_service) : "date not recorded"
+              claim.date_of_service
+                ? formatDate(claim.date_of_service)
+                : "date not recorded"
             }`}
             actions={
               <div className="flex flex-wrap items-center gap-3">
