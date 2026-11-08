@@ -20,9 +20,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from rcm.decision import ncci_store, registry
-from rcm.decision.rules.correct import Correction, run_pipeline
-from rcm.decision.rules.evaluate import ClaimFacts, Evaluation, LineFacts
-from rcm.decision.rules.store import load_ruleset
+from rcm.decision.rules.correct import Corrected, Correction, run_pipeline
+from rcm.decision.rules.evaluate import Check, ClaimFacts, Evaluation, LineFacts, evaluate
+from rcm.decision.rules.store import LoadedRuleset, load_ruleset
 from rcm.domain import claim_correction
 from rcm.domain.claim import Claim, ClaimLine
 from rcm.platform.audit import DecisionType, record_decision
@@ -121,7 +121,13 @@ def _plain(value: object) -> object:
 
 
 def scrub_claim(
-    session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID, today: date | None = None
+    session: Session,
+    *,
+    claim_id: uuid.UUID,
+    client_id: uuid.UUID,
+    today: date | None = None,
+    apply_corrections: bool = True,
+    ruleset: LoadedRuleset | None = None,
 ) -> ScrubResult:
     """Evaluate the claim and record the decision in the caller's transaction.
 
@@ -129,7 +135,8 @@ def scrub_claim(
     unless a caller replays a scrub as of another.
     """
     facts = claim_facts(session, claim_id=claim_id, client_id=client_id)
-    ruleset = load_ruleset(session)
+    # A caller scrubbing many claims loads the ruleset once and passes it.
+    ruleset = ruleset or load_ruleset(session)
     # Exactly the NCCI releases the ruleset pinned (ADR-0008 Decision 3).
     ncci = ncci_store.check_for(
         session,
@@ -145,7 +152,18 @@ def scrub_claim(
         today=today or datetime.now(UTC).date(),
     )
     # Fix what has one right answer, re-run from Layer 1 (ADR-0011).
-    corrected = run_pipeline(ruleset.rules, facts, checks=[ncci, payer_registry])
+    checks: list[Check] = [ncci, payer_registry]
+    if apply_corrections:
+        corrected = run_pipeline(ruleset.rules, facts, checks=checks)
+    else:
+        # Review only (ADR-0019): the claim is already with the payer, so the
+        # stored row must keep matching what was sent. One evaluation, no fix.
+        corrected = Corrected(
+            evaluation=evaluate(ruleset.rules, facts, checks=checks),
+            facts=facts,
+            corrections=(),
+            rounds=1,
+        )
     evaluation = corrected.evaluation
     # The verdict rests on the corrected facts, so the stored claim is
     # corrected in this same transaction: a PASS never describes a claim the
@@ -179,6 +197,7 @@ def scrub_claim(
         logic_version=f"ruleset-v{ruleset.version}",
         input_snapshot={
             "ruleset_version": ruleset.version,
+            "mode": "correct" if apply_corrections else "review",
             "ruleset_digest": ruleset.digest,
             "ncci_ptp_release": ruleset.ncci_ptp_release,
             "ncci_mue_release": ruleset.ncci_mue_release,

@@ -491,6 +491,11 @@ export interface components {
             member_id_masked: string | null;
             /** Next Action Due */
             next_action_due: string | null;
+            /**
+             * Open Problems
+             * @description Open work items on any submission of this claim, soonest SLA first (M5.8): each names its problem (BR-EXC-01).
+             */
+            open_problems: components["schemas"]["OpenProblemOut"][];
             /** Payer Id */
             payer_id: string;
             /** Payer Name */
@@ -865,6 +870,29 @@ export interface components {
             roles: components["schemas"]["Role"][];
             /** Subject */
             subject: string;
+        };
+        /** OpenProblemOut */
+        OpenProblemOut: {
+            /** Assigned To */
+            assigned_to: string | null;
+            /** Detail */
+            detail: string;
+            /** Kind */
+            kind: string;
+            /** Owner Role */
+            owner_role: string;
+            /**
+             * Sla Due At
+             * Format: date-time
+             */
+            sla_due_at: string;
+            /** Title */
+            title: string;
+            /**
+             * Work Item Id
+             * Format: uuid
+             */
+            work_item_id: string;
         };
         /** PaidLineOut */
         PaidLineOut: {
