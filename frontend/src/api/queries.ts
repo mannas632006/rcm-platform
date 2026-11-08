@@ -1,4 +1,9 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import { hasPermission } from "@/lib/permissions";
 
@@ -7,6 +12,9 @@ import type {
   Appeal,
   Assignment,
   ClaimDetail,
+  CorrectionInput,
+  CorrectionPreview,
+  CorrectionResult,
   DenialWorkbench,
   Dashboard,
   DeadlineRisk,
@@ -48,7 +56,8 @@ export function useMe() {
 export function useWorkQueues() {
   return useQuery({
     queryKey: keys.workQueues,
-    queryFn: async (): Promise<WorkQueues> => unwrap(await api.GET("/api/v1/work-queues")),
+    queryFn: async (): Promise<WorkQueues> =>
+      unwrap(await api.GET("/api/v1/work-queues")),
     refetchInterval: QUEUE_POLL_MS,
   });
 }
@@ -75,7 +84,11 @@ export function useQueueItems(queueKey: string, assigned: Assignment) {
         await api.GET("/api/v1/work-queues/{queue_key}/items", {
           params: {
             path: { queue_key: queueKey },
-            query: { limit: QUEUE_PAGE, assigned, ...(pageParam ? { cursor: pageParam } : {}) },
+            query: {
+              limit: QUEUE_PAGE,
+              assigned,
+              ...(pageParam ? { cursor: pageParam } : {}),
+            },
           },
         }),
       ),
@@ -105,7 +118,8 @@ export function useDeadlineRisk() {
 export function useDashboard() {
   return useQuery({
     queryKey: keys.dashboard,
-    queryFn: async (): Promise<Dashboard> => unwrap(await api.GET("/api/v1/dashboard")),
+    queryFn: async (): Promise<Dashboard> =>
+      unwrap(await api.GET("/api/v1/dashboard")),
     refetchInterval: QUEUE_POLL_MS,
   });
 }
@@ -114,7 +128,8 @@ export function useDashboard() {
 export function useRules() {
   return useQuery({
     queryKey: keys.rules,
-    queryFn: async (): Promise<RulesList> => unwrap(await api.GET("/api/v1/rules")),
+    queryFn: async (): Promise<RulesList> =>
+      unwrap(await api.GET("/api/v1/rules")),
   });
 }
 
@@ -132,7 +147,9 @@ export function useClaim(claimId: string) {
     queryKey: keys.claim(claimId),
     queryFn: async (): Promise<ClaimDetail> =>
       unwrap(
-        await api.GET("/api/v1/claims/{claim_id}", { params: { path: { claim_id: claimId } } }),
+        await api.GET("/api/v1/claims/{claim_id}", {
+          params: { path: { claim_id: claimId } },
+        }),
       ),
     refetchInterval: QUEUE_POLL_MS,
   });
@@ -171,7 +188,8 @@ export function useWriteOff(workItemId: string) {
           headers: { "Idempotency-Key": input.idempotencyKey },
         }),
       ),
-    onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
+    onSettled: () =>
+      client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
   });
 }
 
@@ -191,7 +209,8 @@ export function useDecideWriteOff(workItemId: string) {
           headers: { "Idempotency-Key": input.idempotencyKey },
         }),
       ),
-    onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
+    onSettled: () =>
+      client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
   });
 }
 
@@ -201,13 +220,17 @@ export function useBillPatient(workItemId: string) {
   return useMutation({
     mutationFn: async (input: { idempotencyKey: string }) =>
       unwrap(
-        await api.POST("/api/v1/denials/{work_item_id}/patient-responsibility", {
-          params: { path: { work_item_id: workItemId } },
-          body: { note: "" },
-          headers: { "Idempotency-Key": input.idempotencyKey },
-        }),
+        await api.POST(
+          "/api/v1/denials/{work_item_id}/patient-responsibility",
+          {
+            params: { path: { work_item_id: workItemId } },
+            body: { note: "" },
+            headers: { "Idempotency-Key": input.idempotencyKey },
+          },
+        ),
       ),
-    onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
+    onSettled: () =>
+      client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
   });
 }
 
@@ -222,7 +245,8 @@ export function useDraftAppeal(workItemId: string) {
           headers: { "Idempotency-Key": input.idempotencyKey },
         }),
       ),
-    onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
+    onSettled: () =>
+      client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
   });
 }
 
@@ -242,7 +266,8 @@ export function useReviseAppeal(workItemId: string) {
           headers: { "Idempotency-Key": input.idempotencyKey },
         }),
       ),
-    onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
+    onSettled: () =>
+      client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
   });
 }
 
@@ -262,6 +287,46 @@ export function useSignAppeal(workItemId: string) {
           headers: { "Idempotency-Key": input.idempotencyKey },
         }),
       ),
-    onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
+    onSettled: () =>
+      client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
+  });
+}
+
+/** UR-10: the field-level diff of a correction. Changes nothing. */
+export function usePreviewCorrection(workItemId: string) {
+  return useMutation({
+    mutationFn: async (input: {
+      correction: CorrectionInput;
+      idempotencyKey: string;
+    }): Promise<CorrectionPreview> =>
+      unwrap(
+        await api.POST("/api/v1/denials/{work_item_id}/correction/preview", {
+          params: { path: { work_item_id: workItemId } },
+          body: input.correction,
+          headers: { "Idempotency-Key": input.idempotencyKey },
+        }),
+      ),
+  });
+}
+
+/** ADR-0018: send the corrected claim as a chained replacement (PD-7). */
+export function useResubmitCorrection(workItemId: string, claimId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      correction: CorrectionInput;
+      idempotencyKey: string;
+    }): Promise<CorrectionResult> =>
+      unwrap(
+        await api.POST("/api/v1/denials/{work_item_id}/correction", {
+          params: { path: { work_item_id: workItemId } },
+          body: input.correction,
+          headers: { "Idempotency-Key": input.idempotencyKey },
+        }),
+      ),
+    onSettled: async () => {
+      await client.invalidateQueries({ queryKey: keys.denial(workItemId) });
+      await client.invalidateQueries({ queryKey: keys.claim(claimId) });
+    },
   });
 }

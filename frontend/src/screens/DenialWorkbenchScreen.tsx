@@ -5,6 +5,7 @@ import { ApiError } from "@/api/client";
 import { useDenial } from "@/api/queries";
 import type { DenialWorkbench, DeniedLine } from "@/api/types";
 import { AppealPanel } from "@/components/domain/AppealPanel";
+import { CorrectionPanel } from "@/components/domain/CorrectionPanel";
 import { DenialCodeChip } from "@/components/domain/DenialCodeChip";
 import { MoneyDisplay } from "@/components/domain/MoneyDisplay";
 import { WriteOffPanel } from "@/components/domain/WriteOffPanel";
@@ -286,6 +287,7 @@ function DenialContent({ workItemId }: { workItemId: string }) {
             </div>
             <div className="flex flex-col gap-6">
               <WriteOffPanel denial={denial} />
+              <CorrectionPanel denial={denial} />
               <AppealPanel denial={denial} />
               <Summary denial={denial} />
             </div>
