@@ -15,6 +15,7 @@ const SearchScreen = lazy(() => import("@/screens/SearchScreen"));
 const DashboardScreen = lazy(() => import("@/screens/DashboardScreen"));
 const RulesScreen = lazy(() => import("@/screens/RulesScreen"));
 const PayerRegistryScreen = lazy(() => import("@/screens/PayerRegistryScreen"));
+const ClaimDetailScreen = lazy(() => import("@/screens/ClaimDetailScreen"));
 const NotFoundScreen = lazy(() => import("@/screens/NotFoundScreen"));
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -41,6 +42,7 @@ export function App() {
           <Route index element={<HomeScreen />} />
           <Route path="queues/:queueKey" element={<QueueScreen />} />
           <Route path="search" element={<SearchScreen />} />
+          <Route path="claims/:claimId" element={<ClaimDetailScreen />} />
           <Route path="dashboard" element={<DashboardScreen />} />
           <Route path="admin/rules" element={<RulesScreen />} />
           <Route path="admin/payer-registry" element={<PayerRegistryScreen />} />

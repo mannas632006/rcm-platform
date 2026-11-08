@@ -157,7 +157,9 @@ class RuleOut(_Out):
     created_at: datetime
     backtest_flagged: int | None
     backtest_fp_rate: Decimal | None = Field(
-        description="False-positive rate of the latest backtest, 0-1; null when none has run."
+        description="False-positive rate, 0-1, of the backtest promotion judges by: each "
+        "client's latest that saw a claim, the worst of them (M4.6). Null when none has run "
+        "or one flagged nothing."
     )
 
 
@@ -179,3 +181,126 @@ class RegistryEntryOut(_Out):
 class PayerRegistryOut(_Out):
     entries: list[RegistryEntryOut]
     staleness_days: int
+
+
+# ---------------------------------------------------------------------------
+# S-03 Claim Detail (M5.5)
+# ---------------------------------------------------------------------------
+
+#: A claim outside the caller's scope reads exactly like one never issued.
+CLAIM_ERRORS: dict[int | str, dict[str, Any]] = {
+    404: {"model": Problem, "description": "No such claim, or not one in your clients."},
+}
+
+
+class FilingOut(_Out):
+    status: str = Field(
+        description="RUNNING (days_left set), FILED (the payer took it), UNKNOWN "
+        "(no term or no date of service -- never a guessed deadline), or NOT_APPLICABLE "
+        "(never filed and no longer will be: cancelled, auth denied, replaced, written off)."
+    )
+    days_left: int | None = Field(description="Negative once the deadline has passed.")
+
+
+class ClaimLineOut(_Out):
+    line_number: int
+    procedure_code: str
+    modifiers: list[str]
+    units: Decimal
+    charge: Decimal
+    service_date: date | None
+    diagnosis_pointers: list[int]
+
+
+class AdjustmentOut(_Out):
+    """One CAS adjustment (PD-6). The group code is never absent (PD-3)."""
+
+    group_code: str
+    reason_code: str
+    amount: Decimal
+    claim_level: bool
+
+
+class PaidLineOut(_Out):
+    line_number: int
+    procedure_code: str
+    modifiers: list[str]
+    charge: Decimal
+    allowed: Decimal | None
+    paid: Decimal
+    remark_codes: list[str]
+    adjustments: list[AdjustmentOut]
+
+
+class PaymentOut(_Out):
+    """One 835 claim payment, as the payer sent it."""
+
+    claim_payment_id: uuid.UUID
+    submitter_claim_id: str = Field(description="The submission this payment answers (PD-7).")
+    attempt: int
+    payer_control_number: str
+    status_code: str
+    payment_date: date | None
+    total_charge: Decimal
+    total_paid: Decimal
+    patient_responsibility: Decimal
+    is_reversal: bool
+    lines: list[PaidLineOut]
+    claim_adjustments: list[AdjustmentOut]
+
+
+class ChainLinkOut(_Out):
+    claim_id: uuid.UUID
+    submitter_claim_id: str
+    attempt: int
+    state: str
+
+
+class TimelineEventOut(_Out):
+    occurred_at: datetime
+    source_state: str
+    target_state: str
+    reason: str
+    note: str
+    actor_type: str
+    actor_id: str
+    review_status: str
+
+
+class DecisionOut(_Out):
+    """UR-06: what was decided, by which logic version, on what inputs, when."""
+
+    decision_id: uuid.UUID
+    decided_at: datetime
+    entity_type: str
+    entity_id: uuid.UUID
+    decision_type: str
+    decided_by: str
+    logic_version: str
+    inputs: dict[str, Any]
+    output: dict[str, Any]
+    confidence: float | None
+
+
+class ClaimDetailOut(_Out):
+    claim_id: uuid.UUID
+    submitter_claim_id: str
+    state: str
+    payer_id: str
+    payer_name: str | None
+    date_of_service: date | None
+    submitted_on: date | None
+    next_action_due: date | None
+    total_charge: Decimal
+    balance: Decimal
+    member_id_masked: str | None = Field(
+        description="Last four characters only (S-6); null when the claim carries none."
+    )
+    place_of_service: str
+    diagnoses: list[str]
+    filing: FilingOut
+    lines: list[ClaimLineOut]
+    payments: list[PaymentOut]
+    chain: list[ChainLinkOut] = Field(description="Every submission of this claim (PD-7).")
+    timeline: list[TimelineEventOut]
+    decisions: list[DecisionOut]
