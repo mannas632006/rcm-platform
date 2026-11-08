@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
         "--archive",
         type=Path,
         default=None,
-        help="where RAW files are archived (PD-9); defaults to <corpus>/raw",
+        help="where RAW files are archived (PD-9); defaults to data/archive/<corpus name>",
     )
     args = parser.parse_args(argv)
 
@@ -110,7 +110,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    archive_root: Path = args.archive or (corpus / "raw")
+    # Outside the corpus directory: archived files are write-protected (PD-9),
+    # and the generator's tests regenerate data/synthetic by deleting it. An
+    # archive inside it made every later test run fail on Access denied.
+    archive_root: Path = args.archive or (Path("data") / "archive" / corpus.resolve().name)
     archive_root.mkdir(parents=True, exist_ok=True)
 
     counts = load(corpus, client_id=args.client, archive_root=archive_root)

@@ -47,7 +47,7 @@ export function AppShell() {
           id="main"
           ref={main}
           tabIndex={-1}
-          className="min-w-0 flex-1 overflow-auto focus:outline-none"
+          className="min-w-0 flex-1 overflow-auto bg-surface focus:outline-none"
         >
           <ScreenErrorBoundary resetKey={pathname}>
             <Suspense

@@ -9,6 +9,7 @@ skippable by writing a route that omits it.
 
 from __future__ import annotations
 
+import ipaddress
 import uuid
 from collections.abc import Iterator
 from typing import Annotated, Any, Final
@@ -82,6 +83,11 @@ def audited_session(
     The audit row is written inside the request's transaction, so a request that
     fails and rolls back leaves no claim of access that did not happen -- which
     is what PD-2 means by "in the same transaction as the change".
+
+    It is flushed before the route runs. The commit happens in teardown, after
+    the response is sent; an audit insert that failed only then would have
+    served PHI with no record of it. Flushed first, an access that cannot be
+    audited is refused before anything is read (PD-18).
     """
     with session_scope() as session:
         record_audit_event(
@@ -91,10 +97,23 @@ def audited_session(
             action=f"{request.method} {request.url.path}",
             entity_type="http_request",
             entity_id=None,
-            ip_address=request.client.host if request.client else None,
+            ip_address=_ip(request),
             session_id=principal.session_id,
         )
+        session.flush()
         yield session
+
+
+def _ip(request: Request) -> str | None:
+    """The client's address, or None when the peer is not one (a test client,
+    a unix socket): recorded as unknown, never as something it is not."""
+    host = request.client.host if request.client else None
+    if host is None:
+        return None
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        return None
 
 
 AuditedSession = Annotated[Session, Depends(audited_session)]

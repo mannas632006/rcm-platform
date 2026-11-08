@@ -31,6 +31,7 @@
   --color-warn-strong: var(--warn-strong);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
+  --color-success-strong: var(--success-strong);
   --color-focus: var(--focus);
   --color-focus-on-nav: var(--focus-on-nav);
   --color-transparent: transparent;
@@ -43,6 +44,7 @@
   --text-md: var(--fs-md);
   --text-lg: var(--fs-lg);
   --text-xl: var(--fs-xl);
+  --text-kpi: var(--fs-kpi);
 
   --font-sans: var(--font-sans);
 
@@ -54,6 +56,10 @@
   --radius-panel: var(--radius-panel);
   --radius-chip: var(--radius-chip);
   --radius-full: 9999px;
+
+  --shadow-*: initial;
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
 }
 
 @layer base {

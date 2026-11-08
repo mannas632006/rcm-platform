@@ -1,6 +1,99 @@
 {
   "components": {
     "schemas": {
+      "Assignment": {
+        "enum": [
+          "any",
+          "mine",
+          "unassigned"
+        ],
+        "title": "Assignment",
+        "type": "string"
+      },
+      "DashboardOut": {
+        "description": "KPIs for the signed-in operator's clients. Counts and rates only.",
+        "properties": {
+          "adjudicated_claims": {
+            "title": "Adjudicated Claims",
+            "type": "integer"
+          },
+          "claims_by_state": {
+            "items": {
+              "$ref": "#/components/schemas/StateCount"
+            },
+            "title": "Claims By State",
+            "type": "array"
+          },
+          "denial_rate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Denied over adjudicated claims, per claim (BR-DATA-03), as a percentage.",
+            "title": "Denial Rate"
+          },
+          "denied_claims": {
+            "title": "Denied Claims",
+            "type": "integer"
+          },
+          "first_pass_claims": {
+            "title": "First Pass Claims",
+            "type": "integer"
+          },
+          "first_pass_clean": {
+            "title": "First Pass Clean",
+            "type": "integer"
+          },
+          "first_pass_clean_rate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "First submissions neither rejected nor denied, as a percentage.",
+            "title": "First Pass Clean Rate"
+          },
+          "open_work": {
+            "title": "Open Work",
+            "type": "integer"
+          },
+          "overdue_work": {
+            "title": "Overdue Work",
+            "type": "integer"
+          },
+          "pinned_work": {
+            "title": "Pinned Work",
+            "type": "integer"
+          },
+          "steps_awaiting_review": {
+            "description": "Automatic claim steps waiting for the submitter's approval (ADR-0006).",
+            "title": "Steps Awaiting Review",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "adjudicated_claims",
+          "denied_claims",
+          "denial_rate",
+          "first_pass_claims",
+          "first_pass_clean",
+          "first_pass_clean_rate",
+          "claims_by_state",
+          "open_work",
+          "pinned_work",
+          "overdue_work",
+          "steps_awaiting_review"
+        ],
+        "title": "DashboardOut",
+        "type": "object"
+      },
       "DeadlineRiskOut": {
         "description": "UR-26: the alert bar that cannot be dismissed while claims are at risk.",
         "properties": {
@@ -58,6 +151,27 @@
           "client_ids"
         ],
         "title": "Me",
+        "type": "object"
+      },
+      "PayerRegistryOut": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryEntryOut"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "staleness_days": {
+            "title": "Staleness Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entries",
+          "staleness_days"
+        ],
+        "title": "PayerRegistryOut",
         "type": "object"
       },
       "Permission": {
@@ -140,6 +254,208 @@
         "title": "Problem",
         "type": "object"
       },
+      "QueueItemOut": {
+        "description": "One row of a queue (S-02). Charges are billed charges, to the cent.",
+        "properties": {
+          "assigned_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned To"
+          },
+          "bulk_handling": {
+            "title": "Bulk Handling",
+            "type": "boolean"
+          },
+          "charges": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Charges"
+          },
+          "claim_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "date_of_service": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Of Service"
+          },
+          "days_to_deadline": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days To Deadline"
+          },
+          "deadline_pinned": {
+            "description": "PD-15: always first, never filtered out (UR-03).",
+            "title": "Deadline Pinned",
+            "type": "boolean"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "overdue": {
+            "title": "Overdue",
+            "type": "boolean"
+          },
+          "payer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payer Id"
+          },
+          "payer_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payer Name"
+          },
+          "priority_score": {
+            "title": "Priority Score",
+            "type": "integer"
+          },
+          "recovery_probability": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ML-3's P(recovery). Null until the model exists (M6): the UI shows it as unavailable, never as zero (SRS 10.8 PARTIAL).",
+            "title": "Recovery Probability"
+          },
+          "sla_due_at": {
+            "format": "date-time",
+            "title": "Sla Due At",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "submitter_claim_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitter Claim Id"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "work_item_id": {
+            "format": "uuid",
+            "title": "Work Item Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_item_id",
+          "kind",
+          "title",
+          "state",
+          "priority_score",
+          "deadline_pinned",
+          "days_to_deadline",
+          "assigned_to",
+          "sla_due_at",
+          "overdue",
+          "bulk_handling",
+          "created_at",
+          "claim_id",
+          "submitter_claim_id",
+          "payer_id",
+          "payer_name",
+          "date_of_service",
+          "charges"
+        ],
+        "title": "QueueItemOut",
+        "type": "object"
+      },
+      "QueueItemsPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/QueueItemOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass back as `cursor` for the next page.",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "QueueItemsPage",
+        "type": "object"
+      },
       "QueueSummaryOut": {
         "properties": {
           "key": {
@@ -187,6 +503,63 @@
         "title": "QueueSummaryOut",
         "type": "object"
       },
+      "RegistryEntryOut": {
+        "properties": {
+          "cpt": {
+            "title": "Cpt",
+            "type": "string"
+          },
+          "last_verified_date": {
+            "format": "date",
+            "title": "Last Verified Date",
+            "type": "string"
+          },
+          "payer_id": {
+            "title": "Payer Id",
+            "type": "string"
+          },
+          "payer_name": {
+            "title": "Payer Name",
+            "type": "string"
+          },
+          "plan_type": {
+            "title": "Plan Type",
+            "type": "string"
+          },
+          "prior_auth_required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Auth Required"
+          },
+          "stale": {
+            "description": "Past [TBD-42]: cannot drive a BLOCKING decision (BR-REG-02).",
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "payer_id",
+          "payer_name",
+          "plan_type",
+          "cpt",
+          "version",
+          "prior_auth_required",
+          "last_verified_date",
+          "stale"
+        ],
+        "title": "RegistryEntryOut",
+        "type": "object"
+      },
       "Role": {
         "description": "Operator roles (SRS section 11.5).\n\nDeliberately coarse. A role per job title produces a matrix nobody maintains;\nthese are the five distinct *authority levels* the work actually has.",
         "enum": [
@@ -200,6 +573,104 @@
         ],
         "title": "Role",
         "type": "string"
+      },
+      "RuleOut": {
+        "properties": {
+          "backtest_flagged": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backtest Flagged"
+          },
+          "backtest_fp_rate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "False-positive rate of the latest backtest, 0-1; null when none has run.",
+            "title": "Backtest Fp Rate"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "layer": {
+            "title": "Layer",
+            "type": "string"
+          },
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rule_id",
+          "version",
+          "layer",
+          "severity",
+          "status",
+          "created_at",
+          "backtest_flagged",
+          "backtest_fp_rate"
+        ],
+        "title": "RuleOut",
+        "type": "object"
+      },
+      "RulesOut": {
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/RuleOut"
+            },
+            "title": "Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "title": "RulesOut",
+        "type": "object"
+      },
+      "StateCount": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "count"
+        ],
+        "title": "StateCount",
+        "type": "object"
       },
       "WorkQueues": {
         "properties": {
@@ -278,6 +749,53 @@
         ]
       }
     },
+    "/api/v1/dashboard": {
+      "get": {
+        "description": "Denial rate, first-pass clean rate, claims by state and queue health.",
+        "operationId": "getDashboard",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "KPIs for my clients",
+        "tags": [
+          "insight"
+        ]
+      }
+    },
     "/api/v1/me": {
       "get": {
         "description": "The signed-in operator's roles, permissions and client scope.",
@@ -325,6 +843,100 @@
         ]
       }
     },
+    "/api/v1/payer-registry": {
+      "get": {
+        "description": "Current registry entries, each flagged when past [TBD-42] (M4.10).",
+        "operationId": "listPayerRegistry",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayerRegistryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Payer registry, with staleness",
+        "tags": [
+          "insight"
+        ]
+      }
+    },
+    "/api/v1/rules": {
+      "get": {
+        "description": "Each rule's latest version, status and latest backtest (M4.4-M4.6).",
+        "operationId": "listRules",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RulesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Rules, latest version each",
+        "tags": [
+          "insight"
+        ]
+      }
+    },
     "/api/v1/work-queues": {
       "get": {
         "description": "Each queue the operator's role may work, with its open work, inside\nthe operator's client scope (SRS 7.2, PD-20).",
@@ -367,6 +979,140 @@
           }
         ],
         "summary": "Queues visible to me",
+        "tags": [
+          "shell"
+        ]
+      }
+    },
+    "/api/v1/work-queues/{queue_key}/items": {
+      "get": {
+        "description": "S-02: the queue in priority order (UR-02), deadline-pinned items first\nand never filtered out (UR-03). Cursor-paginated (FR-API-02).\n\nRows carry claim identifiers and dates of service, so the read is\naudited (PD-2).",
+        "operationId": "listQueueItems",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "queue_key",
+            "required": true,
+            "schema": {
+              "title": "Queue Key",
+              "type": "string"
+            }
+          },
+          {
+            "description": "From the previous page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "From the previous page.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "assigned",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Assignment",
+              "default": "any"
+            }
+          },
+          {
+            "in": "query",
+            "name": "payer_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 80,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Payer Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueItemsPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such queue, or not one this role may see."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A cursor, limit or filter that is not valid."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "A queue's items, best first",
         "tags": [
           "shell"
         ]

@@ -1,20 +1,73 @@
-import { useParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useParams, useSearchParams } from "react-router-dom";
 
-import { useWorkQueues } from "@/api/queries";
+import { queueItemsKey, useQueueItems, useWorkQueues } from "@/api/queries";
+import type { Assignment } from "@/api/types";
+import { WorkQueueTable, WorkQueueTableSkeleton } from "@/components/domain/WorkQueueTable";
 import { ErrorPanel } from "@/components/states/ErrorPanel";
 import { StaleNotice } from "@/components/states/StaleNotice";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/cn";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
-/**
- * S-02's frame. The virtualised WorkQueueTable lands in M5.3; this shows the
- * queue's real counts so the shell's links lead somewhere true.
- */
+const FILTERS: { value: Assignment; label: string }[] = [
+  { value: "any", label: "All" },
+  { value: "mine", label: "Mine" },
+  { value: "unassigned", label: "Unassigned" },
+];
+
+function parseAssigned(raw: string | null): Assignment {
+  return raw === "mine" || raw === "unassigned" ? raw : "any";
+}
+
+/** S-02: one queue, best first, with its filter in the URL (UR-22). */
 export default function QueueScreen() {
-  const { queueKey } = useParams();
+  const { queueKey = "" } = useParams();
+  // Keyed so each queue starts fresh: React would otherwise reuse the screen
+  // between queues and compare the new queue's counts with the old one's.
+  return <Queue key={queueKey} queueKey={queueKey} />;
+}
+
+function Queue({ queueKey }: { queueKey: string }) {
+  const [params, setParams] = useSearchParams();
+  const assigned = parseAssigned(params.get("assigned"));
   const queues = useWorkQueues();
   const queue = queues.data?.queues.find((q) => q.key === queueKey);
   useDocumentTitle(queue?.label ?? "Queue");
+  const items = useQueueItems(queueKey, assigned);
+  const queryClient = useQueryClient();
+  const [changed, setChanged] = useState(false);
+
+  // UR-23 without re-downloading every page: the counts poll; when they
+  // move, an operator still at the top just gets the new first page, and one
+  // scrolled deep is told and chooses when (their place is not yanked away).
+  const signature = queue
+    ? [queue.open, queue.unassigned, queue.mine, queue.pinned, queue.overdue].join("/")
+    : "";
+  const seen = useRef(signature);
+  const pagesLoaded = items.data?.pages.length ?? 0;
+  useEffect(() => {
+    if (!signature || signature === seen.current) return;
+    const first = seen.current === "";
+    seen.current = signature;
+    if (first) return;
+    if (pagesLoaded <= 1) void items.refetch();
+    else setChanged(true);
+  }, [signature, pagesLoaded, items]);
+
+  function refresh() {
+    setChanged(false);
+    void queryClient.resetQueries({ queryKey: queueItemsKey(queueKey, assigned) });
+  }
+
+  function setAssigned(value: Assignment) {
+    const next = new URLSearchParams(params);
+    if (value === "any") next.delete("assigned");
+    else next.set("assigned", value);
+    setParams(next, { replace: true });
+  }
 
   if (queues.isPending) {
     return (
@@ -41,24 +94,127 @@ export default function QueueScreen() {
       </div>
     );
   }
+
+  const rows = items.data?.pages.flatMap((page) => page.items) ?? [];
+  const refreshError = items.error ?? queues.error;
+
   return (
-    <div className="p-8">
-      {queues.isError && (
+    <div className="flex h-full flex-col gap-4 p-8">
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold">{queue.label}</h1>
+          <p className="tabular mt-1 text-md text-muted">
+            <span className="sr-only">Whole queue: </span>
+            {queue.open.toLocaleString("en-US")} open · {queue.unassigned.toLocaleString("en-US")}{" "}
+            unassigned · {queue.overdue.toLocaleString("en-US")} past SLA
+            {queue.pinned > 0 && (
+              <span className="font-semibold text-danger-strong">
+                {" "}
+                · {queue.pinned.toLocaleString("en-US")} at filing-deadline risk
+              </span>
+            )}
+          </p>
+        </div>
+        <fieldset className="flex items-center gap-1">
+          <legend className="sr-only">Show</legend>
+          {FILTERS.map((filter) => (
+            <button
+              key={filter.value}
+              type="button"
+              aria-pressed={assigned === filter.value}
+              onClick={() => {
+                setAssigned(filter.value);
+              }}
+              className={cn(
+                "h-7 cursor-pointer rounded-control border border-border-control px-3 text-md",
+                assigned === filter.value ? "bg-accent text-on-nav" : "bg-bg hover:bg-surface",
+              )}
+            >
+              {filter.label}
+            </button>
+          ))}
+        </fieldset>
+      </header>
+
+      {assigned !== "any" && queue.pinned > 0 && (
+        <p className="text-sm text-muted">
+          Counts above are for the whole queue. Items at filing-deadline risk are always listed,
+          whoever holds them (UR-03).
+        </p>
+      )}
+
+      {changed && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-4 rounded-panel border border-border bg-surface px-4 py-2 text-md"
+        >
+          <span>This queue has changed since you loaded it.</span>
+          <Button variant="secondary" size="sm" onClick={refresh}>
+            Refresh
+          </Button>
+        </div>
+      )}
+
+      {refreshError && items.data && (
         <StaleNotice
-          what="Queue counts"
-          error={queues.error}
-          onRetry={() => void queues.refetch()}
-          className="mb-4"
+          what="This queue"
+          error={refreshError}
+          onRetry={() => {
+            void queues.refetch();
+            void items.refetch();
+          }}
         />
       )}
-      <h1 className="text-xl font-semibold">{queue.label}</h1>
-      <p className="tabular mt-1 text-md text-muted">
-        {queue.open.toLocaleString("en-US")} open · {queue.unassigned.toLocaleString("en-US")}{" "}
-        unassigned · {queue.overdue.toLocaleString("en-US")} past SLA
-      </p>
-      <p className="mt-6 rounded-panel border border-border bg-surface p-4 text-md">
-        The item table for this queue arrives with the work queue screen (M5.3).
-      </p>
+
+      {/* SRS 10.8 PARTIAL / UR-34: the model is not there yet; the queue is. */}
+      {rows.length > 0 && rows.every((row) => row.recovery_probability == null) && (
+        <p className="text-sm text-muted">
+          P(rec) is unavailable for these items, so the queue is ordered by the rules-based
+          priority score.
+        </p>
+      )}
+
+      {items.isPending && <WorkQueueTableSkeleton />}
+      {items.isError && !items.data && (
+        <ErrorPanel
+          what="this queue's items"
+          error={items.error}
+          onRetry={() => void items.refetch()}
+        />
+      )}
+      {items.data && rows.length === 0 && (
+        <div className="rounded-panel border border-border bg-bg p-8 text-center text-md shadow-card">
+          {assigned === "any" ? (
+            <p>This queue is empty: nothing is waiting here.</p>
+          ) : (
+            <>
+              <p>
+                Nothing matches this filter. Items at filing-deadline risk would still show here
+                (UR-03).
+              </p>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="mt-3"
+                onClick={() => {
+                  setAssigned("any");
+                }}
+              >
+                Show all items
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+      {rows.length > 0 && (
+        <WorkQueueTable
+          items={rows}
+          label={`${queue.label} items, highest priority first`}
+          hasMore={items.hasNextPage && !items.isFetchNextPageError}
+          loadingMore={items.isFetchingNextPage}
+          onLoadMore={() => void items.fetchNextPage()}
+        />
+      )}
     </div>
   );
 }

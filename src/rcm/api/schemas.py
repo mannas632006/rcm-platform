@@ -9,6 +9,7 @@ float would have lost cents before it got there.
 from __future__ import annotations
 
 import uuid
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -73,3 +74,108 @@ class DeadlineRiskOut(_Out):
     charges: Decimal = Field(
         description="Billed charges of the claims at risk, as an exact decimal string to the cent."
     )
+
+
+class QueueItemOut(_Out):
+    """One row of a queue (S-02). Charges are billed charges, to the cent."""
+
+    work_item_id: uuid.UUID
+    kind: str
+    title: str
+    state: str
+    priority_score: int
+    deadline_pinned: bool = Field(description="PD-15: always first, never filtered out (UR-03).")
+    days_to_deadline: int | None
+    assigned_to: str | None
+    sla_due_at: datetime
+    overdue: bool
+    bulk_handling: bool
+    created_at: datetime
+    claim_id: uuid.UUID | None
+    submitter_claim_id: str | None
+    payer_id: str | None
+    payer_name: str | None
+    date_of_service: date | None
+    charges: Decimal | None
+    recovery_probability: float | None = Field(
+        default=None,
+        description="ML-3's P(recovery). Null until the model exists (M6): the UI "
+        "shows it as unavailable, never as zero (SRS 10.8 PARTIAL).",
+    )
+
+
+class QueueItemsPage(_Out):
+    items: list[QueueItemOut]
+    next_cursor: str | None = Field(description="Pass back as `cursor` for the next page.")
+
+
+#: A queue's item list can also refuse a queue or a cursor.
+QUEUE_ERRORS: dict[int | str, dict[str, Any]] = {
+    404: {"model": Problem, "description": "No such queue, or not one this role may see."},
+    422: {"model": Problem, "description": "A cursor, limit or filter that is not valid."},
+}
+
+
+# ---------------------------------------------------------------------------
+# INSIGHT and ADMIN (M5.9-M5.11, pulled forward)
+# ---------------------------------------------------------------------------
+
+
+class StateCount(_Out):
+    state: str
+    count: int
+
+
+class DashboardOut(_Out):
+    """KPIs for the signed-in operator's clients. Counts and rates only."""
+
+    adjudicated_claims: int
+    denied_claims: int
+    denial_rate: Decimal | None = Field(
+        description="Denied over adjudicated claims, per claim (BR-DATA-03), as a percentage."
+    )
+    first_pass_claims: int
+    first_pass_clean: int
+    first_pass_clean_rate: Decimal | None = Field(
+        description="First submissions neither rejected nor denied, as a percentage."
+    )
+    claims_by_state: list[StateCount]
+    open_work: int
+    pinned_work: int
+    overdue_work: int
+    steps_awaiting_review: int = Field(
+        description="Automatic claim steps waiting for the submitter's approval (ADR-0006)."
+    )
+
+
+class RuleOut(_Out):
+    rule_id: str
+    version: int
+    layer: str
+    severity: str
+    status: str
+    created_at: datetime
+    backtest_flagged: int | None
+    backtest_fp_rate: Decimal | None = Field(
+        description="False-positive rate of the latest backtest, 0-1; null when none has run."
+    )
+
+
+class RulesOut(_Out):
+    rules: list[RuleOut]
+
+
+class RegistryEntryOut(_Out):
+    payer_id: str
+    payer_name: str
+    plan_type: str
+    cpt: str
+    version: int
+    prior_auth_required: bool | None
+    last_verified_date: date
+    stale: bool = Field(description="Past [TBD-42]: cannot drive a BLOCKING decision (BR-REG-02).")
+
+
+class PayerRegistryOut(_Out):
+    entries: list[RegistryEntryOut]
+    staleness_days: int

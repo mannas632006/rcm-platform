@@ -1,12 +1,19 @@
+import { AlertTriangle, ArrowRight, Clock, Inbox, Layers, UserRound } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { useDeadlineRisk, useMe, useWorkQueues } from "@/api/queries";
 import type { QueueSummary } from "@/api/types";
 import { MoneyDisplay } from "@/components/domain/MoneyDisplay";
+import { StatCard, StatCardSkeleton, StatGrid } from "@/components/domain/StatCard";
+import { EmptyState } from "@/components/states/EmptyState";
 import { ErrorPanel } from "@/components/states/ErrorPanel";
+import { LoadStatus } from "@/components/states/LoadStatus";
 import { StaleNotice } from "@/components/states/StaleNotice";
 import { Button } from "@/components/ui/button";
+import { Card, CardHeader } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatCount } from "@/lib/format";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 /** The queue to jump into: deadline work first (PD-15), then the most overdue, then the biggest. */
@@ -16,40 +23,104 @@ function nextQueue(queues: QueueSummary[]): QueueSummary | undefined {
     .sort((a, b) => b.pinned - a.pinned || b.overdue - a.overdue || b.open - a.open)[0];
 }
 
-function Num({ value }: { value: number }) {
-  return <span className="tabular">{value.toLocaleString("en-US")}</span>;
+function greeting(now: Date): string {
+  const hour = now.getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
 }
+
+/** "ops.ana" -> "Ana": the readable part of the subject, for the greeting only. */
+function firstName(subject: string): string {
+  const part = subject.split(/[^A-Za-z]+/).filter(Boolean).at(-1) ?? "";
+  return part ? part.charAt(0).toUpperCase() + part.slice(1).toLowerCase() : "";
+}
+
+function Num({ value }: { value: number }) {
+  return <span className="tabular">{formatCount(value)}</span>;
+}
+
+function totals(queues: QueueSummary[]) {
+  return queues.reduce(
+    (sum, q) => ({
+      mine: sum.mine + q.mine,
+      unassigned: sum.unassigned + q.unassigned,
+      overdue: sum.overdue + q.overdue,
+      pinned: sum.pinned + q.pinned,
+    }),
+    { mine: 0, unassigned: 0, overdue: 0, pinned: 0 },
+  );
+}
+
+function Summary({ queues }: { queues: QueueSummary[] }) {
+  const t = totals(queues);
+  return (
+    <StatGrid title="Key figures">
+      <StatCard
+        label="Assigned to me"
+        icon={UserRound}
+        value={formatCount(t.mine)}
+        caption="Open items you hold"
+      />
+      <StatCard
+        label="Unassigned"
+        icon={Inbox}
+        value={formatCount(t.unassigned)}
+        caption="Waiting for someone to pick up"
+      />
+      <StatCard
+        label="Past SLA"
+        icon={Clock}
+        value={formatCount(t.overdue)}
+        caption="Open items past their SLA"
+        tone={t.overdue > 0 ? "warn" : "neutral"}
+      />
+      <StatCard
+        label="At deadline risk"
+        icon={AlertTriangle}
+        value={formatCount(t.pinned)}
+        caption="Pinned: filing deadline close"
+        tone={t.pinned > 0 ? "danger" : "neutral"}
+      />
+    </StatGrid>
+  );
+}
+
+const TH_NUM = "px-4 text-right font-semibold";
 
 function QueueTable({ queues }: { queues: QueueSummary[] }) {
   return (
     <table className="w-full border-collapse text-base">
       <caption className="sr-only">Open work in each queue you can see</caption>
       <thead>
-        <tr className="h-[var(--row-height)] border-b border-border bg-surface-alt text-left text-sm font-semibold">
-          <th scope="col" className="px-4">
+        <tr className="h-[var(--row-height)] border-b border-border bg-surface text-left text-sm text-muted">
+          <th scope="col" className="px-4 font-semibold">
             Queue
           </th>
-          <th scope="col" className="px-4 text-right">
+          <th scope="col" className={TH_NUM}>
             Open
           </th>
-          <th scope="col" className="px-4 text-right">
+          <th scope="col" className={TH_NUM}>
             Unassigned
           </th>
-          <th scope="col" className="px-4 text-right">
+          <th scope="col" className={TH_NUM}>
             Mine
           </th>
-          <th scope="col" className="px-4 text-right">
+          <th scope="col" className={TH_NUM}>
             Past SLA
           </th>
-          <th scope="col" className="px-4 text-right">
+          <th scope="col" className={TH_NUM}>
             Deadline risk
           </th>
         </tr>
       </thead>
       <tbody>
         {queues.map((q) => (
-          <tr key={q.key} className="h-[var(--row-height)] border-b border-border hover:bg-surface">
-            <th scope="row" className="px-4 text-left font-normal">
+          <tr
+            key={q.key}
+            className="h-[var(--row-height)] border-b border-border last:border-b-0 hover:bg-surface"
+          >
+            <th scope="row" className="px-4 text-left font-medium">
               <Link to={`/queues/${q.key}`} className="text-accent hover:underline">
                 {q.label}
               </Link>
@@ -63,10 +134,23 @@ function QueueTable({ queues }: { queues: QueueSummary[] }) {
             <td className="px-4 text-right">
               <Num value={q.mine} />
             </td>
-            <td className={q.overdue > 0 ? "px-4 text-right font-semibold text-warn-strong" : "px-4 text-right"}>
+            <td
+              className={
+                q.overdue > 0
+                  ? "px-4 text-right font-semibold text-warn-strong"
+                  : "px-4 text-right text-muted"
+              }
+            >
               <Num value={q.overdue} />
             </td>
-            <td className={q.pinned > 0 ? "px-4 text-right font-semibold text-danger" : "px-4 text-right"}>
+            <td
+              className={
+                q.pinned > 0 ? "px-4 text-right font-semibold text-danger" : "px-4 text-right text-muted"
+              }
+            >
+              {q.pinned > 0 && (
+                <AlertTriangle aria-hidden="true" className="mr-1 inline size-3 align-[-1px]" />
+              )}
               <Num value={q.pinned} />
             </td>
           </tr>
@@ -83,54 +167,85 @@ export default function HomeScreen() {
   const queues = useWorkQueues();
   const risk = useDeadlineRisk();
   const next = queues.data ? nextQueue(queues.data.queues) : undefined;
-  const mine = queues.data?.queues.reduce((sum, q) => sum + q.mine, 0) ?? 0;
+  const name = me.data ? firstName(me.data.subject) : "";
+  const mine = queues.data ? totals(queues.data.queues).mine : 0;
 
   return (
     <div className="flex flex-col gap-6 p-8">
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold">My Work</h1>
-          <p className="mt-1 text-md text-muted">
-            {me.data ? `Signed in as ${me.data.subject}` : " "}
-          </p>
-        </div>
-        {next && (
-          <Button asChild>
-            <Link to={`/queues/${next.key}`}>Start with {next.label}</Link>
-          </Button>
-        )}
-      </header>
+      <PageHeader
+        title="My Work"
+        description={
+          <>
+            {greeting(new Date())}
+            {name ? `, ${name}` : ""}.{" "}
+            {queues.data &&
+              (mine > 0 ? (
+                <>
+                  You hold <Num value={mine} /> open {mine === 1 ? "item" : "items"}.
+                </>
+              ) : (
+                "Nothing is assigned to you right now."
+              ))}
+          </>
+        }
+        actions={
+          next && (
+            <Button asChild>
+              <Link to={`/queues/${next.key}`}>
+                Start with {next.label}
+                <ArrowRight aria-hidden="true" className="size-4" />
+              </Link>
+            </Button>
+          )
+        }
+      />
 
       {risk.data && risk.data.claims > 0 && (
         <section
           aria-labelledby="risk-heading"
-          className="rounded-panel border border-danger bg-danger-soft p-4 text-danger-strong"
+          className="flex items-start gap-3 rounded-panel border border-danger bg-danger-soft p-4 text-danger-strong shadow-card"
         >
-          <h2 id="risk-heading" className="font-semibold">
-            Filing deadlines first
-          </h2>
-          <p className="mt-1 text-md">
-            <Num value={risk.data.claims} /> {risk.data.claims === 1 ? "claim" : "claims"} (
-            <MoneyDisplay amount={risk.data.charges} /> in charges) will miss the filing deadline
-            unless worked. These outrank every other item (PD-15).
-          </p>
+          <AlertTriangle aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+          <div>
+            <h2 id="risk-heading" className="font-semibold">
+              Filing deadlines first
+            </h2>
+            <p className="mt-1 text-md">
+              <Num value={risk.data.claims} /> {risk.data.claims === 1 ? "claim" : "claims"} (
+              <MoneyDisplay amount={risk.data.charges} /> in charges) will miss the filing
+              deadline unless worked. These outrank every other item (PD-15).
+            </p>
+          </div>
         </section>
       )}
 
-      <section aria-labelledby="queues-heading" className="rounded-panel border border-border">
-        <div className="flex items-center justify-between border-b border-border bg-surface px-4 py-3">
-          <h2 id="queues-heading" className="text-lg font-semibold">
-            Queues
-          </h2>
-          {queues.data && (
-            <p className="text-md text-muted">
-              <Num value={mine} /> assigned to you
-            </p>
-          )}
+      <LoadStatus
+        what="your work"
+        pending={queues.isPending}
+        failed={queues.isError && !queues.data}
+      />
+
+      {queues.isPending && (
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-4">
+          {Array.from({ length: 4 }, (_, i) => (
+            <StatCardSkeleton key={i} />
+          ))}
         </div>
+      )}
+      {queues.data && queues.data.queues.length > 0 && <Summary queues={queues.data.queues} />}
+
+      <Card aria-labelledby="queues-heading">
+        <CardHeader
+          id="queues-heading"
+          title="Queues"
+          description={
+            queues.data && queues.data.queues.length > 0
+              ? "Open work in each queue your role can see."
+              : undefined
+          }
+        />
         {queues.isPending && (
-          <div role="status" className="flex flex-col gap-2 p-4">
-            <span className="sr-only">Loading queues…</span>
+          <div className="flex flex-col gap-2 p-4">
             {Array.from({ length: 6 }, (_, i) => (
               <Skeleton key={i} className="h-[var(--row-height)]" />
             ))}
@@ -153,14 +268,14 @@ export default function HomeScreen() {
           />
         )}
         {queues.data?.queues.length === 0 && (
-          <p className="p-8 text-center text-md text-muted">
-            Your role has no work queues. Ask an administrator for the access your work needs.
-          </p>
+          <EmptyState icon={Layers} title="No work queues for your role">
+            Ask an administrator for the access your work needs.
+          </EmptyState>
         )}
         {queues.data && queues.data.queues.length > 0 && (
           <QueueTable queues={queues.data.queues} />
         )}
-      </section>
+      </Card>
     </div>
   );
 }

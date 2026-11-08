@@ -7,7 +7,7 @@ import { createQueryClient } from "@/api/queryClient";
 import { App } from "@/App";
 import { MoneyDisplay } from "@/components/domain/MoneyDisplay";
 import { currentToken, signIn, signOut } from "@/lib/session";
-import { ME, mockApi, queue, renderApp } from "@/test/render";
+import { expectNoHeadingSkips, ME, mockApi, queue, renderApp } from "@/test/render";
 
 const QUEUES = {
   queues: [
@@ -49,6 +49,14 @@ describe("deadline alert bar (UR-26)", () => {
     expect(region.queryByRole("button")).toBeNull();
   });
 
+  it("keeps My Work's headings in order: h1, h2 Key figures, h3 cards", async () => {
+    api();
+    renderApp(<App />);
+    await screen.findByRole("group", { name: "Assigned to me" });
+    expectNoHeadingSkips(document.getElementById("main") ?? document);
+    expect(screen.getByRole("heading", { level: 2, name: "Key figures" })).toBeInTheDocument();
+  });
+
   it("is absent when no claim is at risk", async () => {
     api();
     renderApp(<App />);
@@ -70,6 +78,26 @@ describe("deadline alert bar (UR-26)", () => {
     renderApp(<App />);
     expect(await screen.findByText("FILING DEADLINE CHECK UNAVAILABLE")).toBeInTheDocument();
     expect(screen.getByText(/Database unreachable/)).toBeInTheDocument();
+  });
+
+  it("is not shown, nor asked for, to a role that cannot read claims", async () => {
+    // An administrator holds no claim:read; asking would only earn a 403 that
+    // reads like an outage, for claims the role could never open anyway.
+    const fetchMock = mockApi({
+      "/api/v1/me": { body: { ...ME, permissions: ["report:read", "user:admin"] } },
+      "/api/v1/work-queues": { body: QUEUES },
+      "/api/v1/alerts/deadline-risk": { status: 403, body: { title: "Forbidden" } },
+    });
+    renderApp(<App />);
+    await screen.findByRole("navigation", { name: "Primary" });
+    await waitFor(() => {
+      expect(screen.queryByText("Checking filing deadlines…")).toBeNull();
+    });
+    expect(screen.queryByText("FILING DEADLINE CHECK UNAVAILABLE")).toBeNull();
+    const asked = fetchMock.mock.calls.some(([input]) =>
+      String(input instanceof Request ? input.url : input).includes("/alerts/deadline-risk"),
+    );
+    expect(asked).toBe(false);
   });
 
   it("keeps the last known count when a refresh fails, marked as out of date (SRS 10.8 PARTIAL)", async () => {
@@ -104,6 +132,54 @@ describe("sidebar", () => {
     // UR-25: deadline risk is said in words and a shape, not only a colour.
     expect(ar).toHaveTextContent("12 at filing-deadline risk");
     expect(within(nav).getByRole("link", { name: /My Work/ })).toHaveTextContent("5");
+  });
+
+  it("hides INSIGHT and ADMIN from a role without report:read or rule:read", async () => {
+    api();
+    renderApp(<App />);
+    const nav = await screen.findByRole("navigation", { name: "Primary" });
+    await within(nav).findByRole("link", { name: /AR Follow-up/ });
+    expect(within(nav).queryByText("INSIGHT")).toBeNull();
+    expect(within(nav).queryByText("ADMIN")).toBeNull();
+    expect(within(nav).queryByRole("link", { name: "Dashboard" })).toBeNull();
+    expect(within(nav).queryByRole("link", { name: "Rules" })).toBeNull();
+    expect(within(nav).queryByRole("link", { name: "Payer Registry" })).toBeNull();
+  });
+
+  it("shows INSIGHT and ADMIN to a role holding their permissions (SRS 10.4.0)", async () => {
+    mockApi({
+      "/api/v1/me": { body: { ...ME, permissions: ["claim:read", "report:read", "rule:read"] } },
+      "/api/v1/work-queues": { body: QUEUES },
+      "/api/v1/alerts/deadline-risk": { body: { claims: 0, charges: "0.00" } },
+    });
+    renderApp(<App />);
+    const nav = await screen.findByRole("navigation", { name: "Primary" });
+    const insight = await within(nav).findByRole("list", { name: "INSIGHT" });
+    expect(within(insight).getByRole("link", { name: "Dashboard" })).toHaveAttribute(
+      "href",
+      "/dashboard",
+    );
+    const admin = within(nav).getByRole("list", { name: "ADMIN" });
+    expect(within(admin).getByRole("link", { name: "Rules" })).toHaveAttribute(
+      "href",
+      "/admin/rules",
+    );
+    expect(within(admin).getByRole("link", { name: "Payer Registry" })).toHaveAttribute(
+      "href",
+      "/admin/payer-registry",
+    );
+  });
+
+  it("puts the loading status inside a list item, not on it", async () => {
+    api(undefined, "never");
+    renderApp(<App />);
+    const nav = await screen.findByRole("navigation", { name: "Primary" });
+    const status = within(nav).getByRole("status");
+    expect(status.tagName).toBe("DIV");
+    expect(status.parentElement?.tagName).toBe("LI");
+    for (const item of within(nav).getAllByRole("listitem")) {
+      expect(item).not.toHaveAttribute("role");
+    }
   });
 
   it("keeps cached counts when a refresh fails (SRS 10.8 PARTIAL)", async () => {

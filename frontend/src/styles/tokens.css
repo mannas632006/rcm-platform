@@ -45,6 +45,9 @@
   --warn-strong: #8a5212;
   --success: #2e7d52;
   --success-soft: #dcf0e4;
+  /* Text on --success-soft (chips): --success is 4.23:1 there, under AA.
+   * This darker green is 5.44:1 on --success-soft and 6.49:1 on --bg. */
+  --success-strong: #1f6b41;
 
   /* Focus: visible on every surface, including the nav bar (WCAG 2.4.7). */
   --focus: #2f6fa8;
@@ -60,11 +63,19 @@
   --fs-md: 14px;
   --fs-lg: 17px;
   --fs-xl: 20px;
+  /* KPI figures on stat cards only: one number read from across the desk.
+   * Not a heading size -- page titles stay --fs-xl. */
+  --fs-kpi: 26px;
 
   /* Radius -- SRS 10.3 */
   --radius-control: 4px;
   --radius-panel: 5px;
   --radius-chip: 11px;
+
+  /* Depth -- quiet, layered shadows so cards separate from the --surface
+   * page without heavier borders. Low alpha: depth, not decoration. */
+  --shadow-card: 0 1px 2px rgb(26 34 44 / 0.05), 0 1px 3px rgb(26 34 44 / 0.06);
+  --shadow-raised: 0 2px 4px rgb(26 34 44 / 0.06), 0 8px 20px rgb(26 34 44 / 0.08);
 
   /* Layout -- SRS 10.3 grid */
   --topbar-height: 52px;
