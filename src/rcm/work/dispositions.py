@@ -146,6 +146,24 @@ def _denied_share(session: Session, *, item: WorkItem, patient: bool) -> Decimal
     return Decimal(total if total is not None else 0).quantize(Decimal("0.01"))
 
 
+def appeal_in_draft(session: Session, *, item: WorkItem) -> bool:
+    """An appeal of this denial is drafted and not yet signed (ADR-0017):
+    one decision at a time, so nothing else is decided meanwhile."""
+    return (
+        session.scalar(
+            select(Appeal.appeal_id)
+            .outerjoin(AppealSignoff, AppealSignoff.appeal_id == Appeal.appeal_id)
+            .where(
+                Appeal.client_id == item.client_id,
+                Appeal.work_item_id == item.work_item_id,
+                AppealSignoff.appeal_id.is_(None),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
 def waiting_write_off(session: Session, *, item: WorkItem) -> WriteOff | None:
     return session.scalar(
         select(WriteOff)
@@ -179,15 +197,7 @@ def request_write_off(
             field="work_item_id",
             reason="the denied payment names no claim on file; find the claim first",
         )
-    if session.scalar(
-        select(Appeal.appeal_id)
-        .outerjoin(AppealSignoff, AppealSignoff.appeal_id == Appeal.appeal_id)
-        .where(
-            Appeal.client_id == item.client_id,
-            Appeal.work_item_id == item.work_item_id,
-            AppealSignoff.appeal_id.is_(None),
-        )
-    ):
+    if appeal_in_draft(session, item=item):
         # One decision at a time: an appeal of this denial is being drafted.
         raise StateTransitionError(
             source="appeal in draft",
