@@ -13,7 +13,9 @@ export type DeadlineRisk = Schemas["DeadlineRiskOut"];
 export type QueueItem = Schemas["QueueItemOut"];
 export type QueueItemsPage = Schemas["QueueItemsPage"];
 export type Assignment = NonNullable<
-  NonNullable<paths["/api/v1/work-queues/{queue_key}/items"]["get"]["parameters"]["query"]>["assigned"]
+  NonNullable<
+    paths["/api/v1/work-queues/{queue_key}/items"]["get"]["parameters"]["query"]
+  >["assigned"]
 >;
 export type Permission = Schemas["Permission"];
 export type Dashboard = Schemas["DashboardOut"];
@@ -39,3 +41,4 @@ export type CorrectionInput = Schemas["CorrectionIn"];
 export type CorrectionChange = Schemas["CorrectionChangeOut"];
 export type CorrectionPreview = Schemas["CorrectionPreviewOut"];
 export type CorrectionResult = Schemas["CorrectionOut"];
+export type OpenProblem = Schemas["OpenProblemOut"];
