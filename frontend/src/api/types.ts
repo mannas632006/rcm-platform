@@ -35,3 +35,7 @@ export type WriteOffSummary = Schemas["WriteOffSummaryOut"];
 export type WriteOffReason = Schemas["DispositionIn"]["reason"];
 export type WriteOffResult = Schemas["WriteOffOut"];
 export type Appeal = Schemas["AppealOut"];
+export type CorrectionInput = Schemas["CorrectionIn"];
+export type CorrectionChange = Schemas["CorrectionChangeOut"];
+export type CorrectionPreview = Schemas["CorrectionPreviewOut"];
+export type CorrectionResult = Schemas["CorrectionOut"];

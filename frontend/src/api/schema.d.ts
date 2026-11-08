@@ -148,6 +148,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/denials/{work_item_id}/correction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Correct a denied claim and send the replacement
+         * @description ADR-0018: a frequency-7 replacement chained to the denied claim
+         *     (PD-7), scrubbed and queued to send in one transaction. Needs an
+         *     Idempotency-Key; a retry resubmits once (PD-14).
+         */
+        post: operations["resubmitDenialCorrection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/denials/{work_item_id}/correction/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Show every field a correction would change, changing nothing
+         * @description UR-10: the field-level diff the operator reads before resubmitting.
+         */
+        post: operations["previewDenialCorrection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/denials/{work_item_id}/disposition": {
         parameters: {
             query?: never;
@@ -485,6 +527,59 @@ export interface components {
             /** Units */
             units: string;
         };
+        /** CorrectionChangeOut */
+        CorrectionChangeOut: {
+            /** After */
+            after: string;
+            /** Before */
+            before: string;
+            /** Field */
+            field: string;
+        };
+        /**
+         * CorrectionIn
+         * @description UR-10: what the operator changes. Charges are never edited here; an
+         *     omitted field is left as it is.
+         */
+        CorrectionIn: {
+            /** Diagnoses */
+            diagnoses?: string[] | null;
+            /** Lines */
+            lines?: components["schemas"]["LineCorrectionIn"][];
+            /** Member Id */
+            member_id?: string | null;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /**
+             * Prior Auth Number
+             * @description An empty string removes it.
+             */
+            prior_auth_number?: string | null;
+        };
+        /** CorrectionOut */
+        CorrectionOut: {
+            /** Changes */
+            changes: components["schemas"]["CorrectionChangeOut"][];
+            /**
+             * Claim Id
+             * Format: uuid
+             * @description The replacement claim, chained to the original.
+             */
+            claim_id: string;
+            /** Submitter Claim Id */
+            submitter_claim_id: string;
+        };
+        /** CorrectionPreviewOut */
+        CorrectionPreviewOut: {
+            /**
+             * Changes
+             * @description Every field the correction changes. Nothing is written.
+             */
+            changes: components["schemas"]["CorrectionChangeOut"][];
+        };
         /**
          * DashboardOut
          * @description KPIs for the signed-in operator's clients. Counts and rates only.
@@ -740,6 +835,22 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * LineCorrectionIn
+         * @description One service line's edits. An omitted field is left as it is.
+         */
+        LineCorrectionIn: {
+            /** Diagnosis Pointers */
+            diagnosis_pointers?: number[] | null;
+            /** Line Number */
+            line_number: number;
+            /** Modifiers */
+            modifiers?: string[] | null;
+            /** Procedure Code */
+            procedure_code?: string | null;
+            /** Units */
+            units?: number | string | null;
         };
         /**
          * Me
@@ -1526,6 +1637,148 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AppealOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such denial, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The claim is not denied, a write-off already waits, or another operator holds the item. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A reason or note that is not valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    resubmitDenialCorrection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CorrectionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrectionOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such denial, or not one in your clients. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The claim is not denied, a write-off already waits, or another operator holds the item. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A reason or note that is not valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    previewDenialCorrection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CorrectionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrectionPreviewOut"];
                 };
             };
             /** @description No valid bearer token. */

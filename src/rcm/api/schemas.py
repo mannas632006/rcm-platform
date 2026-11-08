@@ -485,3 +485,44 @@ class AppealSignIn(_In):
     version: int = Field(
         ge=1, description="The version the signer read; it must be the current one."
     )
+
+
+class LineCorrectionIn(_In):
+    """One service line's edits. An omitted field is left as it is."""
+
+    line_number: int = Field(ge=1)
+    procedure_code: str | None = Field(default=None, max_length=5)
+    modifiers: list[str] | None = Field(default=None, max_length=4)
+    units: Decimal | None = Field(default=None, gt=0, max_digits=7, decimal_places=3)
+    diagnosis_pointers: list[int] | None = Field(default=None, max_length=4)
+
+
+class CorrectionIn(_In):
+    """UR-10: what the operator changes. Charges are never edited here; an
+    omitted field is left as it is."""
+
+    member_id: str | None = Field(default=None, max_length=50)
+    prior_auth_number: str | None = Field(
+        default=None, max_length=50, description="An empty string removes it."
+    )
+    diagnoses: list[str] | None = Field(default=None, max_length=12)
+    lines: list[LineCorrectionIn] = Field(default_factory=list, max_length=50)
+    note: str = Field(default="", max_length=2000)
+
+
+class CorrectionChangeOut(_Out):
+    field: str
+    before: str
+    after: str
+
+
+class CorrectionPreviewOut(_Out):
+    changes: list[CorrectionChangeOut] = Field(
+        description="Every field the correction changes. Nothing is written."
+    )
+
+
+class CorrectionOut(_Out):
+    claim_id: uuid.UUID = Field(description="The replacement claim, chained to the original.")
+    submitter_claim_id: str
+    changes: list[CorrectionChangeOut]

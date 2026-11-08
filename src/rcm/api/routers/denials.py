@@ -20,6 +20,10 @@ from rcm.api.schemas import (
     AppealOut,
     AppealRevisionIn,
     AppealSignIn,
+    CorrectionChangeOut,
+    CorrectionIn,
+    CorrectionOut,
+    CorrectionPreviewOut,
     DenialWorkbenchOut,
     DispositionIn,
     PatientShareIn,
@@ -29,6 +33,8 @@ from rcm.api.schemas import (
     WriteOffOut,
 )
 from rcm.platform.auth import Permission
+from rcm.platform.config import get_settings
+from rcm.submission import corrections
 from rcm.work import appeals, denial_workbench, dispositions
 from rcm.work.models import WriteOffReason
 
@@ -195,3 +201,85 @@ def sign_appeal(
         now=datetime.now(UTC),
     )
     return AppealOut.model_validate(view, from_attributes=True)
+
+
+def _correction(body: CorrectionIn) -> corrections.Correction:
+    return corrections.Correction(
+        member_id=body.member_id,
+        prior_auth_number=body.prior_auth_number,
+        diagnoses=None if body.diagnoses is None else tuple(body.diagnoses),
+        lines=tuple(
+            corrections.LineCorrection(
+                line_number=line.line_number,
+                procedure_code=line.procedure_code,
+                modifiers=None if line.modifiers is None else tuple(line.modifiers),
+                units=line.units,
+                diagnosis_pointers=(
+                    None if line.diagnosis_pointers is None else tuple(line.diagnosis_pointers)
+                ),
+            )
+            for line in body.lines
+        ),
+    )
+
+
+def _changes(
+    changes: list[corrections.Change] | tuple[corrections.Change, ...],
+) -> list[CorrectionChangeOut]:
+    return [CorrectionChangeOut(field=c.field, before=c.before, after=c.after) for c in changes]
+
+
+@router.post(
+    "/denials/{work_item_id}/correction/preview",
+    operation_id="previewDenialCorrection",
+    summary="Show every field a correction would change, changing nothing",
+    responses=DISPOSITION_ERRORS,
+    dependencies=[require_permission(Permission.DENIAL_DISPOSITION)],
+)
+def preview_correction(
+    work_item_id: uuid.UUID,
+    body: CorrectionIn,
+    principal: CurrentPrincipal,
+    session: AuditedSession,
+) -> CorrectionPreviewOut:
+    """UR-10: the field-level diff the operator reads before resubmitting."""
+    changes = corrections.preview(
+        session,
+        principal=principal,
+        work_item_id=work_item_id,
+        correction=_correction(body),
+        archive_root=get_settings().raw_archive_root,
+    )
+    return CorrectionPreviewOut(changes=_changes(changes))
+
+
+@router.post(
+    "/denials/{work_item_id}/correction",
+    operation_id="resubmitDenialCorrection",
+    summary="Correct a denied claim and send the replacement",
+    responses=DISPOSITION_ERRORS,
+    dependencies=[require_permission(Permission.DENIAL_DISPOSITION)],
+)
+def resubmit_correction(
+    work_item_id: uuid.UUID,
+    body: CorrectionIn,
+    principal: CurrentPrincipal,
+    session: AuditedSession,
+) -> CorrectionOut:
+    """ADR-0018: a frequency-7 replacement chained to the denied claim
+    (PD-7), scrubbed and queued to send in one transaction. Needs an
+    Idempotency-Key; a retry resubmits once (PD-14)."""
+    done = corrections.resubmit(
+        session,
+        principal=principal,
+        work_item_id=work_item_id,
+        correction=_correction(body),
+        archive_root=get_settings().raw_archive_root,
+        now=datetime.now(UTC),
+        note=body.note,
+    )
+    return CorrectionOut(
+        claim_id=done.claim_id,
+        submitter_claim_id=done.submitter_claim_id,
+        changes=_changes(done.changes),
+    )

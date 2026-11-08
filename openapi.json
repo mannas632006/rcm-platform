@@ -390,6 +390,136 @@
         "title": "ClaimLineOut",
         "type": "object"
       },
+      "CorrectionChangeOut": {
+        "properties": {
+          "after": {
+            "title": "After",
+            "type": "string"
+          },
+          "before": {
+            "title": "Before",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "before",
+          "after"
+        ],
+        "title": "CorrectionChangeOut",
+        "type": "object"
+      },
+      "CorrectionIn": {
+        "additionalProperties": false,
+        "description": "UR-10: what the operator changes. Charges are never edited here; an\nomitted field is left as it is.",
+        "properties": {
+          "diagnoses": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 12,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diagnoses"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/LineCorrectionIn"
+            },
+            "maxItems": 50,
+            "title": "Lines",
+            "type": "array"
+          },
+          "member_id": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Member Id"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Note",
+            "type": "string"
+          },
+          "prior_auth_number": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "An empty string removes it.",
+            "title": "Prior Auth Number"
+          }
+        },
+        "title": "CorrectionIn",
+        "type": "object"
+      },
+      "CorrectionOut": {
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionChangeOut"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "claim_id": {
+            "description": "The replacement claim, chained to the original.",
+            "format": "uuid",
+            "title": "Claim Id",
+            "type": "string"
+          },
+          "submitter_claim_id": {
+            "title": "Submitter Claim Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_id",
+          "submitter_claim_id",
+          "changes"
+        ],
+        "title": "CorrectionOut",
+        "type": "object"
+      },
+      "CorrectionPreviewOut": {
+        "properties": {
+          "changes": {
+            "description": "Every field the correction changes. Nothing is written.",
+            "items": {
+              "$ref": "#/components/schemas/CorrectionChangeOut"
+            },
+            "title": "Changes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "changes"
+        ],
+        "title": "CorrectionPreviewOut",
+        "type": "object"
+      },
       "DashboardOut": {
         "description": "KPIs for the signed-in operator's clients. Counts and rates only.",
         "properties": {
@@ -989,6 +1119,79 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "LineCorrectionIn": {
+        "additionalProperties": false,
+        "description": "One service line's edits. An omitted field is left as it is.",
+        "properties": {
+          "diagnosis_pointers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "maxItems": 4,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diagnosis Pointers"
+          },
+          "line_number": {
+            "minimum": 1.0,
+            "title": "Line Number",
+            "type": "integer"
+          },
+          "modifiers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 4,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Modifiers"
+          },
+          "procedure_code": {
+            "anyOf": [
+              {
+                "maxLength": 5,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Code"
+          },
+          "units": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Units"
+          }
+        },
+        "required": [
+          "line_number"
+        ],
+        "title": "LineCorrectionIn",
         "type": "object"
       },
       "Me": {
@@ -2546,6 +2749,204 @@
           }
         ],
         "summary": "Open a denial's appeal: its draft, or a new one",
+        "tags": [
+          "denials"
+        ]
+      }
+    },
+    "/api/v1/denials/{work_item_id}/correction": {
+      "post": {
+        "description": "ADR-0018: a frequency-7 replacement chained to the denied claim\n(PD-7), scrubbed and queued to send in one transaction. Needs an\nIdempotency-Key; a retry resubmits once (PD-14).",
+        "operationId": "resubmitDenialCorrection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Work Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorrectionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such denial, or not one in your clients."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The claim is not denied, a write-off already waits, or another operator holds the item."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A reason or note that is not valid."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Correct a denied claim and send the replacement",
+        "tags": [
+          "denials"
+        ]
+      }
+    },
+    "/api/v1/denials/{work_item_id}/correction/preview": {
+      "post": {
+        "description": "UR-10: the field-level diff the operator reads before resubmitting.",
+        "operationId": "previewDenialCorrection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Work Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorrectionPreviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such denial, or not one in your clients."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The claim is not denied, a write-off already waits, or another operator holds the item."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A reason or note that is not valid."
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Show every field a correction would change, changing nothing",
         "tags": [
           "denials"
         ]
