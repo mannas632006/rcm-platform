@@ -16,7 +16,8 @@ import base64
 import binascii
 import json
 import uuid
-from collections.abc import Sequence
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -26,6 +27,7 @@ from typing import Final, cast
 from sqlalchemy import and_, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
+from rcm.decision import scoring
 from rcm.domain.claim import Claim
 from rcm.domain.payer import Payer
 from rcm.platform.auth import Permission, Principal, scoped_query
@@ -223,6 +225,8 @@ class QueueItem:
     payer_name: str | None
     date_of_service: date | None
     charges: Decimal | None
+    #: ML-3. None when the model gave none: shown as unavailable, never 0.
+    recovery_probability: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +234,8 @@ class QueuePage:
     items: list[QueueItem]
     #: Opaque; pass back for the next page. None on the last page.
     next_cursor: str | None
+    #: UR-34: why this page carries no model scores, or None if it does.
+    recovery_unavailable: str | None = None
 
 
 MAX_PAGE: Final = 500
@@ -269,7 +275,7 @@ def _decode(cursor: str) -> tuple[object, ...]:
         raise refused from None
 
 
-def _item(row: Sequence[object], now: datetime) -> QueueItem:
+def _item(row: Sequence[object], now: datetime, recovery: Mapping[uuid.UUID, float]) -> QueueItem:
     """One result row: the item, its claim's columns, then the sort keys."""
     item = cast("WorkItem", row[0])
     charge = cast("Decimal | None", row[5])
@@ -292,6 +298,7 @@ def _item(row: Sequence[object], now: datetime) -> QueueItem:
         payer_name=cast("str | None", row[3]),
         date_of_service=cast("date | None", row[4]),
         charges=charge.quantize(_CENT) if charge is not None else None,
+        recovery_probability=recovery.get(item.claim_id) if item.claim_id else None,
     )
 
 
@@ -361,6 +368,27 @@ def queue_items(
         scoped_query(statement, WorkItem, principal).order_by(*order).limit(limit + 1)
     ).all()
     page = rows[:limit]
-    items = [_item(row, now) for row in page]
+    recovery, unavailable = _recovery(session, page)
+    items = [_item(row, now, recovery) for row in page]
     next_cursor = _encode(tuple(rows[limit - 1])[6:]) if len(rows) > limit else None
-    return QueuePage(items=items, next_cursor=next_cursor)
+    return QueuePage(items=items, next_cursor=next_cursor, recovery_unavailable=unavailable)
+
+
+def _recovery(
+    session: Session, page: Sequence[Sequence[object]]
+) -> tuple[dict[uuid.UUID, float], str | None]:
+    """UR-34: the page's model scores, or why there are none. The queue is
+    ordered and worked on rules alone, so a missing score costs a column,
+    never the page."""
+    claims: dict[uuid.UUID, list[uuid.UUID]] = defaultdict(list)
+    for row in page:
+        item = cast("WorkItem", row[0])
+        if item.claim_id is not None:
+            claims[item.client_id].append(item.claim_id)
+    values: dict[uuid.UUID, float] = {}
+    unavailable = None if scoring.deployed() else scoring.NOT_DEPLOYED
+    for client_id, claim_ids in claims.items():
+        scores = scoring.recovery_scores(session, client_id=client_id, claim_ids=claim_ids)
+        unavailable = scores.unavailable or unavailable
+        values.update(scores.values)
+    return values, unavailable

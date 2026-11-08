@@ -107,6 +107,11 @@ class QueueItemOut(_Out):
 class QueueItemsPage(_Out):
     items: list[QueueItemOut]
     next_cursor: str | None = Field(description="Pass back as `cursor` for the next page.")
+    recovery_unavailable: str | None = Field(
+        default=None,
+        description="UR-34 PARTIAL: why this page carries no P(recovery), or null when the "
+        "model answered. The queue is ordered on rules alone either way.",
+    )
 
 
 #: A queue's item list can also refuse a queue or a cursor.
