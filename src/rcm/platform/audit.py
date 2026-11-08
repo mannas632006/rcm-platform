@@ -124,7 +124,7 @@ class AuditEvent(Base):
     event_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     actor_type: Mapped[str] = mapped_column(String(16), nullable=False)
     actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(255), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
     entity_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     before_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

@@ -95,6 +95,8 @@ class Settings(BaseSettings):
     outcome_maturity_days: int = Field(default=180)
     timely_filing_escalation_days: int = Field(default=14)
     preventable_denial_defect_threshold: int = Field(default=3)
+    #: TBD-48 (BR-M11-05). Placeholder 0.00 -- see placeholders.py.
+    write_off_approval_threshold: Decimal = Field(default=Decimal("0.00"), ge=0)
     # M3.5. No specification gives exception SLAs or a trend threshold;
     # these are labelled placeholders, keyed by ExceptionCategory.
     exception_sla_hours: dict[str, int] = Field(

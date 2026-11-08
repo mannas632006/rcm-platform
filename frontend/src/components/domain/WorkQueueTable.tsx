@@ -176,7 +176,16 @@ const QueueRow = memo(function QueueRow({ item, index, start, today }: QueueRowP
             style={{ transform: `translateY(${String(start)}px)` }}
           >
             <span role="cell" className="truncate" title={item.title}>
-              {item.title}
+              {item.kind === "DENIAL" ? (
+                <Link
+                  to={`/denials/${item.work_item_id}`}
+                  className="text-accent underline-offset-2 hover:underline"
+                >
+                  {item.title}
+                </Link>
+              ) : (
+                item.title
+              )}
             </span>
             <span role="cell" className="tabular truncate">
               {item.claim_id && item.submitter_claim_id ? (

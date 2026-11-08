@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { hasPermission } from "@/lib/permissions";
 
@@ -6,12 +6,15 @@ import { api, unwrap } from "./client";
 import type {
   Assignment,
   ClaimDetail,
+  DenialWorkbench,
   Dashboard,
   DeadlineRisk,
   Me,
   PayerRegistry,
   QueueItemsPage,
   RulesList,
+  WriteOffReason,
+  WriteOffResult,
   WorkQueues,
 } from "./types";
 
@@ -30,6 +33,7 @@ export const keys = {
   rules: ["rules"] as const,
   payerRegistry: ["payer-registry"] as const,
   claim: (claimId: string) => ["claims", claimId] as const,
+  denial: (workItemId: string) => ["denials", workItemId] as const,
 };
 
 export function useMe() {
@@ -130,5 +134,78 @@ export function useClaim(claimId: string) {
         await api.GET("/api/v1/claims/{claim_id}", { params: { path: { claim_id: claimId } } }),
       ),
     refetchInterval: QUEUE_POLL_MS,
+  });
+}
+
+/** S-04. Polls with the queues: another operator may resolve the denial. */
+export function useDenial(workItemId: string) {
+  return useQuery({
+    queryKey: keys.denial(workItemId),
+    queryFn: async (): Promise<DenialWorkbench> =>
+      unwrap(
+        await api.GET("/api/v1/denials/{work_item_id}", {
+          params: { path: { work_item_id: workItemId } },
+        }),
+      ),
+    refetchInterval: QUEUE_POLL_MS,
+  });
+}
+
+/**
+ * S-04 write-off. The caller makes one Idempotency-Key per decision and
+ * reuses it on retry, so a retried click writes off once (PD-14).
+ */
+export function useWriteOff(workItemId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      reason: WriteOffReason;
+      note: string;
+      idempotencyKey: string;
+    }): Promise<WriteOffResult> =>
+      unwrap(
+        await api.POST("/api/v1/denials/{work_item_id}/disposition", {
+          params: { path: { work_item_id: workItemId } },
+          body: { action: "WRITE_OFF", reason: input.reason, note: input.note },
+          headers: { "Idempotency-Key": input.idempotencyKey },
+        }),
+      ),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
+  });
+}
+
+/** BR-M11-05: a named approver's decision on a waiting write-off. */
+export function useDecideWriteOff(workItemId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      writeOffId: string;
+      approve: boolean;
+      idempotencyKey: string;
+    }) =>
+      unwrap(
+        await api.POST("/api/v1/write-offs/{write_off_id}/decision", {
+          params: { path: { write_off_id: input.writeOffId } },
+          body: { approve: input.approve, note: "" },
+          headers: { "Idempotency-Key": input.idempotencyKey },
+        }),
+      ),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
+  });
+}
+
+/** ADR-0016: bill a denial's PR share to the patient; never a CO amount (PD-19). */
+export function useBillPatient(workItemId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { idempotencyKey: string }) =>
+      unwrap(
+        await api.POST("/api/v1/denials/{work_item_id}/patient-responsibility", {
+          params: { path: { work_item_id: workItemId } },
+          body: { note: "" },
+          headers: { "Idempotency-Key": input.idempotencyKey },
+        }),
+      ),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.denial(workItemId) }),
   });
 }

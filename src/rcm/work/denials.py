@@ -23,10 +23,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from rcm.decision import denials, feedback
+from rcm.decision.denial_models import DenialClassification
+from rcm.domain.claim import Claim
+from rcm.domain.remittance import ClaimPayment
 from rcm.platform.audit import DecisionType, record_decision
 from rcm.platform.errors import ValidationFailedError
 from rcm.platform.logging import get_logger
 from rcm.work import exceptions
+from rcm.work.denial_workbench import DENIAL_KEY
 from rcm.work.models import WorkItem, WorkItemKind
 from rcm.work.state import OPEN_STATES
 
@@ -132,11 +136,75 @@ def classify_and_route(session: Session, *, client_id: uuid.UUID, now: datetime)
             source_key=f"{_UNTRACED_KEY}{denials.TAXONOMY_VERSION}:{untraced.service_line_id}",
             now=now,
         )
+    for claim_payment_id in report.newly_classified:
+        _raise_denial(session, client_id=client_id, claim_payment_id=claim_payment_id, now=now)
     session.flush()
     log.info(
         "denials.routed",
         unmapped=len(report.unmapped),
         rules_failed=len(answered.failed),
         untraced=len(answered.untraced),
+        denials=len(report.newly_classified),
     )
     return DenialRun(classification=report, feedback=answered)
+
+
+def _raise_denial(
+    session: Session, *, client_id: uuid.UUID, claim_payment_id: uuid.UUID, now: datetime
+) -> None:
+    """S-04: put a newly denied claim in the Denial Workbench, once.
+
+    Raised from the run that first classifies it (`newly_classified`), so a
+    denial a person has worked does not come back. The title names the codes
+    -- group and reason together (PD-3) -- never the patient.
+    """
+    source_key = f"{DENIAL_KEY}{claim_payment_id}"
+    if session.scalar(
+        select(WorkItem.work_item_id).where(
+            WorkItem.client_id == client_id,
+            WorkItem.kind == str(WorkItemKind.DENIAL),
+            WorkItem.source_key == source_key,
+        )
+    ):
+        # Ever raised -- open or finished. A payment classified afresh (a new
+        # taxonomy version) must not bring back a denial a person worked.
+        return
+    payment = session.scalar(
+        select(ClaimPayment).where(
+            ClaimPayment.client_id == client_id,
+            ClaimPayment.claim_payment_id == claim_payment_id,
+        )
+    )
+    if payment is None:  # classified in this transaction; cannot vanish
+        raise ValidationFailedError(field="claim_payment_id", reason="no such claim payment")
+    codes = sorted(
+        set(
+            session.execute(
+                select(DenialClassification.cas_group_code, DenialClassification.carc_code).where(
+                    DenialClassification.client_id == client_id,
+                    DenialClassification.claim_payment_id == claim_payment_id,
+                    DenialClassification.taxonomy_version == denials.TAXONOMY_VERSION,
+                )
+            ).all()
+        )
+    )
+    claim_uuid = session.scalar(
+        select(Claim.claim_id).where(
+            Claim.client_id == client_id, Claim.submitter_claim_id == payment.claim_id
+        )
+    )
+    exceptions.raise_exception(
+        session,
+        client_id=client_id,
+        kind=WorkItemKind.DENIAL,
+        problem=(
+            f"Payer denied {', '.join(f'{g}-{c}' for g, c in codes)}: decide whether to "
+            "correct, appeal, bill the patient or write off"
+        ),
+        record=exceptions.RecordRef("claim_payment", claim_payment_id),
+        source_key=source_key,
+        now=now,
+        # None when the 835 names a claim this client never submitted; the
+        # item is still raised, and a person finds the claim (PD-18).
+        claim_id=claim_uuid,
+    )

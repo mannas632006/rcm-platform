@@ -1309,6 +1309,7 @@ stateDiagram-v2
     Denied --> Appealing
     Denied --> Correcting
     Denied --> WrittenOff
+    Denied --> PatientBalance: PR share only (ADR-0016)
     Correcting --> Charged
     Appealing --> Paid
     Appealing --> Denied

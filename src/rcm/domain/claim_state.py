@@ -108,6 +108,9 @@ class Guard(StrEnum):
     AUTH_NOT_REQUIRED = "auth_not_required"
     SECONDARY_COVERAGE_EXISTS = "secondary_coverage_exists"
     NO_SECONDARY_COVERAGE = "no_secondary_coverage"
+    #: The denied lines carry a patient-responsibility (PR) amount. Only
+    #: that amount may follow a denial to the patient (ADR-0016, PD-19).
+    PATIENT_SHARE_DENIED = "patient_share_denied"
 
 
 #: Guards that are each other's negation. A context satisfying one must not
@@ -189,6 +192,14 @@ TRANSITIONS: Final[tuple[Transition, ...]] = (
     Transition(ClaimState.DENIED, ClaimState.APPEALING, "appeal submitted"),
     Transition(ClaimState.DENIED, ClaimState.CORRECTING, "denial is correctable"),
     Transition(ClaimState.DENIED, ClaimState.WRITTEN_OFF, "not worth pursuing"),
+    #: ADR-0016 (owner, 2026-11-06): the payer's refusal is accepted and the
+    #: patient is billed their PR share; the CO amount is never theirs.
+    Transition(
+        ClaimState.DENIED,
+        ClaimState.PATIENT_BALANCE,
+        "denied amount is the patient's",
+        Guard.PATIENT_SHARE_DENIED,
+    ),
     Transition(ClaimState.CORRECTING, ClaimState.CHARGED, "corrected for resubmission"),
     Transition(ClaimState.APPEALING, ClaimState.PAID, "appeal succeeded"),
     Transition(ClaimState.APPEALING, ClaimState.DENIED, "appeal failed"),
