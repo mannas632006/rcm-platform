@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from rcm.analytics.denials import denial_rate, denied_submitter_claim_ids
 from rcm.decision.registry import is_stale
 from rcm.decision.registry_models import PayerRegistryEntry
+from rcm.decision.rules import lifecycle
 from rcm.decision.rules.models import RuleBacktest, RuleVersion
 from rcm.domain.acknowledgement import (
     AcknowledgementOutcome,
@@ -162,6 +163,9 @@ class RuleRow:
     created_at: datetime
     backtest_flagged: int | None
     backtest_fp_rate: Decimal | None
+    #: UR-30: where Promote would take this version, and why it cannot yet.
+    next_status: str | None
+    promotion_blocked_by: str | None
 
 
 def _deciding(backtests: list[RuleBacktest]) -> RuleBacktest | None:
@@ -226,6 +230,9 @@ def rules(session: Session, *, principal: Principal) -> list[RuleRow]:
     out: list[RuleRow] = []
     for rule in versions:
         backtest = _deciding(per_client.get((rule.rule_id, rule.version), []))
+        # Promotion is judged on every client's evidence, as the step itself
+        # is: a rule switched on is switched on for all of them.
+        step = lifecycle.promotion(session, row=rule)
         out.append(
             RuleRow(
                 rule_id=rule.rule_id,
@@ -236,6 +243,8 @@ def rules(session: Session, *, principal: Principal) -> list[RuleRow]:
                 created_at=rule.created_at,
                 backtest_flagged=backtest.flagged if backtest else None,
                 backtest_fp_rate=backtest.fp_rate if backtest else None,
+                next_status=str(step.to) if step.to is not None else None,
+                promotion_blocked_by=step.blocked_by,
             )
         )
     return out

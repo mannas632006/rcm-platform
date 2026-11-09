@@ -10,6 +10,8 @@ export const PERSONAS = {
   ar: { role: "AR_SPECIALIST", subject: "ops.ana" },
   denials: { role: "DENIAL_SPECIALIST", subject: "den.dana" },
   manager: { role: "OPERATIONS_MANAGER", subject: "ops.omar" },
+  // The only role that sees Promote (rule:promote, M4.5).
+  author: { role: "RULES_AUTHOR", subject: "rules.rita" },
 } as const;
 export type Persona = keyof typeof PERSONAS;
 

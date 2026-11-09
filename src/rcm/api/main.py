@@ -20,7 +20,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from rcm.api.routers import claims, denials, insight, shell, work_items
+from rcm.api.routers import claims, denials, insight, rules, shell, work_items
 from rcm.platform.config import Settings, get_settings
 from rcm.platform.errors import PlatformError
 from rcm.platform.idempotency import IdempotencyMiddleware
@@ -144,6 +144,7 @@ def create_app() -> FastAPI:
 
     app.include_router(shell.router)
     app.include_router(insight.router)
+    app.include_router(rules.router)
     app.include_router(claims.router)
     app.include_router(denials.router)
     app.include_router(work_items.router)

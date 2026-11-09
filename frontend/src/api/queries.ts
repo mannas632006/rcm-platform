@@ -22,7 +22,9 @@ import type {
   Me,
   PayerRegistry,
   PlainOutcome,
+  PromotableStatus,
   QueueItemsPage,
+  RulePromotion,
   RulesList,
   WriteOffReason,
   WriteOffResult,
@@ -135,6 +137,29 @@ export function useRules() {
     queryKey: keys.rules,
     queryFn: async (): Promise<RulesList> =>
       unwrap(await api.GET("/api/v1/rules")),
+  });
+}
+
+/** S-06 Promote (M5.9): one named step; the list is re-read either way,
+ * so a refusal shows the reason the lifecycle gives now (UR-30). */
+export function usePromoteRule() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      ruleId: string;
+      version: number;
+      to: PromotableStatus;
+      reason: string;
+      idempotencyKey: string;
+    }): Promise<RulePromotion> =>
+      unwrap(
+        await api.POST("/api/v1/rules/{rule_id}/activate", {
+          params: { path: { rule_id: input.ruleId } },
+          body: { version: input.version, to_status: input.to, reason: input.reason },
+          headers: { "Idempotency-Key": input.idempotencyKey },
+        }),
+      ),
+    onSettled: () => client.invalidateQueries({ queryKey: keys.rules }),
   });
 }
 

@@ -305,11 +305,35 @@ export interface paths {
         };
         /**
          * Rules, latest version each
-         * @description Each rule's latest version, status and latest backtest (M4.4-M4.6).
+         * @description Each rule's latest version, status and latest backtest (M4.4-M4.6),
+         *     with where Promote would take it and why it cannot yet (UR-30).
          */
         get: operations["listRules"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/{rule_id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote a rule version one step
+         * @description FR-RULES-06: draft -> backtest -> shadow -> advisory -> blocking, no
+         *     shortcuts. Into SHADOW needs a recorded backtest; into BLOCKING needs a
+         *     blocking severity and every client's false-positive rate within the cap
+         *     (FR-RULES-03). A refusal says which (UR-30).
+         */
+        post: operations["promoteRule"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1276,6 +1300,16 @@ export interface components {
             created_at: string;
             /** Layer */
             layer: string;
+            /**
+             * Next Status
+             * @description Where Promote would take this version (S-06); null once BLOCKING or DEPRECATED.
+             */
+            next_status: string | null;
+            /**
+             * Promotion Blocked By
+             * @description UR-30: why promotion would be refused now, judged on every client's backtests as the step itself is. Null when it would be taken.
+             */
+            promotion_blocked_by: string | null;
             /** Rule Id */
             rule_id: string;
             /** Severity */
@@ -1285,8 +1319,45 @@ export interface components {
             /** Version */
             version: number;
         };
+        /**
+         * RulePromoteIn
+         * @description S-06 Promote: one step along FR-RULES-06's path, named so a stale
+         *     screen cannot promote twice.
+         */
+        RulePromoteIn: {
+            /** Reason */
+            reason: string;
+            /**
+             * To Status
+             * @enum {string}
+             */
+            to_status: "BACKTESTING" | "SHADOW" | "ADVISORY" | "BLOCKING";
+            /** Version */
+            version: number;
+        };
+        /** RulePromotionOut */
+        RulePromotionOut: {
+            /**
+             * Fp Rate
+             * @description The false-positive rate the step rested on, for SHADOW and BLOCKING.
+             */
+            fp_rate: string | null;
+            /** From Status */
+            from_status: string;
+            /** Rule Id */
+            rule_id: string;
+            /** To Status */
+            to_status: string;
+            /** Version */
+            version: number;
+        };
         /** RulesOut */
         RulesOut: {
+            /**
+             * Fp Rate Cap
+             * @description FR-RULES-03 / TBD-45: a rule above this false-positive rate may not be BLOCKING.
+             */
+            fp_rate_cap: string;
             /** Rules */
             rules: components["schemas"]["RuleOut"][];
         };
@@ -2313,6 +2384,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    promoteRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RulePromoteIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulePromotionOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such rule version. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The step is not the version's next promotion, or the lifecycle refuses it: no backtest, an unmeasured or too-high false-positive rate, a severity that never blocks, or another version already live. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

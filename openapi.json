@@ -2024,6 +2024,30 @@
             "title": "Layer",
             "type": "string"
           },
+          "next_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where Promote would take this version (S-06); null once BLOCKING or DEPRECATED.",
+            "title": "Next Status"
+          },
+          "promotion_blocked_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "UR-30: why promotion would be refused now, judged on every client's backtests as the step itself is. Null when it would be taken.",
+            "title": "Promotion Blocked By"
+          },
           "rule_id": {
             "title": "Rule Id",
             "type": "string"
@@ -2049,13 +2073,95 @@
           "status",
           "created_at",
           "backtest_flagged",
-          "backtest_fp_rate"
+          "backtest_fp_rate",
+          "next_status",
+          "promotion_blocked_by"
         ],
         "title": "RuleOut",
         "type": "object"
       },
+      "RulePromoteIn": {
+        "additionalProperties": false,
+        "description": "S-06 Promote: one step along FR-RULES-06's path, named so a stale\nscreen cannot promote twice.",
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "to_status": {
+            "enum": [
+              "BACKTESTING",
+              "SHADOW",
+              "ADVISORY",
+              "BLOCKING"
+            ],
+            "title": "To Status",
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "to_status",
+          "reason"
+        ],
+        "title": "RulePromoteIn",
+        "type": "object"
+      },
+      "RulePromotionOut": {
+        "properties": {
+          "fp_rate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The false-positive rate the step rested on, for SHADOW and BLOCKING.",
+            "title": "Fp Rate"
+          },
+          "from_status": {
+            "title": "From Status",
+            "type": "string"
+          },
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "to_status": {
+            "title": "To Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rule_id",
+          "version",
+          "from_status",
+          "to_status",
+          "fp_rate"
+        ],
+        "title": "RulePromotionOut",
+        "type": "object"
+      },
       "RulesOut": {
         "properties": {
+          "fp_rate_cap": {
+            "description": "FR-RULES-03 / TBD-45: a rule above this false-positive rate may not be BLOCKING.",
+            "title": "Fp Rate Cap",
+            "type": "string"
+          },
           "rules": {
             "items": {
               "$ref": "#/components/schemas/RuleOut"
@@ -2065,7 +2171,8 @@
           }
         },
         "required": [
-          "rules"
+          "rules",
+          "fp_rate_cap"
         ],
         "title": "RulesOut",
         "type": "object"
@@ -3570,7 +3677,7 @@
     },
     "/api/v1/rules": {
       "get": {
-        "description": "Each rule's latest version, status and latest backtest (M4.4-M4.6).",
+        "description": "Each rule's latest version, status and latest backtest (M4.4-M4.6),\nwith where Promote would take it and why it cannot yet (UR-30).",
         "operationId": "listRules",
         "responses": {
           "200": {
@@ -3612,6 +3719,104 @@
         "summary": "Rules, latest version each",
         "tags": [
           "insight"
+        ]
+      }
+    },
+    "/api/v1/rules/{rule_id}/activate": {
+      "post": {
+        "description": "FR-RULES-06: draft -> backtest -> shadow -> advisory -> blocking, no\nshortcuts. Into SHADOW needs a recorded backtest; into BLOCKING needs a\nblocking severity and every client's false-positive rate within the cap\n(FR-RULES-03). A refusal says which (UR-30).",
+        "operationId": "promoteRule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "title": "Rule Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RulePromoteIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RulePromotionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No valid bearer token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token lacks the permission this route needs."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such rule version."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The step is not the version's next promotion, or the lifecycle refuses it: no backtest, an unmeasured or too-high false-positive rate, a severity that never blocks, or another version already live."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OIDC bearer token": []
+          }
+        ],
+        "summary": "Promote a rule version one step",
+        "tags": [
+          "rules"
         ]
       }
     },

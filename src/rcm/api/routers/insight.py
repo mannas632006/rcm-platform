@@ -60,12 +60,14 @@ def get_dashboard(principal: CurrentPrincipal, session: DbSession) -> DashboardO
     dependencies=[require_permission(Permission.RULE_READ)],
 )
 def list_rules(principal: CurrentPrincipal, session: DbSession) -> RulesOut:
-    """Each rule's latest version, status and latest backtest (M4.4-M4.6)."""
+    """Each rule's latest version, status and latest backtest (M4.4-M4.6),
+    with where Promote would take it and why it cannot yet (UR-30)."""
     return RulesOut(
         rules=[
             RuleOut.model_validate(row, from_attributes=True)
             for row in insight.rules(session, principal=principal)
-        ]
+        ],
+        fp_rate_cap=get_settings().blocking_rule_max_false_positive_rate,
     )
 
 

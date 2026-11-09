@@ -128,6 +128,69 @@ def _evidence_for_blocking(session: Session, row: RuleVersion, source: RuleStatu
     return worst
 
 
+def _check(
+    session: Session, row: RuleVersion, source: RuleStatus, to: RuleStatus
+) -> RuleBacktest | None:
+    """Every condition on the step `source` -> `to`, refused by name; the
+    backtest it rests on, if it needs one. Writes nothing, so `promotion`
+    can ask the same question `change_status` answers (UR-30)."""
+    if to not in TRANSITIONS[source]:
+        raise _refuse(source, to, "not a step in the rule lifecycle (FR-RULES-06)")
+
+    evidence: RuleBacktest | None = None
+    if to is S.SHADOW:
+        evidence = _evidence_for_shadow(session, row, source)
+    elif to is S.BLOCKING:
+        evidence = _evidence_for_blocking(session, row, source)
+
+    if to in LIVE_STATUSES and source not in LIVE_STATUSES:
+        other = session.scalar(
+            select(RuleVersion.version).where(
+                RuleVersion.rule_id == row.rule_id,
+                RuleVersion.version != row.version,
+                RuleVersion.status.in_([str(s) for s in LIVE_STATUSES]),
+            )
+        )
+        if other is not None:
+            raise _refuse(
+                source, to, f"version {other} of this rule is live; withdraw or deprecate it first"
+            )
+    return evidence
+
+
+#: The step Promote takes from each status (S-06). Withdrawing to DRAFT and
+#: deprecating are steps too, but not promotions; BLOCKING is the end.
+PROMOTION: Final[dict[RuleStatus, RuleStatus]] = {
+    S.DRAFT: S.BACKTESTING,
+    S.BACKTESTING: S.SHADOW,
+    S.SHADOW: S.ADVISORY,
+    S.ADVISORY: S.BLOCKING,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class Promotion:
+    #: The next status, or None when the version has no promotion left.
+    to: RuleStatus | None
+    #: Why `change_status` would refuse the step now; None when it would not.
+    blocked_by: str | None
+
+
+def promotion(session: Session, *, row: RuleVersion) -> Promotion:
+    """UR-30: where Promote would take this version, and why it cannot yet,
+    by the same checks `change_status` makes -- so the screen never offers a
+    step the API refuses, or hides one it would take."""
+    source = RuleStatus(row.status)
+    to = PROMOTION.get(source)
+    if to is None:
+        return Promotion(to=None, blocked_by=None)
+    try:
+        _check(session, row, source, to)
+    except StateTransitionError as refused:
+        return Promotion(to=to, blocked_by=str(refused.context["reason"]))
+    return Promotion(to=to, blocked_by=None)
+
+
 def change_status(
     session: Session,
     *,
@@ -150,27 +213,7 @@ def change_status(
     if row is None:
         raise ResourceNotFoundError(resource="rule_version")
     source = RuleStatus(row.status)
-    if to not in TRANSITIONS[source]:
-        raise _refuse(source, to, "not a step in the rule lifecycle (FR-RULES-06)")
-
-    evidence: RuleBacktest | None = None
-    if to is S.SHADOW:
-        evidence = _evidence_for_shadow(session, row, source)
-    elif to is S.BLOCKING:
-        evidence = _evidence_for_blocking(session, row, source)
-
-    if to in LIVE_STATUSES and source not in LIVE_STATUSES:
-        other = session.scalar(
-            select(RuleVersion.version).where(
-                RuleVersion.rule_id == rule_id,
-                RuleVersion.version != version,
-                RuleVersion.status.in_([str(s) for s in LIVE_STATUSES]),
-            )
-        )
-        if other is not None:
-            raise _refuse(
-                source, to, f"version {other} of this rule is live; withdraw or deprecate it first"
-            )
+    evidence = _check(session, row, source, to)
 
     row.status = str(to)
     change = RuleStatusChange(

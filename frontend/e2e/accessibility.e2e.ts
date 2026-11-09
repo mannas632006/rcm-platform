@@ -126,6 +126,25 @@ test.describe("as a denial specialist", () => {
   });
 });
 
+test.describe("as a rules author", () => {
+  test("rules, with Promote, then the promote dialog", async ({ page }) => {
+    await signInAs(page, "author");
+    await page.goto("/admin/rules");
+    await ready(page, /Rules/);
+    // UR-30: disabled controls with their reasons are part of what is scanned.
+    await expect(page.getByRole("button", { name: /^Promote to / }).first()).toBeVisible();
+    await expectAccessible(page, "Rules with Promote");
+
+    await page
+      .getByRole("button", { name: /^Promote to / })
+      .and(page.locator(":not([disabled])"))
+      .first()
+      .click();
+    await expect(page.getByRole("dialog", { name: /^Promote / })).toBeVisible();
+    await expectAccessible(page, "Promote dialog");
+  });
+});
+
 test.describe("as an AR specialist", () => {
   test("resolve dialog", async ({ page }) => {
     await signInAs(page, "ar");
