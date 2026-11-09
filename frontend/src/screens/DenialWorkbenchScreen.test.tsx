@@ -697,3 +697,48 @@ describe("correct and resubmit (M5.7 slice 3, UR-10)", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("a denial whose claim is not denied (GATE M5 finding, ADR-0023)", () => {
+  it("says why it cannot be decided, and offers nothing that would fail", async () => {
+    withDisposition(DISPOSER, {
+      ...DENIAL,
+      claim: DENIAL.claim && { ...DENIAL.claim, state: "PartiallyPaid" },
+    });
+    renderApp(<App />, { path: PATH });
+    const decide = await screen.findByRole("region", { name: "Decide" });
+    expect(
+      within(decide).getByText("Not decidable here while the claim is Partially paid."),
+    ).toBeInTheDocument();
+    expect(within(decide).getByText(/denied only some of its lines/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Write off" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Correct and resubmit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /appeal/i })).not.toBeInTheDocument();
+  });
+
+  it("shows an applied write-off, not a blank panel, once the denial is resolved", async () => {
+    withDisposition(DISPOSER, {
+      ...DENIAL,
+      outcome: "WRITTEN_OFF",
+      write_offs: [{ ...WAITING, status: "APPLIED", decided_by: "ops.omar" }],
+    });
+    renderApp(<App />, { path: PATH });
+    const decide = await screen.findByRole("region", { name: "Decide" });
+    expect(decide).toHaveTextContent(
+      "Written off: $420.00. An appeal would not succeed. Asked by den.dana on",
+    );
+    expect(decide).toHaveTextContent("approved by ops.omar.");
+    expect(screen.queryByRole("button", { name: "Write off" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Not decidable here/)).not.toBeInTheDocument();
+  });
+
+  it("still shows what was done once a denial is decided", async () => {
+    withDisposition(DISPOSER, {
+      ...DENIAL,
+      outcome: "CORRECTED_AND_RESUBMITTED",
+      claim: DENIAL.claim && { ...DENIAL.claim, state: "Correcting" },
+    });
+    renderApp(<App />, { path: PATH });
+    expect(await screen.findByText(/Corrected and resubmitted/)).toBeInTheDocument();
+    expect(screen.queryByText(/Not decidable here/)).not.toBeInTheDocument();
+  });
+});

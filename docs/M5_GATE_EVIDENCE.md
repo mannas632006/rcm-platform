@@ -1,0 +1,125 @@
+# M5 gate evidence — operator UI
+
+CLAUDE.md section 5, GATE M5: *"Playwright E2E covering the five
+highest-volume journeys. Axe accessibility scan passes WCAG 2.1 AA. Report
+both."*
+
+How the gate is built, and why each journey was chosen, is in ADR-0023. This
+file has the measurements.
+
+---
+
+## How it was measured
+
+```
+make up            # Postgres + Redis
+make seed-smoke    # the smoke corpus the seed loads
+make e2e           # rcm_test to head, then journeys, then axe
+```
+
+- Playwright 1.64.1, Chromium, at the supported 1366×768 desktop viewport
+  (UR-33). One worker, **no retries** (CLAUDE.md 7.5).
+- Before each run, `tools/e2e_seed.py` wipes `rcm_test` and rebuilds it the
+  way the system fills it:
+  - it loads the smoke corpus (600 claims) and advances the claims;
+  - it classifies and routes denials, publishes a ruleset and reviews scrubs.
+- The queues the journeys work are the ones that produces: 616 claim-step
+  reviews, 104 denials and 1 scrubber exception.
+- The API (port 8010) and the UI (port 5183) are started by Playwright, so
+  the journeys never touch a developer's running stack.
+- axe-core 4.14 runs with tags `wcag2a`, `wcag2aa`, `wcag21a` and `wcag21aa`.
+
+## Result
+
+Two consecutive full runs on 2026-11-10, each **19 passed, 0 failed,
+0 flaky, 0 skipped**. The second run:
+
+### Journeys (E2E)
+
+| # | Journey | Result | Time |
+|---|---|---|---|
+| 1 | Sign in and pick up work from My Work | pass | 1.1 s |
+| 2 | Work an AR follow-up item by keyboard: take it, resolve it, say why | pass | 2.5 s |
+| 3 | Look a claim up, read it, and jump to its decision audit | pass | 1.3 s |
+| 4 | Write off a denial as a deliberate second step, then go to the next | pass | 2.9 s |
+| 5 | Correct a denied claim and resubmit it, after previewing every change | pass | 3.4 s |
+
+Each journey drives the real UI by keyboard where SRS 10.9 gives a key.
+
+- **Journey 4:** the write-off is not made until the confirmation button is
+  pressed (UR-37).
+- **Journey 5:**
+  - resubmitting is disabled until the change has been previewed (UR-10);
+  - the member ID is masked to its last four characters in the diff (S-6);
+  - the replacement claim is then found in the original's submission chain,
+    not as a new claim (PD-7).
+
+### Accessibility (axe, WCAG 2.1 AA)
+
+| Screen or state | Violations | Time |
+|---|---|---|
+| Sign in | 0 | 1.1 s |
+| My Work | 0 | 1.7 s |
+| Queue: AR Follow-up | 0 | 2.3 s |
+| Queue: Denial Workbench | 0 | 2.2 s |
+| Queue: Scrubber Exceptions | 0 | 1.4 s |
+| Search results | 0 | 1.3 s |
+| Claim Detail | 0 | 2.1 s |
+| Dashboard | 0 | 1.4 s |
+| Rules | 0 | 2.0 s |
+| Payer Registry | 0 | 2.1 s |
+| Not found | 0 | 1.3 s |
+| Keyboard shortcuts dialog (open) | 0 | 1.5 s |
+| Denial Workbench, decision panels, then write-off open | 0 | 3.0 s |
+| Resolve dialog (open) | 0 | 1.5 s |
+
+**Total: 14 scans, 0 violations.** The one documented exception is reflow
+(WCAG 1.4.10, ADR-0015). UR-33 fixes a desktop viewport, and axe does not
+test reflow.
+
+## What the gate found
+
+The first run had 17 passing and 2 failing. The two failures pointed at
+product behaviour, not only at the tests:
+
+1. **Undecidable denials.**
+   - 56 of the 104 routed denials are on partly paid claims, and some are on
+     claims already replaced.
+   - Every decision refuses a claim that is not `Denied`, so the workbench
+     offered forms that could only fail after they were filled in.
+   - Fixed: the Decide panel now says why the denial cannot be decided here,
+     and offers nothing else.
+2. **The Decide panel went blank after a write-off was applied.**
+   - The confirmation was rendered inside the request form, and the reload
+     unmounted the form.
+   - Fixed: an applied write-off now shows its amount, the reason, who asked
+     for it and who approved it.
+
+The journeys now assert what stays on the screen, not a message that flashes
+and is gone.
+
+## M5 tasks
+
+| Task | Status | Where |
+|---|---|---|
+| M5.1 Shell, routing, auth, generated client | done | PR #15; `api:check` in CI fails on hand edits |
+| M5.2 Design tokens | done | `check-tokens.mjs` in `npm run lint` |
+| M5.3 Virtualised `WorkQueueTable` | done | 10,000 rows keep a few dozen in the DOM (`QueueScreen.test.tsx`) |
+| M5.4 Keyboard model | done | ADR-0021; journeys 2–5 |
+| M5.5 Claim Detail + Decision Audit | done | PR #16; journey 3 |
+| M5.6 `DenialCodeChip` | done | `DenialCodeChip.test.tsx` |
+| M5.7 Denial Workbench, diff preview, appeal | done | PRs #17–#19; journeys 4–5 |
+| M5.8 Scrubber and payment exception queues | done | PR #20, ADR-0019 |
+| M5.9 Rule Builder with backtest results | **partial** | Backtest results are shown. **Promote, disabled with a stated reason, is not built** |
+| M5.10 Payer Registry with staleness flags | done | `PayerRegistryScreen` |
+| M5.11 Dashboards | **partial** | KPIs and claims by state. **Not yet segmentable by payer and client** |
+| M5.12 Partial-state handling | done | ADR-0020; `test_model_degradation_falls_back_to_rules` |
+
+M5.9 and M5.11 are the next work on this milestone, before M6 starts.
+
+## Invariant tests for M5
+
+| Directive | Test | Status |
+|---|---|---|
+| M5.7 / FR-DEN | `test_appeal_requires_human_signoff` | pass |
+| M5.12 / UR-34 | `test_model_degradation_falls_back_to_rules` (model absent; model failing) | pass. Added at this gate: M5.12 had tested the behaviour under other names. **Negative shown:** with the score key's direction reversed in `queue_order()`, both cases fail (`['CLM-A', 'CLM-B'] != ['CLM-B', 'CLM-A']`) |

@@ -63,3 +63,7 @@ src/rcm/analytics/dbt/.user.yml
 # that nothing the developer's working directory happens to contain -- a
 # .venv above all -- is visible to the run.
 .ci-run/
+
+# Playwright (GATE M5): results, traces and minted dev tokens
+frontend/e2e-results/
+frontend/e2e/.auth/

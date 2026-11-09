@@ -226,6 +226,44 @@ function NotFound() {
   );
 }
 
+/**
+ * Every decision here (write off, correct, appeal, bill the patient) moves
+ * a claim out of Denied, and the API refuses one from any other state. An
+ * open denial on a claim in another state is said so up front, never left
+ * to fail after the operator has filled a form in (CLAUDE.md 0: no silent
+ * failure). Once decided, the panels show what was done.
+ */
+function undecidable(denial: DenialWorkbench): boolean {
+  const pending =
+    denial.outcome !== null ||
+    denial.appeal !== null ||
+    denial.write_offs.some((w) => w.status === "PENDING_APPROVAL");
+  return !pending && denial.claim !== null && denial.claim.state !== "Denied";
+}
+
+const WHY: Partial<Record<string, string>> = {
+  PartiallyPaid:
+    "The payer paid part of this claim and denied only some of its lines. Writing off, correcting or appealing single lines of a partly paid claim is not built yet, so it cannot be decided here.",
+  Replaced:
+    "This claim has already been replaced by a resubmission. Work the replacement: open the claim to follow its resubmission chain.",
+};
+
+function NotDecidable({ denial }: { denial: DenialWorkbench }) {
+  const state = denial.claim?.state ?? "";
+  return (
+    <Card aria-labelledby="decide-heading">
+      <CardHeader id="decide-heading" title="Decide" />
+      <div className="flex flex-col gap-2 p-4 text-sm" role="note">
+        <p className="font-medium">Not decidable here while the claim is {humanize(state)}.</p>
+        <p>
+          {WHY[state] ??
+            "Only a denied claim can be written off, corrected, appealed or billed to the patient from the Denial Workbench."}
+        </p>
+      </div>
+    </Card>
+  );
+}
+
 /** SRS 10.9 `1` `2` `3`: write off, correct and resubmit, appeal. */
 const DENIAL_PANELS = ["decide-heading", "correction-heading", "appeal-heading"] as const;
 
@@ -291,9 +329,15 @@ function DenialContent({ workItemId }: { workItemId: string }) {
               )}
             </div>
             <div className="flex flex-col gap-6">
-              <WriteOffPanel denial={denial} />
-              <CorrectionPanel denial={denial} />
-              <AppealPanel denial={denial} />
+              {undecidable(denial) ? (
+                <NotDecidable denial={denial} />
+              ) : (
+                <>
+                  <WriteOffPanel denial={denial} />
+                  <CorrectionPanel denial={denial} />
+                  <AppealPanel denial={denial} />
+                </>
+              )}
               <Summary denial={denial} />
             </div>
           </div>

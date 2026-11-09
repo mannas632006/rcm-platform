@@ -74,6 +74,19 @@ function PatientShare({ denial, share }: { denial: DenialWorkbench; share: strin
   );
 }
 
+/** What was written off, why, and who asked and decided (PD-1, visible). */
+function Applied({ writeOff }: { writeOff: WriteOffSummary }) {
+  const reason = REASONS.find((r) => r.value === writeOff.reason)?.label ?? writeOff.reason;
+  return (
+    <p role="status" className="text-sm">
+      Written off: <MoneyDisplay amount={writeOff.amount} className="font-semibold" />. {reason}
+      {writeOff.note ? ` (${writeOff.note})` : ""}. Asked by {writeOff.requested_by} on{" "}
+      {formatDate(writeOff.requested_at)}
+      {writeOff.decided_by ? `, approved by ${writeOff.decided_by}` : ""}.
+    </p>
+  );
+}
+
 function newKey(): string {
   return crypto.randomUUID();
 }
@@ -245,18 +258,23 @@ function Request({ denial, share }: { denial: DenialWorkbench; share: string }) 
 export function WriteOffPanel({ denial }: { denial: DenialWorkbench }) {
   const me = useMe();
   const waiting = denial.write_offs.find((w) => w.status === "PENDING_APPROVAL");
+  // Once applied the denial is resolved, and without this the panel went
+  // blank: the confirmation lived in Request, which a refetch unmounts.
+  const applied = denial.write_offs.find((w) => w.status === "APPLIED");
   const canDispose = hasPermission(me.data, "denial:disposition");
   const share = deniedShare(denial, false);
   const patient = deniedShare(denial, true);
   const resolved = denial.outcome !== null;
 
-  if (!waiting && (resolved || !canDispose)) return null;
+  if (!waiting && !applied && (resolved || !canDispose)) return null;
   return (
     <Card aria-labelledby="decide-heading">
       <CardHeader id="decide-heading" title="Decide" />
       <div className="p-4">
         {waiting ? (
           <Waiting waiting={waiting} workItemId={denial.work_item_id} />
+        ) : applied ? (
+          <Applied writeOff={applied} />
         ) : (
           <div className="flex flex-col gap-4">
             {share === null || share === "0.00" ? (
