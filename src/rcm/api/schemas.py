@@ -151,6 +151,27 @@ class DashboardOut(_Out):
     steps_awaiting_review: int = Field(
         description="Automatic claim steps waiting for the submitter's approval (ADR-0006)."
     )
+    client_id: uuid.UUID | None = Field(
+        description="The client these figures are segmented to (UR-19); null for all of mine."
+    )
+    payer_id: str | None = Field(
+        description="The payer these figures are segmented to (UR-19, PD-8); null for all."
+    )
+    segments: DashboardSegmentsOut
+
+
+class PayerChoiceOut(_Out):
+    payer_id: str
+    name: str
+
+
+class DashboardSegmentsOut(_Out):
+    """What the dashboard may be segmented by, inside my client scope."""
+
+    client_ids: list[uuid.UUID]
+    payers: list[PayerChoiceOut] = Field(
+        description="Payers with at least one claim in my clients, by name."
+    )
 
 
 class RuleOut(_Out):

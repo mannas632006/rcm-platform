@@ -7,7 +7,7 @@ import {
   Inbox,
   Percent,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { useDashboard } from "@/api/queries";
 import type { Dashboard, StateCount } from "@/api/types";
@@ -143,16 +143,124 @@ function isEmpty(data: Dashboard): boolean {
   );
 }
 
+/** Clients carry no name until onboarding records one (SRS 13.8): the
+ * start of the id, which is enough to tell a handful apart. */
+function clientLabel(id: string): string {
+  return `Client ${id.slice(0, 8)}`;
+}
+
+const SELECT = "h-8 rounded-control border border-border-control bg-bg px-2 text-md";
+
+/**
+ * UR-19: every figure, for all of my clients and payers or one of each.
+ * The choice lives in the URL, so a segmented view can be shared (UR-22).
+ */
+function SegmentBar({
+  segments,
+  clientId,
+  payerId,
+  onChange,
+}: {
+  segments: Dashboard["segments"];
+  clientId: string;
+  payerId: string;
+  onChange: (key: "client" | "payer", value: string) => void;
+}) {
+  return (
+    <div role="group" aria-label="Segment the dashboard" className="flex flex-wrap items-end gap-4">
+      {segments.client_ids.length > 1 && (
+        <div className="flex flex-col gap-1">
+          <label htmlFor="segment-client" className="text-sm font-medium">
+            Client
+          </label>
+          <select
+            id="segment-client"
+            value={clientId}
+            onChange={(event) => {
+              onChange("client", event.target.value);
+            }}
+            className={SELECT}
+          >
+            <option value="">All my clients</option>
+            {segments.client_ids.map((id) => (
+              <option key={id} value={id}>
+                {clientLabel(id)}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div className="flex flex-col gap-1">
+        <label htmlFor="segment-payer" className="text-sm font-medium">
+          Payer
+        </label>
+        <select
+          id="segment-payer"
+          value={payerId}
+          onChange={(event) => {
+            onChange("payer", event.target.value);
+          }}
+          className={SELECT}
+        >
+          <option value="">All payers</option>
+          {segments.payers.map((payer) => (
+            <option key={payer.payer_id} value={payer.payer_id}>
+              {payer.name} ({payer.payer_id})
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
+
+/** What the figures cover, in words, for the page header. */
+function scope(data: Dashboard | undefined): string {
+  if (!data || (data.client_id === null && data.payer_id === null)) {
+    return "across your clients";
+  }
+  const parts: string[] = [];
+  if (data.client_id !== null) parts.push(`for ${clientLabel(data.client_id)}`);
+  if (data.payer_id !== null) {
+    const payer = data.segments.payers.find((p) => p.payer_id === data.payer_id);
+    parts.push(`for ${payer ? payer.name : `payer ${data.payer_id}`}`);
+  }
+  return parts.join(", ");
+}
+
 function DashboardContent() {
-  const dashboard = useDashboard();
+  const [params, setParams] = useSearchParams();
+  const clientId = params.get("client") ?? "";
+  const payerId = params.get("payer") ?? "";
+  const dashboard = useDashboard({
+    clientId: clientId || undefined,
+    payerId: payerId || undefined,
+  });
   const data = dashboard.data;
+  const segmented = clientId !== "" || payerId !== "";
+
+  function onSegment(key: "client" | "payer", value: string) {
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setParams(next, { replace: true });
+  }
 
   return (
-    <div className="flex flex-col gap-6 p-8">
+    <div className="flex flex-col gap-6 p-8" aria-busy={dashboard.isPlaceholderData || undefined}>
       <PageHeader
         title="Dashboard"
-        description="How claims and work stand across your clients. Refreshes every 30 seconds."
+        description={`How claims and work stand ${scope(data)}. Refreshes every 30 seconds.`}
       />
+
+      {data && (
+        <SegmentBar
+          segments={data.segments}
+          clientId={clientId}
+          payerId={payerId}
+          onChange={onSegment}
+        />
+      )}
 
       <LoadStatus
         what="the dashboard"
@@ -198,8 +306,9 @@ function DashboardContent() {
               </Button>
             }
           >
-            Your clients have no claims or open work yet. Figures appear once claims are
-            submitted.
+            {segmented
+              ? "Nothing in this segment: no claims or open work for the client or payer chosen."
+              : "Your clients have no claims or open work yet. Figures appear once claims are submitted."}
           </EmptyState>
         </Card>
       )}

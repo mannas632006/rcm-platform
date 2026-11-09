@@ -117,7 +117,9 @@ export interface paths {
         };
         /**
          * KPIs for my clients
-         * @description Denial rate, first-pass clean rate, claims by state and queue health.
+         * @description Denial rate, first-pass clean rate, claims by state and queue health,
+         *     for all my clients and payers or segmented to one of each (UR-19). A
+         *     client outside my scope is refused like any other (PD-20).
          */
         get: operations["getDashboard"];
         put?: never;
@@ -736,6 +738,11 @@ export interface components {
             /** Claims By State */
             claims_by_state: components["schemas"]["StateCount"][];
             /**
+             * Client Id
+             * @description The client these figures are segmented to (UR-19); null for all of mine.
+             */
+            client_id: string | null;
+            /**
              * Denial Rate
              * @description Denied over adjudicated claims, per claim (BR-DATA-03), as a percentage.
              */
@@ -755,13 +762,32 @@ export interface components {
             open_work: number;
             /** Overdue Work */
             overdue_work: number;
+            /**
+             * Payer Id
+             * @description The payer these figures are segmented to (UR-19, PD-8); null for all.
+             */
+            payer_id: string | null;
             /** Pinned Work */
             pinned_work: number;
+            segments: components["schemas"]["DashboardSegmentsOut"];
             /**
              * Steps Awaiting Review
              * @description Automatic claim steps waiting for the submitter's approval (ADR-0006).
              */
             steps_awaiting_review: number;
+        };
+        /**
+         * DashboardSegmentsOut
+         * @description What the dashboard may be segmented by, inside my client scope.
+         */
+        DashboardSegmentsOut: {
+            /** Client Ids */
+            client_ids: string[];
+            /**
+             * Payers
+             * @description Payers with at least one claim in my clients, by name.
+             */
+            payers: components["schemas"]["PayerChoiceOut"][];
         };
         /**
          * DeadlineRiskOut
@@ -1069,6 +1095,13 @@ export interface components {
              * @description The denied lines' PR share billed to the patient. Never a CO amount (PD-19).
              */
             amount: string;
+        };
+        /** PayerChoiceOut */
+        PayerChoiceOut: {
+            /** Name */
+            name: string;
+            /** Payer Id */
+            payer_id: string;
         };
         /** PayerRegistryOut */
         PayerRegistryOut: {
@@ -1829,7 +1862,12 @@ export interface operations {
     };
     getDashboard: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description One of my clients; omit for all of them. */
+                client_id?: string | null;
+                /** @description One payer, by payer_id. */
+                payer_id?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1861,6 +1899,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

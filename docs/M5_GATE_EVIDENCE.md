@@ -112,10 +112,12 @@ and is gone.
 | M5.8 Scrubber and payment exception queues | done | PR #20, ADR-0019 |
 | M5.9 Rule Builder with backtest results | done | ADR-0024. Promote is disabled until the lifecycle would take the step, with its reason in words beside it (UR-30); `test_rule_promotion_api.py`. Authoring and backtesting from the screen (S-06's condition builder) stay out of scope, as ADR-0024 records |
 | M5.10 Payer Registry with staleness flags | done | `PayerRegistryScreen` |
-| M5.11 Dashboards | **partial** | KPIs and claims by state. **Not yet segmentable by payer and client** |
+| M5.11 Dashboards | done | KPIs and claims by state, segmentable by client and by payer (UR-19, ADR-0025) |
 | M5.12 Partial-state handling | done | ADR-0020; `test_model_degradation_falls_back_to_rules` |
 
-M5.11 is the next work on this milestone, before M6 starts.
+Every M5 task is now done. **After M5.11:** the GATE M5 run on 2026-11-10
+had 20 passed and 0 failed, and the dashboard scan includes the segment
+controls.
 
 **After M5.9:** a rules-author scan was added: the Rules screen with its
 Promote controls, then the promote dialog open. The run on 2026-11-10 had
@@ -126,5 +128,6 @@ Promote controls, then the promote dialog open. The run on 2026-11-10 had
 | Directive | Test | Status |
 |---|---|---|
 | M5.7 / FR-DEN | `test_appeal_requires_human_signoff` | pass |
+| M5.11 / UR-19, PD-20 | `test_a_client_outside_my_scope_cannot_be_segmented_to` | pass. **Negative shown:** without `require_client`, a caller scoped to client A got client B's figures (`200 != 403`) |
 | M5.9 / UR-30 | `test_the_rules_list_says_why_promotion_is_blocked`, `test_a_rule_above_the_cap_shows_why_and_cannot_be_made_blocking` | pass |
 | M5.12 / UR-34 | `test_model_degradation_falls_back_to_rules` (model absent; model failing) | pass. Added at this gate: M5.12 had tested the behaviour under other names. **Negative shown:** with the score key's direction reversed in `queue_order()`, both cases fail (`['CLM-A', 'CLM-B'] != ['CLM-B', 'CLM-A']`) |

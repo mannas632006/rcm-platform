@@ -21,6 +21,7 @@ from rcm.domain.payer import Payer
 from rcm.platform.auth import Role
 from rcm.platform.config import get_settings
 from rcm.platform.db import session_scope
+from rcm.work.models import WorkItemKind
 from tests.integration.test_acknowledgement_loading import (
     CLIENT_A,
     CLIENT_B,
@@ -30,7 +31,7 @@ from tests.integration.test_acknowledgement_loading import (
     remit,
     submit,
 )
-from tests.integration.test_api_shell import api, bearer, clean  # noqa: F401 - fixtures
+from tests.integration.test_api_shell import api, bearer, clean, raise_item  # noqa: F401
 from tests.integration.test_claim_progression import advance, resubmit
 from tests.integration.test_rule_backtest import ALL as BACKTEST_TABLES
 from tests.integration.test_rule_backtest import corpus, draft, load, run
@@ -89,6 +90,93 @@ def test_the_dashboard_counts_a_resubmitted_claim_once(api: TestClient, root: Pa
     acknowledge(ack_277ca(("CLM-O2", "A2:20"), control="0002"), root, name="277ca-2.edi")
     advance()
     assert by_state() == {"InAdjudication": 1}
+
+
+def _second_payer(owner: Engine, claim: str) -> None:
+    """Move one claim to a second payer, so there is something to segment."""
+    with owner.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO payer (payer_id, name) VALUES ('60054', 'Aetna Commercial') "
+                "ON CONFLICT DO NOTHING"
+            )
+        )
+        conn.execute(
+            text("UPDATE claim SET payer_id = '60054' WHERE submitter_claim_id = :c"), {"c": claim}
+        )
+
+
+def claims_in(body: dict[str, object]) -> int:
+    rows = body["claims_by_state"]
+    assert isinstance(rows, list)
+    return sum(int(row["count"]) for row in rows)
+
+
+def test_the_dashboard_segments_by_client(api: TestClient, root: Path) -> None:  # noqa: F811
+    """UR-19: one client's figures, out of all the ones I may see."""
+    submit("CLM-A1", root, client=CLIENT_A, control="0001")
+    submit("CLM-A2", root, client=CLIENT_A, control="0002")
+    submit("CLM-B1", root, client=CLIENT_B, control="0003")
+    headers = bearer(CLIENT_A, CLIENT_B)
+
+    everything = api.get("/api/v1/dashboard", headers=headers).json()
+    assert claims_in(everything) == 3
+    assert (everything["client_id"], everything["payer_id"]) == (None, None)
+    assert sorted(everything["segments"]["client_ids"]) == sorted([str(CLIENT_A), str(CLIENT_B)])
+
+    only_b = api.get("/api/v1/dashboard", params={"client_id": str(CLIENT_B)}, headers=headers)
+    assert only_b.status_code == 200
+    assert claims_in(only_b.json()) == 1
+    assert only_b.json()["client_id"] == str(CLIENT_B)
+
+
+@pytest.mark.invariant
+def test_a_client_outside_my_scope_cannot_be_segmented_to(api: TestClient, root: Path) -> None:  # noqa: F811
+    """PD-20: a segment narrows my scope; it never widens it. Refused as any
+    other denial is, so it cannot be used to probe which clients exist."""
+    submit("CLM-B1", root, client=CLIENT_B, control="0003")
+    response = api.get(
+        "/api/v1/dashboard", params={"client_id": str(CLIENT_B)}, headers=bearer(CLIENT_A)
+    )
+    assert response.status_code == 403
+    assert "CLM-B1" not in response.text
+    assert response.json()["title"] == "Authorization denied"
+
+
+def test_the_dashboard_segments_by_payer(
+    api: TestClient,  # noqa: F811
+    root: Path,
+    owner_engine: Engine,
+) -> None:
+    """UR-19 / PD-8: one payer's claims and work, by payer_id."""
+    submit("CLM-P1", root, control="0001")
+    submit("CLM-P2", root, control="0002")
+    submit("CLM-P3", root, control="0003")
+    _second_payer(owner_engine, "CLM-P3")
+    with session_scope() as session:
+        ids = dict(
+            session.execute(
+                text("SELECT submitter_claim_id, claim_id FROM claim WHERE client_id = :c"),
+                {"c": CLIENT_A},
+            ).all()
+        )
+    raise_item(CLIENT_A, WorkItemKind.DATA_QUALITY, "p1", claim_id=ids["CLM-P1"])
+    raise_item(CLIENT_A, WorkItemKind.DATA_QUALITY, "p3", claim_id=ids["CLM-P3"])
+    raise_item(CLIENT_A, WorkItemKind.DATA_QUALITY, "no-claim")
+    headers = bearer(CLIENT_A, role=Role.OPERATIONS_MANAGER)
+
+    everything = api.get("/api/v1/dashboard", headers=headers).json()
+    assert (claims_in(everything), everything["open_work"]) == (3, 3)
+    payers = everything["segments"]["payers"]
+    assert {"payer_id": "60054", "name": "Aetna Commercial"} in payers
+    assert {p["payer_id"] for p in payers} == {"00590", "60054"}
+
+    aetna = api.get("/api/v1/dashboard", params={"payer_id": "60054"}, headers=headers).json()
+    assert (claims_in(aetna), aetna["open_work"], aetna["payer_id"]) == (1, 1, "60054")
+
+    # Work with no claim belongs to no payer: in the total, not in a payer's.
+    other = api.get("/api/v1/dashboard", params={"payer_id": "00590"}, headers=headers).json()
+    assert (claims_in(other), other["open_work"]) == (2, 1)
 
 
 def test_an_empty_dashboard_says_no_rate_rather_than_zero(api: TestClient) -> None:  # noqa: F811

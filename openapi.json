@@ -629,6 +629,19 @@
             "title": "Claims By State",
             "type": "array"
           },
+          "client_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The client these figures are segmented to (UR-19); null for all of mine.",
+            "title": "Client Id"
+          },
           "denial_rate": {
             "anyOf": [
               {
@@ -673,9 +686,24 @@
             "title": "Overdue Work",
             "type": "integer"
           },
+          "payer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The payer these figures are segmented to (UR-19, PD-8); null for all.",
+            "title": "Payer Id"
+          },
           "pinned_work": {
             "title": "Pinned Work",
             "type": "integer"
+          },
+          "segments": {
+            "$ref": "#/components/schemas/DashboardSegmentsOut"
           },
           "steps_awaiting_review": {
             "description": "Automatic claim steps waiting for the submitter's approval (ADR-0006).",
@@ -694,9 +722,39 @@
           "open_work",
           "pinned_work",
           "overdue_work",
-          "steps_awaiting_review"
+          "steps_awaiting_review",
+          "client_id",
+          "payer_id",
+          "segments"
         ],
         "title": "DashboardOut",
+        "type": "object"
+      },
+      "DashboardSegmentsOut": {
+        "description": "What the dashboard may be segmented by, inside my client scope.",
+        "properties": {
+          "client_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Client Ids",
+            "type": "array"
+          },
+          "payers": {
+            "description": "Payers with at least one claim in my clients, by name.",
+            "items": {
+              "$ref": "#/components/schemas/PayerChoiceOut"
+            },
+            "title": "Payers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "client_ids",
+          "payers"
+        ],
+        "title": "DashboardSegmentsOut",
         "type": "object"
       },
       "DeadlineRiskOut": {
@@ -1469,6 +1527,24 @@
           "amount"
         ],
         "title": "PatientShareOut",
+        "type": "object"
+      },
+      "PayerChoiceOut": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "payer_id": {
+            "title": "Payer Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "payer_id",
+          "name"
+        ],
+        "title": "PayerChoiceOut",
         "type": "object"
       },
       "PayerRegistryOut": {
@@ -2972,8 +3048,49 @@
     },
     "/api/v1/dashboard": {
       "get": {
-        "description": "Denial rate, first-pass clean rate, claims by state and queue health.",
+        "description": "Denial rate, first-pass clean rate, claims by state and queue health,\nfor all my clients and payers or segmented to one of each (UR-19). A\nclient outside my scope is refused like any other (PD-20).",
         "operationId": "getDashboard",
+        "parameters": [
+          {
+            "description": "One of my clients; omit for all of them.",
+            "in": "query",
+            "name": "client_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "One of my clients; omit for all of them.",
+              "title": "Client Id"
+            }
+          },
+          {
+            "description": "One payer, by payer_id.",
+            "in": "query",
+            "name": "payer_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 80,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "One payer, by payer_id.",
+              "title": "Payer Id"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3004,6 +3121,16 @@
               }
             },
             "description": "The token lacks the permission this route needs."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [

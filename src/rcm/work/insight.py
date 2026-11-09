@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -65,16 +65,34 @@ def _rate(numerator: int, denominator: int) -> Decimal | None:
     return (Decimal(numerator) / Decimal(denominator) * 100).quantize(Decimal("0.01"))
 
 
-def dashboard(session: Session, *, principal: Principal, now: datetime) -> Dashboard:
+def dashboard(
+    session: Session,
+    *,
+    principal: Principal,
+    now: datetime,
+    client_id: uuid.UUID | None = None,
+    payer_id: str | None = None,
+) -> Dashboard:
+    """UR-19: every figure, for all the principal's clients and payers or
+    segmented to one client, one payer, or both.
+
+    A client is a narrowing of the principal's own scope, refused outside it
+    (PD-20); every scoped query below then runs on the narrowed principal
+    unchanged. A payer is its `payer_id` (PD-8).
+    """
+    if client_id is not None:
+        principal.require_client(client_id)
+        principal = replace(principal, client_ids=frozenset({client_id}))
     clients = sorted(principal.client_ids)
+    payer = [Claim.payer_id == payer_id] if payer_id is not None else []
 
     adjudicated = denied = 0
     first_pass = first_clean = 0
-    for client_id in clients:
-        rate = denial_rate(session, client_id=client_id)
+    for client in clients:
+        rate = denial_rate(session, client_id=client, payer_id=payer_id)
         adjudicated += rate.claims
         denied += rate.denied_claims
-        total, clean = _first_pass(session, client_id=client_id)
+        total, clean = _first_pass(session, client_id=client, payer_id=payer_id)
         first_pass += total
         first_clean += clean
 
@@ -83,7 +101,7 @@ def dashboard(session: Session, *, principal: Principal, now: datetime) -> Dashb
     # original until the payer takes the replacement, the replacement after.
     live = (
         select(Claim.root_claim_id, Claim.state)
-        .where(Claim.client_id.in_(clients), Claim.state != str(ClaimState.REPLACED))
+        .where(Claim.client_id.in_(clients), Claim.state != str(ClaimState.REPLACED), *payer)
         .ext(distinct_on(Claim.root_claim_id))
         .order_by(Claim.root_claim_id, Claim.submission_attempt)
         .subquery()
@@ -93,11 +111,16 @@ def dashboard(session: Session, *, principal: Principal, now: datetime) -> Dashb
             select(live.c.state, func.count()).group_by(live.c.state).order_by(live.c.state)
         ).all()
     )
-    queues = views.queue_summaries(session, principal=principal, now=now)
+    queues = views.queue_summaries(session, principal=principal, now=now, payer_id=payer_id)
     awaiting = session.scalar(
         select(func.count()).where(
             ClaimStateTransition.client_id.in_(clients),
             ClaimStateTransition.review_status == str(ReviewStatus.PENDING),
+            *(
+                [ClaimStateTransition.claim_id.in_(select(Claim.claim_id).where(*payer))]
+                if payer
+                else []
+            ),
         )
     )
 
@@ -116,7 +139,37 @@ def dashboard(session: Session, *, principal: Principal, now: datetime) -> Dashb
     )
 
 
-def _first_pass(session: Session, *, client_id: uuid.UUID) -> tuple[int, int]:
+@dataclass(frozen=True, slots=True)
+class PayerChoice:
+    payer_id: str
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class Segments:
+    """What the dashboard may be segmented by, for this principal (UR-19)."""
+
+    client_ids: list[uuid.UUID]
+    #: Payers with at least one claim in the principal's clients, by name.
+    payers: list[PayerChoice]
+
+
+def segments(session: Session, *, principal: Principal) -> Segments:
+    payer_ids = select(Claim.payer_id).where(Claim.client_id.in_(principal.client_ids)).distinct()
+    payers = session.execute(
+        select(Payer.payer_id, Payer.name)
+        .where(Payer.payer_id.in_(payer_ids))
+        .order_by(Payer.name, Payer.payer_id)
+    ).all()
+    return Segments(
+        client_ids=sorted(principal.client_ids),
+        payers=[PayerChoice(payer_id=p, name=n) for p, n in payers],
+    )
+
+
+def _first_pass(
+    session: Session, *, client_id: uuid.UUID, payer_id: str | None = None
+) -> tuple[int, int]:
     """First submissions with a payer verdict, and how many were clean.
 
     A first submission (attempt 1) counts once the payer has said something
@@ -139,6 +192,7 @@ def _first_pass(session: Session, *, client_id: uuid.UUID) -> tuple[int, int]:
         Claim.client_id == client_id,
         Claim.submission_attempt == 1,
         Claim.submitter_claim_id.in_(verdict) | Claim.submitter_claim_id.in_(remitted),
+        *([Claim.payer_id == payer_id] if payer_id is not None else []),
     )
     total = session.scalar(select(func.count()).where(base)) or 0
     dirty = (

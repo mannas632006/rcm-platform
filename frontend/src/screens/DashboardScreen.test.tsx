@@ -24,6 +24,15 @@ const DASHBOARD = {
   pinned_work: 3,
   overdue_work: 5,
   steps_awaiting_review: 2,
+  client_id: null,
+  payer_id: null,
+  segments: {
+    client_ids: ["aaaaaaaa-0000-4000-8000-00000000000a"],
+    payers: [
+      { payer_id: "60054", name: "Aetna Commercial" },
+      { payer_id: "00590", name: "Medicare Part B" },
+    ],
+  },
 };
 
 const EMPTY = {
@@ -198,13 +207,66 @@ describe("dashboard (INSIGHT, M5.11)", () => {
     renderApp(<App />, {
       path: "/dashboard",
       seed: (client) => {
-        client.setQueryData(keys.dashboard, DASHBOARD);
+        client.setQueryData([...keys.dashboard, "all", "all"], DASHBOARD);
       },
     });
     const notice = await screen.findByText(/These figures may be out of date/);
     // WCAG 4.1.3: a screen reader is told, not only a sighted operator.
     expect(notice.closest('[role="status"]')).not.toBeNull();
     expect(within(await card("Denial rate")).getByText("12.5%")).toBeInTheDocument();
+  });
+
+  it("segments by payer: kept in the URL and asked of the server (UR-19, UR-22)", async () => {
+    const fetchMock = api({ body: DASHBOARD });
+    renderApp(<App />, { path: "/dashboard" });
+    const payer = await screen.findByRole("combobox", { name: "Payer" });
+    expect(within(payer).getByRole("option", { name: "Aetna Commercial (60054)" })).toBeInTheDocument();
+    // One client in scope: nothing to choose between, so no client control.
+    expect(screen.queryByRole("combobox", { name: "Client" })).toBeNull();
+
+    await userEvent.selectOptions(payer, "60054");
+    await waitFor(() => {
+      const asked = fetchMock.mock.calls
+        .map(([input]) => new URL(input instanceof Request ? input.url : String(input)))
+        .filter((url) => url.pathname === "/api/v1/dashboard");
+      expect(asked.at(-1)?.searchParams.get("payer_id")).toBe("60054");
+    });
+    expect(payer).toHaveValue("60054");
+  });
+
+  it("says in the header which segment the figures are for", async () => {
+    api({
+      body: {
+        ...DASHBOARD,
+        payer_id: "60054",
+        client_id: "bbbbbbbb-0000-4000-8000-00000000000b",
+        segments: {
+          ...DASHBOARD.segments,
+          client_ids: [
+            "aaaaaaaa-0000-4000-8000-00000000000a",
+            "bbbbbbbb-0000-4000-8000-00000000000b",
+          ],
+        },
+      },
+    });
+    renderApp(<App />, {
+      path: "/dashboard?client=bbbbbbbb-0000-4000-8000-00000000000b&payer=60054",
+    });
+    expect(
+      await screen.findByText(/How claims and work stand for Client bbbbbbbb, for Aetna Commercial\./),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Client" })).toHaveValue(
+      "bbbbbbbb-0000-4000-8000-00000000000b",
+    );
+    expect(screen.getByRole("combobox", { name: "Payer" })).toHaveValue("60054");
+  });
+
+  it("says a segment is empty, not that there are no clients", async () => {
+    api({ body: { ...EMPTY, payer_id: "60054" } });
+    renderApp(<App />, { path: "/dashboard?payer=60054" });
+    expect(await screen.findByText(/Nothing in this segment/)).toBeInTheDocument();
+    // The controls stay, so the operator can step back out of it.
+    expect(screen.getByRole("combobox", { name: "Payer" })).toBeInTheDocument();
   });
 
   it("explains, rather than errors, for a role without report:read", async () => {
