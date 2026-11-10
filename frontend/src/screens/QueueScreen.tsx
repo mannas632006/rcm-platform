@@ -1,9 +1,17 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { queueItemsKey, useQueueItems, useWorkQueues } from "@/api/queries";
-import type { Assignment } from "@/api/types";
+import {
+  keys,
+  queueItemsKey,
+  useQueueItems,
+  useTakeWorkItem,
+  useWorkQueues,
+} from "@/api/queries";
+import { itemPath } from "@/api/routes";
+import type { Assignment, QueueItem } from "@/api/types";
+import { ResolveDialog } from "@/components/domain/ResolveDialog";
 import {
   WorkQueueTable,
   WorkQueueTableSkeleton,
@@ -13,6 +21,7 @@ import { StaleNotice } from "@/components/states/StaleNotice";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
+import { useShortcuts } from "@/lib/keyboard";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 const FILTERS: { value: Assignment; label: string }[] = [
@@ -41,7 +50,16 @@ function Queue({ queueKey }: { queueKey: string }) {
   useDocumentTitle(queue?.label ?? "Queue");
   const items = useQueueItems(queueKey, assigned);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const take = useTakeWorkItem();
   const [changed, setChanged] = useState(false);
+  // SRS 10.9: the row the keys act on, and the rows picked with `x`.
+  const [active, setActive] = useState(0);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  const [resolving, setResolving] = useState<QueueItem | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const grid = useRef<HTMLDivElement>(null);
+  const filter = useRef<HTMLFieldSetElement>(null);
 
   // UR-23 without re-downloading every page: the counts poll; when they
   // move, an operator still at the top just gets the new first page, and one
@@ -73,8 +91,108 @@ function Queue({ queueKey }: { queueKey: string }) {
     });
   }
 
+  const rows = items.data?.pages.flatMap((page) => page.items) ?? [];
+  // The list can shrink under the index (a refresh, an item resolved): every
+  // key acts on the row the operator can see highlighted.
+  const index = Math.max(0, Math.min(active, rows.length - 1));
+  const current = rows[index];
+  // Only rows still listed count as selected.
+  const picked = rows.filter((row) => selected.has(row.work_item_id));
+  const assigning = useRef(false);
+
+  function move(to: number) {
+    setActive(Math.max(0, Math.min(to, rows.length - 1)));
+    grid.current?.focus();
+  }
+
+  function open(index: number) {
+    const row = rows[index];
+    const path = row ? itemPath(row, queueKey, assigned) : null;
+    if (path) navigate(path);
+    else if (row) setNotice("This item has no claim to open. Resolve it from here.");
+  }
+
+  function toggle(index: number) {
+    const row = rows[index];
+    if (!row) return;
+    setSelected((was) => {
+      const next = new Set(was);
+      if (next.has(row.work_item_id)) next.delete(row.work_item_id);
+      else next.add(row.work_item_id);
+      return next;
+    });
+  }
+
+  // `a`: the selected rows, or the active one when none is selected.
+  async function assignToMe() {
+    // One batch at a time: a held or repeated `a` must not start a second.
+    if (assigning.current) return;
+    const targets = picked.length ? picked : current ? [current] : [];
+    if (!targets.length) return;
+    assigning.current = true;
+    setNotice("Assigning…");
+    const results = await Promise.allSettled(
+      targets.map((row) =>
+        take.mutateAsync({ workItemId: row.work_item_id, idempotencyKey: crypto.randomUUID() }),
+      ),
+    ).finally(() => {
+      assigning.current = false;
+    });
+    const failedIds = new Set(
+      targets.filter((_, i) => results[i]?.status === "rejected").map((row) => row.work_item_id),
+    );
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    const done = targets.length - failed.length;
+    const first = failed[0]?.reason as unknown;
+    setNotice(
+      [
+        done ? `Assigned ${String(done)} ${done === 1 ? "item" : "items"} to you.` : "",
+        failed.length
+          ? `${String(failed.length)} could not be assigned: ${first instanceof Error ? first.message : "the server refused"}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+    // What failed stays selected, to retry or look at.
+    setSelected(failedIds);
+    await queryClient.invalidateQueries({ queryKey: keys.workQueues });
+  }
+
+  function startResolve() {
+    if (current) setResolving(current);
+  }
+
+  useShortcuts(
+    {
+      j: () => {
+        move(index + 1);
+      },
+      k: () => {
+        move(index - 1);
+      },
+      x: () => {
+        toggle(index);
+      },
+      a: (event) => {
+        if (!event.repeat) void assignToMe();
+      },
+      r: startResolve,
+      f: () => {
+        filter.current?.querySelector<HTMLButtonElement>("[aria-pressed=true]")?.focus();
+      },
+      Escape: () => {
+        setSelected(new Set());
+      },
+    },
+    rows.length > 0 && resolving === null,
+  );
+
   function setAssigned(value: Assignment) {
     const next = new URLSearchParams(params);
+    // A new filter is a new list: nothing carries over from the old one.
+    setActive(0);
+    setSelected(new Set());
     if (value === "any") next.delete("assigned");
     else next.set("assigned", value);
     setParams(next, { replace: true });
@@ -110,7 +228,6 @@ function Queue({ queueKey }: { queueKey: string }) {
     );
   }
 
-  const rows = items.data?.pages.flatMap((page) => page.items) ?? [];
   // The latest page speaks for the model now; an earlier page's gap may have healed.
   const modelGap = items.data?.pages.at(-1)?.recovery_unavailable ?? null;
   const refreshError = items.error ?? queues.error;
@@ -133,7 +250,7 @@ function Queue({ queueKey }: { queueKey: string }) {
             )}
           </p>
         </div>
-        <fieldset className="flex items-center gap-1">
+        <fieldset ref={filter} className="flex items-center gap-1">
           <legend className="sr-only">Show</legend>
           {FILTERS.map((filter) => (
             <button
@@ -227,12 +344,72 @@ function Queue({ queueKey }: { queueKey: string }) {
         </div>
       )}
       {rows.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          {/* The mouse twins of `a` and `r` (UR-35 both ways). */}
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={take.isPending}
+            onClick={() => void assignToMe()}
+          >
+            {picked.length
+              ? `Assign ${String(picked.length)} selected to me`
+              : "Assign to me"}
+            <kbd aria-hidden="true" className="text-muted">
+              a
+            </kbd>
+          </Button>
+          <Button variant="secondary" size="sm" onClick={startResolve}>
+            Resolve…
+            <kbd aria-hidden="true" className="text-muted">
+              r
+            </kbd>
+          </Button>
+          {picked.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSelected(new Set());
+              }}
+            >
+              Clear selection
+            </Button>
+          )}
+        </div>
+      )}
+      {/* Outside the toolbar: resolving the last row must still be said. */}
+      <p role="status" className="text-sm text-muted empty:hidden">
+        {notice}
+      </p>
+
+      {rows.length > 0 && (
         <WorkQueueTable
           items={rows}
           label={`${queue.label} items, highest priority first`}
           hasMore={items.hasNextPage && !items.isFetchNextPageError}
           loadingMore={items.isFetchingNextPage}
           onLoadMore={() => void items.fetchNextPage()}
+          activeIndex={index}
+          selected={selected}
+          onActiveChange={setActive}
+          onOpen={open}
+          onToggleSelect={toggle}
+          gridRef={grid}
+        />
+      )}
+
+      {resolving && (
+        <ResolveDialog
+          item={resolving}
+          openPath={itemPath(resolving, queueKey, assigned)}
+          onClose={() => {
+            setResolving(null);
+          }}
+          onResolved={(item) => {
+            setResolving(null);
+            setNotice(`Resolved: ${item.title}`);
+          }}
         />
       )}
     </div>

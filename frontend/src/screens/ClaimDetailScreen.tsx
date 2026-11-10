@@ -27,6 +27,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate, humanize } from "@/lib/format";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
+import { useQueueWalk } from "@/lib/useQueueWalk";
 
 // UR-31: red is money at risk. A denial or rejection is; a paid claim is done.
 const STATE_TONE: Record<string, ChipTone> = {
@@ -565,10 +566,14 @@ function NotFound() {
   );
 }
 
+/** SRS 10.9 `1` `2` `3`: the lines, the history, the decision audit. */
+const CLAIM_PANELS = ["lines-heading", "history-heading", "audit-heading"] as const;
+
 function ClaimContent({ claimId }: { claimId: string }) {
   const query = useClaim(claimId);
   const claim = query.data;
   useDocumentTitle(claim ? `Claim ${claim.submitter_claim_id}` : "Claim");
+  useQueueWalk(CLAIM_PANELS);
   // Out of scope and never issued read the same (PD-20): "not found", not an outage.
   const missing = query.error instanceof ApiError && query.error.status === 404;
 

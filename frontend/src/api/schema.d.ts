@@ -63,6 +63,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Find claims by claim number or payer
+         * @description The top bar's search (S-01): a claim number's start, a payer id, or
+         *     part of a payer's name, inside your clients (PD-20). Dates of service
+         *     are listed, so the read is audited (PD-2).
+         */
+        get: operations["searchClaims"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/claims/{claim_id}": {
         parameters: {
             query?: never;
@@ -294,6 +316,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/work-items/{work_item_id}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Give an item back to its queue
+         * @description Only the holder may give an item back.
+         */
+        post: operations["releaseWorkItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/work-items/{work_item_id}/resolution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve an item that needs nothing more
+         * @description FR-WORK-04: no action needed, or a duplicate, with the reason. A
+         *     denial is refused here: it is decided in the Denial Workbench.
+         */
+        post: operations["resolveWorkItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/work-items/{work_item_id}/take": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Assign an item to me
+         * @description FR-WORK-01: an exclusive hold, refused by name if someone else has
+         *     it. Taking an item already mine renews the lease (FR-WORK-02).
+         */
+        post: operations["takeWorkItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/work-queues": {
         parameters: {
             query?: never;
@@ -515,6 +599,28 @@ export interface components {
             /** Total Charge */
             total_charge: string;
         };
+        /** ClaimHitOut */
+        ClaimHitOut: {
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /** Date Of Service */
+            date_of_service: string | null;
+            /** Payer Id */
+            payer_id: string;
+            /** Payer Name */
+            payer_name: string | null;
+            /** State */
+            state: string;
+            /** Submission Attempt */
+            submission_attempt: number;
+            /** Submitter Claim Id */
+            submitter_claim_id: string;
+            /** Total Charge */
+            total_charge: string;
+        };
         /** ClaimLineOut */
         ClaimLineOut: {
             /** Charge */
@@ -531,6 +637,17 @@ export interface components {
             service_date: string | null;
             /** Units */
             units: string;
+        };
+        /**
+         * ClaimSearchOut
+         * @description Claims matching the search, newest service first; `truncated` when
+         *     more matched than are listed.
+         */
+        ClaimSearchOut: {
+            /** Hits */
+            hits: components["schemas"]["ClaimHitOut"][];
+            /** Truncated */
+            truncated: boolean;
         };
         /** CorrectionChangeOut */
         CorrectionChangeOut: {
@@ -1230,6 +1347,39 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /**
+         * WorkItemHoldingOut
+         * @description Who holds an item now, and until when (FR-WORK-01, FR-WORK-02).
+         */
+        WorkItemHoldingOut: {
+            /** Assigned To */
+            assigned_to: string | null;
+            /** Lock Expires At */
+            lock_expires_at: string | null;
+            /** Outcome */
+            outcome: string | null;
+            /** State */
+            state: string;
+            /**
+             * Work Item Id
+             * Format: uuid
+             */
+            work_item_id: string;
+        };
+        /**
+         * WorkItemResolutionIn
+         * @description FR-WORK-04: a structured outcome, and why. A denial is resolved by its
+         *     disposition in the Denial Workbench, never here.
+         */
+        WorkItemResolutionIn: {
+            /** Note */
+            note: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "NO_ACTION_NEEDED" | "DUPLICATE";
+        };
         /** WorkQueues */
         WorkQueues: {
             /** Queues */
@@ -1488,6 +1638,56 @@ export interface operations {
                 };
             };
             /** @description A reason or note that is not valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    searchClaims: {
+        parameters: {
+            query: {
+                q: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimSearchOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Search text shorter than 2 or longer than 80. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -2108,6 +2308,211 @@ export interface operations {
             };
             /** @description The token lacks the permission this route needs. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    releaseWorkItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkItemHoldingOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such item, not one in your clients, or not one your role works. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Another operator holds the item, or it is closed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description An outcome or note that is not valid here. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    resolveWorkItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkItemResolutionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkItemHoldingOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such item, not one in your clients, or not one your role works. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Another operator holds the item, or it is closed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description An outcome or note that is not valid here. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    takeWorkItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkItemHoldingOut"];
+                };
+            };
+            /** @description No valid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The token lacks the permission this route needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such item, not one in your clients, or not one your role works. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Another operator holds the item, or it is closed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description An outcome or note that is not valid here. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

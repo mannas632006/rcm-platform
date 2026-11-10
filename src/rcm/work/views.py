@@ -47,6 +47,9 @@ class QueueDef:
     kinds: frozenset[WorkItemKind]
     #: Who may see it. A queue is listed only to a principal holding this.
     permission: Permission
+    #: Who may take and resolve its items (M5.4, ADR-0021). Seeing work is
+    #: not the same as being allowed to act on it.
+    work: Permission = Permission.CLAIM_WRITE
 
 
 #: SRS 10.2's queues, in the sidebar's order.
@@ -64,7 +67,13 @@ QUEUES: Final[tuple[QueueDef, ...]] = (
         ),
         Permission.CLAIM_READ,
     ),
-    QueueDef("denials", "Denial Workbench", frozenset({K.DENIAL}), Permission.DENIAL_READ),
+    QueueDef(
+        "denials",
+        "Denial Workbench",
+        frozenset({K.DENIAL}),
+        Permission.DENIAL_READ,
+        Permission.DENIAL_DISPOSITION,
+    ),
     QueueDef(
         "scrubber", "Scrubber Exceptions", frozenset({K.SCRUB_EXCEPTION}), Permission.CLAIM_READ
     ),
@@ -89,12 +98,16 @@ QUEUES: Final[tuple[QueueDef, ...]] = (
         "Rules Review",
         frozenset({K.RULE_CONFLICT, K.MODEL_LOW_CONFIDENCE}),
         Permission.RULE_READ,
+        Permission.RULE_AUTHOR,
     ),
     QueueDef(
         "operations",
         "Operations",
         frozenset({K.COMPLIANCE_CONCERN, K.EXTERNAL_SYSTEM_FAILURE}),
         Permission.REPORT_READ,
+        # Compliance concerns stop automation paths (BR-EXC-03): reviewing
+        # one is the operations manager's, the role that may also submit.
+        Permission.CLAIM_SUBMIT,
     ),
 )
 

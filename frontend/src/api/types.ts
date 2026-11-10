@@ -42,3 +42,7 @@ export type CorrectionChange = Schemas["CorrectionChangeOut"];
 export type CorrectionPreview = Schemas["CorrectionPreviewOut"];
 export type CorrectionResult = Schemas["CorrectionOut"];
 export type OpenProblem = Schemas["OpenProblemOut"];
+export type WorkItemHolding = Schemas["WorkItemHoldingOut"];
+export type PlainOutcome = Schemas["WorkItemResolutionIn"]["outcome"];
+export type ClaimSearch = Schemas["ClaimSearchOut"];
+export type ClaimHit = Schemas["ClaimHitOut"];
