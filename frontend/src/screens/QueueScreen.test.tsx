@@ -156,6 +156,49 @@ describe("work queue screen (S-02)", () => {
     expect(within(table).queryByRole("link", { name: "Problem 2" })).toBeNull();
   });
 
+  it("leads a denial's row with its codes, and its link still names them", async () => {
+    const denial = item(1, {
+      kind: "DENIAL",
+      title:
+        "Payer denied CO-97, PR-1: decide whether to correct, appeal, bill the patient or write off (claim_payment 9637399f)",
+    });
+    api([denial]);
+    renderApp(<App />, { path: "/queues/data-quality" });
+    const table = await screen.findByRole("grid", { name: /Data Quality items/ });
+    expect(within(table).getByText("CO-97")).toBeInTheDocument();
+    expect(within(table).getByText("PR-1")).toBeInTheDocument();
+    expect(
+      within(table).getByRole("link", {
+        name: "CO-97, PR-1: Decide whether to correct, appeal, bill the patient or write off",
+      }),
+    ).toHaveAttribute("href", `/denials/${denial.work_item_id}`);
+    // The record reference is for the audit trail, not the operator.
+    expect(within(table).queryByText(/claim_payment/)).toBeNull();
+  });
+
+  it("marks ageing past 90 and 180 days, and high-dollar charges, in words too", async () => {
+    const daysAgo = (days: number) => {
+      const now = new Date();
+      const day = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+      return new Date(day - days * 86_400_000).toISOString().slice(0, 10);
+    };
+    api([
+      item(1, { date_of_service: daysAgo(30), charges: "4999.99" }),
+      item(2, { date_of_service: daysAgo(120), charges: "5000.00" }),
+      item(3, { date_of_service: daysAgo(400), charges: "125.00" }),
+    ]);
+    renderApp(<App />, { path: "/queues/data-quality" });
+    const table = await screen.findByRole("grid", { name: /Data Quality items/ });
+    const cells = (n: number) =>
+      within(within(table).getAllByRole("row")[n] as HTMLElement).getAllByRole("gridcell");
+
+    expect(cells(1)[4]).toHaveTextContent(/^30$/);
+    expect(cells(1)[5]).not.toHaveTextContent("high dollar");
+    expect(cells(2)[4]).toHaveTextContent("120, over 90 days");
+    expect(cells(2)[5]).toHaveTextContent("$5,000.00, high dollar");
+    expect(cells(3)[4]).toHaveTextContent("400, over 180 days");
+  });
+
   it("keeps the filter in the URL and asks the server for it (UR-22)", async () => {
     const fetchMock = api([item(1)]);
     renderApp(<App />, { path: "/queues/data-quality" });

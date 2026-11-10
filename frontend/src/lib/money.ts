@@ -46,3 +46,19 @@ export function sumMoney(amounts: readonly string[]): string | null {
   const abs = cents < 0n ? -cents : cents;
   return `${sign}${(abs / 100n).toString()}.${(abs % 100n).toString().padStart(2, "0")}`;
 }
+
+/**
+ * Whether a decimal money string is at least `threshold`, compared in
+ * integer cents (UR-21). False for anything that is not a decimal: an
+ * unreadable amount is never emphasised as if it were large (PD-18).
+ */
+export function atLeastMoney(amount: string, threshold: string): boolean {
+  const a = CENTS.exec(amount.trim());
+  const t = CENTS.exec(threshold.trim());
+  if (!a || !t) return false;
+  const cents = (m: RegExpExecArray) => {
+    const value = BigInt(m[2] ?? "0") * 100n + BigInt((m[3] ?? "").padEnd(2, "0"));
+    return m[1] ? -value : value;
+  };
+  return cents(a) >= cents(t);
+}

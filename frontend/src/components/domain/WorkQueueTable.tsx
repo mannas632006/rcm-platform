@@ -4,9 +4,12 @@ import { memo, useEffect, useLayoutEffect, useRef, type KeyboardEvent, type Ref 
 import { Link } from "react-router-dom";
 
 import type { QueueItem } from "@/api/types";
+import { DenialCodeChip } from "@/components/domain/DenialCodeChip";
 import { MoneyDisplay } from "@/components/domain/MoneyDisplay";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
+import { parseDenialTitle } from "@/lib/denialTitle";
+import { atLeastMoney } from "@/lib/money";
 
 /** SRS 10.3: 40px rows, density over comfort -- deliberate. Must equal
  *  `--row-height` in tokens.css; a test holds the two together. */
@@ -43,13 +46,21 @@ const ROW_PINNED = `${ROW} border-l-4 border-l-danger bg-danger-soft hover:bg-da
 const ROW_ACTIVE = "outline-2 -outline-offset-2 group-focus-visible:outline-focus";
 const DEADLINE = "tabular flex items-center justify-end gap-1";
 const DEADLINE_PINNED = `${DEADLINE} font-semibold text-danger-strong`;
+// Decided by the owner on 2026-11-09. Ageing is days since the date of
+// service, in amber (warn), not red: red is reserved for the filing deadline,
+// which the Deadline column already carries (UR-31, PD-15).
+const AGEING_DAYS = 90;
+const STALE_DAYS = 180;
+const HIGH_DOLLAR = "5000.00";
+const AGE = "tabular flex items-center justify-end gap-1";
+const AGE_AGEING = `${AGE} text-warn-strong`;
+const AGE_STALE = `${AGE} font-semibold text-warn-strong`;
 const SLA = "flex items-center gap-1";
 const SLA_OVERDUE = `${SLA} font-semibold text-warn-strong`;
 
 function daysSince(iso: string, today: number): number {
   return Math.floor((today - Date.parse(`${iso}T00:00:00Z`)) / 86_400_000);
 }
-
 interface WorkQueueTableProps {
   items: QueueItem[];
   /** More pages exist on the server, and fetching them is not failing. */
@@ -243,6 +254,11 @@ const QueueRow = memo(function QueueRow({
   onActivate,
 }: QueueRowProps) {
   const base = item.deadline_pinned ? ROW_PINNED : ROW;
+  const denial = item.kind === "DENIAL" ? parseDenialTitle(item.title) : null;
+  const age = item.date_of_service ? daysSince(item.date_of_service, today) : null;
+  const stale = age !== null && age >= STALE_DAYS;
+  const ageing = age !== null && age >= AGEING_DAYS;
+  const highDollar = item.charges !== null && atLeastMoney(item.charges, HIGH_DOLLAR);
   return (
           // The mouse twin of j/k: a click makes the row the one keys act on.
           // Keyboard users reach it through the grid (onKeyDown above), so
@@ -265,6 +281,28 @@ const QueueRow = memo(function QueueRow({
             <span role="gridcell" className="flex min-w-0 items-center gap-1" title={item.title}>
               {/* Selection in more than colour (WCAG 1.4.1). */}
               {selected && <Check aria-hidden="true" className="size-3 shrink-0 text-accent" />}
+              {denial ? (
+                <>
+                  {denial.codes.map((code) => (
+                    <DenialCodeChip
+                      key={`${code.group_code}-${code.reason_code}`}
+                      adjustment={code}
+                    />
+                  ))}
+                  <span className="truncate">
+                    <Link
+                      to={`/denials/${item.work_item_id}`}
+                      className="text-accent underline-offset-2 hover:underline"
+                    >
+                      {/* The chips are not in the link; its name still says which denial. */}
+                      <span className="sr-only">
+                        {denial.codes.map((c) => `${c.group_code}-${c.reason_code}`).join(", ")}:{" "}
+                      </span>
+                      {denial.action}
+                    </Link>
+                  </span>
+                </>
+              ) : (
               <span className="truncate">
               {item.kind === "DENIAL" ? (
                 <Link
@@ -277,6 +315,7 @@ const QueueRow = memo(function QueueRow({
                 item.title
               )}
               </span>
+              )}
             </span>
             <span role="gridcell" className="tabular truncate">
               {item.claim_id && item.submitter_claim_id ? (
@@ -296,11 +335,28 @@ const QueueRow = memo(function QueueRow({
             <span role="gridcell" className="tabular">
               {item.date_of_service ?? "—"}
             </span>
-            <span role="gridcell" className="tabular text-right">
-              {item.date_of_service ? daysSince(item.date_of_service, today) : "—"}
+            <span role="gridcell" className={stale ? AGE_STALE : ageing ? AGE_AGEING : AGE}>
+              {/* Ageing in more than colour (WCAG 1.4.1): an icon, and words. */}
+              {stale && <Clock aria-hidden="true" className="size-3" />}
+              {age ?? "—"}
+              {ageing && (
+                <span className="sr-only">
+                  {stale ? `, over ${String(STALE_DAYS)} days` : `, over ${String(AGEING_DAYS)} days`}
+                </span>
+              )}
             </span>
             <span role="gridcell" className="text-right">
-              {item.charges ? <MoneyDisplay amount={item.charges} /> : "—"}
+              {item.charges ? (
+                <>
+                  <MoneyDisplay
+                    amount={item.charges}
+                    className={highDollar ? "font-semibold" : undefined}
+                  />
+                  {highDollar && <span className="sr-only">, high dollar</span>}
+                </>
+              ) : (
+                "—"
+              )}
             </span>
             <span role="gridcell" className="tabular text-right text-muted">
               {item.recovery_probability === null ||
