@@ -81,7 +81,7 @@ ARG SECURITY_REFRESH=unset
 RUN echo "security refresh: ${SECURITY_REFRESH}" \
  && apt-get update \
  && apt-get upgrade -y \
- && apt-get install -y --no-install-recommends libpq5 \
+ && apt-get install -y --no-install-recommends libpq5 libgomp1 \
  && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/*
 
@@ -106,7 +106,7 @@ RUN set -eux; \
                "$site"/_distutils_hack "$site"/distutils-precedence.pth; \
     done; \
     rm -f /usr/local/bin/pip* /opt/venv/bin/pip* /usr/local/bin/wheel /opt/venv/bin/wheel; \
-    python -c "import rcm.api.main; print('runtime import OK')"
+    python -c "import rcm.api.main, lightgbm; print('runtime import OK')"
 
 # Runs unprivileged: a container that can write its own code is a container an
 # attacker can rewrite.

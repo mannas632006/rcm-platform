@@ -20,8 +20,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from rcm.decision import ncci_store, registry
+from rcm.decision.ncci import NcciCheck
+from rcm.decision.registry import RegistryCheck
 from rcm.decision.rules.correct import Corrected, Correction, run_pipeline
-from rcm.decision.rules.evaluate import Check, ClaimFacts, Evaluation, LineFacts, evaluate
+from rcm.decision.rules.evaluate import (
+    Check,
+    ClaimFacts,
+    Evaluation,
+    LineFacts,
+    Verdict,
+    evaluate,
+)
 from rcm.decision.rules.store import LoadedRuleset, load_ruleset
 from rcm.domain import claim_correction
 from rcm.domain.claim import Claim, ClaimLine
@@ -53,6 +62,39 @@ def claim_facts(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) 
         .order_by(ClaimLine.line_number)
     ).all()
     return facts_from(claim, lines)
+
+
+def scrub_checks(
+    session: Session, facts: ClaimFacts, *, ruleset: LoadedRuleset, today: date
+) -> tuple[NcciCheck, RegistryCheck]:
+    """The reference-data checks a scrub runs beside the ruleset's rules."""
+    # Exactly the NCCI releases the ruleset pinned (ADR-0008 Decision 3).
+    ncci = ncci_store.check_for(
+        session,
+        ptp_release=ruleset.ncci_ptp_release,
+        mue_release=ruleset.ncci_mue_release,
+        codes={str(line.values["line.procedure_code"]) for line in facts.lines},
+    )
+    # The payer's registry entries as they stand, stale ones advisory only
+    # (BR-REG-02, ADR-0014).
+    payer_registry = registry.check_for(
+        session, payer_id=str(facts.claim["claim.payer_id"]), today=today
+    )
+    return ncci, payer_registry
+
+
+def shadow_verdict(
+    session: Session, facts: ClaimFacts, *, ruleset: LoadedRuleset, today: date
+) -> Verdict:
+    """What a scrub would say about these facts, writing nothing.
+
+    The rules baseline a model is measured against (M6.2, ADR-0026): the same
+    rules and checks as `scrub_claim`, without its corrections or its
+    decision record, because measuring history must not change it.
+    """
+    return evaluate(
+        ruleset.rules, facts, checks=scrub_checks(session, facts, ruleset=ruleset, today=today)
+    ).verdict
 
 
 def client_facts(session: Session, *, client_id: uuid.UUID) -> Iterator[tuple[Claim, ClaimFacts]]:
@@ -137,22 +179,11 @@ def scrub_claim(
     facts = claim_facts(session, claim_id=claim_id, client_id=client_id)
     # A caller scrubbing many claims loads the ruleset once and passes it.
     ruleset = ruleset or load_ruleset(session)
-    # Exactly the NCCI releases the ruleset pinned (ADR-0008 Decision 3).
-    ncci = ncci_store.check_for(
-        session,
-        ptp_release=ruleset.ncci_ptp_release,
-        mue_release=ruleset.ncci_mue_release,
-        codes={str(line.values["line.procedure_code"]) for line in facts.lines},
+    ncci, payer_registry = scrub_checks(
+        session, facts, ruleset=ruleset, today=today or datetime.now(UTC).date()
     )
-    # The payer's registry entries as they stand, stale ones advisory only
-    # (BR-REG-02, ADR-0014).
-    payer_registry = registry.check_for(
-        session,
-        payer_id=str(facts.claim["claim.payer_id"]),
-        today=today or datetime.now(UTC).date(),
-    )
-    # Fix what has one right answer, re-run from Layer 1 (ADR-0011).
     checks: list[Check] = [ncci, payer_registry]
+    # Fix what has one right answer, re-run from Layer 1 (ADR-0011).
     if apply_corrections:
         corrected = run_pipeline(ruleset.rules, facts, checks=checks)
     else:

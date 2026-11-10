@@ -24,9 +24,14 @@ evaluation order, the work queues and the screens. Every one of those is logic
 whose correctness is independent of whether the underlying denial pattern is
 real.
 
-`rcm.decision.ml` must refuse a training run whose data provenance is this
-module. The check belongs there, at M6, not here -- a generator cannot prevent
-its own output being misused downstream.
+`rcm.decision.ml` must refuse to let a model trained on this corpus reach
+production. The check belongs there, at M6, not here -- a generator cannot
+prevent its own output being misused downstream. It is made from the data,
+not a flag (ADR-0026): every interchange written here is marked as test
+traffic (ISA15 = T), `rcm.decision.ml.provenance` reads that mark from the
+archived files behind a training run and registers the model as SYNTHETIC,
+and the registry refuses to load a SYNTHETIC model in production. Training
+on it for pipeline testing, which M6 itself requires, stays possible.
 """
 
 from __future__ import annotations

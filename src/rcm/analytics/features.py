@@ -34,8 +34,11 @@ not care how a column was written or what it is called.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from enum import StrEnum
 from typing import Final
+
+from rcm.platform.errors import LeakageError
 
 
 class ColumnRole(StrEnum):
@@ -181,3 +184,38 @@ def columns_with_role(role: ColumnRole) -> frozenset[str]:
 FEATURE_COLUMNS: Final[frozenset[str]] = columns_with_role(ColumnRole.FEATURE)
 LABEL_COLUMNS: Final[frozenset[str]] = columns_with_role(ColumnRole.LABEL)
 KEY_COLUMNS: Final[frozenset[str]] = columns_with_role(ColumnRole.KEY)
+
+
+#: BR-GLOBAL-03 / [TBD-36]: no model trains on CPT descriptor text until the
+#: AMA licensing position is confirmed. Procedure *codes* are identifiers and
+#: are not gated; a column whose name says it holds descriptions is refused
+#: before anyone has to remember why.
+_DESCRIPTOR_MARKERS: Final = ("descriptor", "description")
+
+
+def assert_trainable(columns: Iterable[str]) -> None:
+    """FR-ML-01: refuse, before a row is read, any input a model may not see.
+
+    Each column must be classified in `MART_COLUMNS` as a FEATURE, must have
+    a source (a PENDING column is null on every row, so a model "trained" on
+    it learns nothing and reports that it did), and must not be CPT
+    descriptor text. The first offender is named; a training job that hits
+    this stops rather than dropping the column and carrying on, because a
+    feature list that silently shrinks is a model nobody specified.
+    """
+    for name in columns:
+        role = MART_COLUMNS.get(name)
+        if role is None:
+            raise LeakageError(column=name, reason="not a mart column; classify it first")
+        if role is not ColumnRole.FEATURE:
+            raise LeakageError(
+                column=name, reason=f"a {role} column; only FEATURE columns may train (PD-11)"
+            )
+        if name in PENDING_COLUMNS:
+            raise LeakageError(
+                column=name, reason=f"no source yet ({PENDING_COLUMNS[name]}); null on every row"
+            )
+        if any(marker in name.lower() for marker in _DESCRIPTOR_MARKERS):
+            raise LeakageError(
+                column=name, reason="CPT descriptor text is gated on [TBD-36] (BR-GLOBAL-03)"
+            )

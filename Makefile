@@ -147,6 +147,30 @@ test-leakage: test-db ## PD-11 leakage suite; builds the warehouse twice (M2.4)
 dbt: ## Build the warehouse: staging -> core -> marts, with its tests
 	$(PYTHON) tools/run_dbt.py build --select staging core marts
 
+# M6 (ADR-0026). Models train against `rcm_ml` (infra/postgres/03), which
+# holds the full 24-month corpus (`data/full`, from config.yaml) rather than
+# the 6-month smoke one, and is neither the operator UI's `rcm` nor
+# `rcm_test`, which the suites wipe. The same URL swap as TEST_ENV.
+ML_DB ?= rcm_ml
+ML_ENV := RCM_DATABASE_URL=$(patsubst %/rcm,%/$(ML_DB),$(RCM_DATABASE_URL)) \
+          RCM_MIGRATION_DATABASE_URL=$(patsubst %/rcm,%/$(ML_DB),$(RCM_MIGRATION_DATABASE_URL)) \
+          RCM_RAW_ARCHIVE_ROOT=data/archive/ml
+
+ml-corpus: ## Generate the full 24-month corpus into data/full, then restore the smoke one
+	$(PYTHON) -m tools.synthetic --config tools/synthetic/config/config.yaml
+	$(PYTHON) -m tools.synthetic.validate
+	$(PYTHON) -c "import shutil; shutil.rmtree('data/full', ignore_errors=True); shutil.move('data/synthetic', 'data/full')"
+	$(PYTHON) -m tools.synthetic --config tools/synthetic/config/smoke.yaml
+
+ml-db: ## Full corpus into rcm_ml, the rules system (M4 gate) on it, then the warehouse
+	$(ML_ENV) $(BIN)/alembic upgrade head
+	$(ML_ENV) $(PYTHON) -m tools.load_corpus --corpus data/full
+	$(ML_ENV) $(PYTHON) -m tools.m4_gate
+	$(ML_ENV) $(PYTHON) tools/run_dbt.py build --select staging core marts
+
+ml-train: ## Train ML-1 on rcm_ml, judge it against the rules, register it (M6.1, M6.2)
+	$(ML_ENV) $(PYTHON) -m tools.train_model
+
 test: test-unit test-property test-integration test-security test-leakage ## All Python suites
 
 coverage: ## Combine every suite's coverage and enforce the floor (CLAUDE.md section 7.1)

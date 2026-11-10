@@ -24,10 +24,6 @@ itself asserted, because a comparison where nothing moves proves nothing.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-import uuid
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
@@ -43,10 +39,7 @@ from rcm.analytics.features import (
     MART_COLUMNS,
     PENDING_COLUMNS,
 )
-from rcm.ingestion.acknowledgement_loader import load_acknowledgement_file
-from rcm.ingestion.claim_loader import load_claim_file
-from rcm.ingestion.remittance_loader import load_remittance_file
-from rcm.platform.db import reset_engines, session_scope
+from tests.leakage.warehouse import run_dbt
 
 pytestmark = pytest.mark.leakage
 
@@ -62,72 +55,6 @@ AS_OF = date(2024, 6, 30)
 #: comparison is against a real second warehouse rather than the same tables
 #: rebuilt in place -- which could not be compared at all.
 TRUNCATED_PREFIX = "asof"
-
-
-def run_dbt(args: list[str], *, extra_env: dict[str, str] | None = None) -> None:
-    result = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "tools" / "run_dbt.py"), *args],
-        cwd=REPO_ROOT,
-        env={**os.environ, **(extra_env or {})},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        pytest.fail(f"dbt {' '.join(args)} failed:\n{result.stdout}\n{result.stderr}")
-
-
-CORPUS = REPO_ROOT / "data" / "synthetic"
-CLIENT = uuid.UUID("77777777-0000-4000-8000-000000000077")
-
-TABLES = (
-    "claim_acknowledgement, claim_line, claim, remittance_adjustment, "
-    "remittance_service_line, claim_payment, provider_adjustment, remittance, "
-    "raw_file, payer_alias, payer, payer_match_candidate"
-)
-
-
-def _load_corpus(archive_root: Path) -> None:
-    for folder, loader in (
-        ("837", load_claim_file),
-        ("999", load_acknowledgement_file),
-        ("277CA", load_acknowledgement_file),
-        ("835", load_remittance_file),
-    ):
-        for path in sorted((CORPUS / "x12" / folder).glob("*.txt")):
-            with session_scope() as session:
-                loader(
-                    session,
-                    path.read_bytes(),
-                    client_id=CLIENT,
-                    original_filename=path.name,
-                    archive_root=archive_root,
-                )
-
-
-@pytest.fixture(scope="module")
-def warehouse(owner_engine: Engine, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Engine]:
-    """Load the corpus and build the warehouse once for the module.
-
-    The suite loads its own data rather than relying on whatever happens to
-    be in CORE. The integration suite truncates on teardown, so a leakage
-    run that assumed a loaded database would quietly measure an empty mart
-    and pass -- which is the exact failure mode this suite exists to prevent
-    in the data it checks.
-    """
-    if not CORPUS.exists():
-        pytest.skip("no synthetic corpus on disk; run `make seed`")
-
-    def wipe() -> None:
-        with owner_engine.begin() as conn:
-            conn.execute(text(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE"))
-
-    reset_engines()
-    wipe()
-    _load_corpus(tmp_path_factory.mktemp("raw-leakage"))
-    run_dbt(["build", "--select", "staging", "core", "marts"])
-    yield owner_engine
-    wipe()
 
 
 @pytest.fixture(scope="module")
