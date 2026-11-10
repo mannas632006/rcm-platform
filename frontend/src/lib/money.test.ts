@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { formatMoney, sumMoney } from "./money";
+import { atLeastMoney, formatMoney, sumMoney } from "./money";
+
+describe("atLeastMoney", () => {
+  it("compares exactly in cents, either side of the threshold", () => {
+    expect(atLeastMoney("5000.00", "5000.00")).toBe(true);
+    expect(atLeastMoney("5000", "5000.00")).toBe(true);
+    expect(atLeastMoney("4999.99", "5000.00")).toBe(false);
+    expect(atLeastMoney("5000.01", "5000")).toBe(true);
+    expect(atLeastMoney("-6000.00", "5000.00")).toBe(false);
+  });
+
+  it("never emphasises an amount it cannot read (PD-18)", () => {
+    expect(atLeastMoney("lots", "5000.00")).toBe(false);
+    expect(atLeastMoney("", "5000.00")).toBe(false);
+  });
+});
 
 describe("formatMoney", () => {
   it.each([
