@@ -60,7 +60,7 @@ function PatientShare({ denial, share }: { denial: DenialWorkbench; share: strin
         <MoneyDisplay amount={share} className="font-semibold" />, their share. The contractual
         amount is never billed to the patient.
       </p>
-      {bill.isError && <ErrorPanel what="the patient bill" error={bill.error} onRetry={send} />}
+      {bill.isError && <ErrorPanel what="the patient bill" action="make" error={bill.error} onRetry={send} />}
       <div className="flex gap-2">
         {/* UR-37: a second, deliberate step. */}
         <Button size="sm" variant="danger" disabled={bill.isPending} onClick={send}>
@@ -116,7 +116,7 @@ function Waiting({ waiting, workItemId }: { waiting: WriteOffSummary; workItemId
           {decide.data.status === "APPLIED" ? "Approved and written off." : "Rejected."}
         </p>
       )}
-      {decide.isError && <ErrorPanel what="the decision" error={decide.error} onRetry={send} />}
+      {decide.isError && <ErrorPanel what="the decision" action="record" error={decide.error} onRetry={send} />}
       {canDecide && !decide.isSuccess && approve === null && (
         <div className="flex gap-2">
           <Button size="sm" onClick={() => { setApprove(true); }}>
@@ -192,7 +192,7 @@ function Request({ denial, share }: { denial: DenialWorkbench; share: string }) 
           share of the denied lines. What the patient owes is not written off.
         </p>
         {writeOff.isError && (
-          <ErrorPanel what="the write-off" error={writeOff.error} onRetry={send} />
+          <ErrorPanel what="the write-off" action="make" error={writeOff.error} onRetry={send} />
         )}
         <div className="flex gap-2">
           {/* UR-37: the write-off is a second, deliberate step. */}

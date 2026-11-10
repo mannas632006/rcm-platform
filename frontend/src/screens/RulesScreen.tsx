@@ -330,7 +330,7 @@ function PromoteDialog({
         </div>
         {promote.isError && (
           <ErrorPanel
-            what="the promotion"
+            what="the rule" action="promote"
             error={promote.error}
             onRetry={() => {
               promote.reset();

@@ -287,14 +287,14 @@ function Form({
       </label>
       {preview.isError && (
         <ErrorPanel
-          what="the preview"
+          what="the preview" action="make"
           error={preview.error}
           onRetry={runPreview}
         />
       )}
       {send.isError && (
         <ErrorPanel
-          what="the resubmission"
+          what="the corrected claim" action="send"
           error={send.error}
           onRetry={runSend}
         />

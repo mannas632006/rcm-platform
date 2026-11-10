@@ -129,6 +129,7 @@ export function ResolveDialog({ item, openPath, onClose, onResolved }: ResolveDi
         {resolve.isError && (
           <ErrorPanel
             what="the resolution"
+            action="save"
             error={resolve.error}
             onRetry={() => {
               resolve.reset();

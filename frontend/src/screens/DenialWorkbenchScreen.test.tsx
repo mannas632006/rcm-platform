@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { keys } from "@/api/queries";
 import type { DenialWorkbench } from "@/api/types";
 import { App } from "@/App";
-import { expectNoHeadingSkips, ME, mockApi, renderApp } from "@/test/render";
+import { expectNoHeadingSkips, ME, mockApi, renderApp, type Routes } from "@/test/render";
 
 const ID = "44444444-0000-4000-8000-000000000004";
 const CLAIM_ID = "11111111-0000-4000-8000-000000000001";
@@ -612,7 +612,7 @@ const CLAIM = {
   decisions: [],
 };
 
-function withCorrection(denial: unknown = DENIAL) {
+function withCorrection(denial: unknown = DENIAL, correction?: Routes[string]) {
   return mockApi({
     "/api/v1/me": { body: DISPOSER },
     "/api/v1/work-queues": { body: { queues: [] } },
@@ -624,7 +624,7 @@ function withCorrection(denial: unknown = DENIAL) {
         changes: [{ field: "member_id", before: "VAZ9301", after: "NEW77" }],
       },
     },
-    [`/api/v1/denials/${ID}/correction`]: {
+    [`/api/v1/denials/${ID}/correction`]: correction ?? {
       body: {
         claim_id: "77777777-0000-4000-8000-000000000007",
         submitter_claim_id: "CLM-88214-R2",
@@ -686,6 +686,35 @@ describe("correct and resubmit (M5.7 slice 3, UR-10)", () => {
     expect(
       within(panel).getByRole("button", { name: "Resubmit corrected claim" }),
     ).toBeDisabled();
+  });
+
+  it("says why a correction was refused, not only that it was (GATE M5 finding)", async () => {
+    withCorrection(DENIAL, {
+      status: 422,
+      body: {
+        title: "Request failed validation",
+        detail: "The request was well-formed but failed domain validation.",
+        code: "validation-failed",
+        request_id: "req-1",
+        context: {
+          field: "correction",
+          reason:
+            "the scrubber blocks the corrected claim: The payer registry says this payer " +
+            "requires prior authorisation for this procedure, and the claim carries none.",
+        },
+      },
+    });
+    renderApp(<App />, { path: PATH });
+    const user = userEvent.setup();
+    const panel = await screen.findByRole("region", { name: "Correct and resubmit" });
+    await user.type(await within(panel).findByLabelText("New member ID"), "NEW77");
+    await user.click(within(panel).getByRole("button", { name: "Preview changes" }));
+    await within(panel).findByRole("table", { name: "Changes to be sent" });
+    await user.click(within(panel).getByRole("button", { name: "Resubmit corrected claim" }));
+    const alert = await within(panel).findByRole("alert");
+    // A send that failed, not a load; and what to fix, in the server's words.
+    expect(alert).toHaveTextContent("Could not send the corrected claim.");
+    expect(alert).toHaveTextContent(/requires prior authorisation for this procedure/);
   });
 
   it("stays out of the way while an appeal is in draft (one decision at a time)", async () => {

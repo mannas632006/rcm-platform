@@ -128,8 +128,10 @@ test("5. correct a denied claim and resubmit it, after previewing every change",
   page,
   request,
 }) => {
-  // Journey 4 has written off the first decidable denial.
-  const [denial] = await decidableDenials(request, 1);
+  // A wrong member ID: coverage terminated (CO-27) or patient not
+  // identified as insured (CO-31), the denials a new member ID answers.
+  // Journey 4 may have written off the first of them.
+  const [denial] = await decidableDenials(request, 1, ["27", "31"]);
   await signInAs(page, "denials");
   await page.goto("/");
   const grid = await openQueue(page, "Denial Workbench");

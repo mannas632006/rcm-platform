@@ -52,6 +52,7 @@ export async function expectAccessible(page: Page, screen: string): Promise<void
 export async function decidableDenials(
   request: APIRequestContext,
   count: number,
+  reasons?: readonly string[],
 ): Promise<string[]> {
   const headers = { Authorization: `Bearer ${token("denials")}` };
   const queue = await request.get("/api/v1/work-queues/denials/items?limit=200", { headers });
@@ -65,12 +66,28 @@ export async function decidableDenials(
       appeal: unknown;
       write_offs: { status: string }[];
       claim: { state: string } | null;
+      lines: { status: string; adjustments: { reason_code: string }[] }[];
     };
     // As the workbench judges it (undecidable() in DenialWorkbenchScreen): a
     // write-off waiting for approval holds the denial, so it is not open to
     // another decision. Journey 4 leaves one such behind.
     const held = body.write_offs.some((w) => w.status === "PENDING_APPROVAL");
-    if (body.claim?.state === "Denied" && body.outcome === null && body.appeal === null && !held) {
+    // A correction only gets through when it fixes what the payer denied:
+    // the scrubber refuses a replacement that still lacks, say, the
+    // authorisation (PD-18). So a journey that corrects one field asks for
+    // denials that field answers.
+    const answered =
+      reasons === undefined ||
+      body.lines
+        .filter((line) => line.status === "DENIED")
+        .every((line) => line.adjustments.every((a) => reasons.includes(a.reason_code)));
+    if (
+      body.claim?.state === "Denied" &&
+      body.outcome === null &&
+      body.appeal === null &&
+      !held &&
+      answered
+    ) {
       found.push(id);
       if (found.length === count) return found;
     }

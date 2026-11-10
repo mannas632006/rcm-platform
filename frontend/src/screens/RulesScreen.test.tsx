@@ -286,7 +286,7 @@ describe("Promote (S-06, UR-30)", () => {
     await user.type(within(dialog).getByLabelText("Why"), "reviewed");
     await user.click(within(dialog).getByRole("button", { name: "Promote to Shadow" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Could not load the promotion.",
+      "Could not promote the rule.",
     );
     // Still open, so the reason typed is not lost.
     expect(within(dialog).getByLabelText("Why")).toHaveValue("reviewed");

@@ -98,6 +98,30 @@ product behaviour, not only at the tests:
 The journeys now assert what stays on the screen, not a message that flashes
 and is gone.
 
+**After #23 merged, CI failed journey 5 once** (run 42765275907):
+
+3. **A correction refused without saying why.**
+   - Denials that tie in the queue have no fixed order, so journey 5 took a
+     different denial in CI: CLM00000530, denied CO-197 (no authorisation).
+   - Changing only the member ID leaves the authorisation missing. The
+     scrubber refused the replacement, which is correct (PD-18).
+   - The panel showed only "failed domain validation". The server had sent
+     the reason, in the problem's `context`, and the client dropped it.
+   - Fixed:
+     - The error panel now shows the server's reason: here, that the payer
+       requires prior authorisation for this procedure.
+     - An action that fails says so ("Could not send the corrected claim"),
+       not "Could not load".
+     - Journey 5 asks for the denials a new member ID answers: CO-27 or
+       CO-31. Replayed through the API, all 13 such decidable denials in
+       the seed resubmit; CLM00000530 is refused, with that reason.
+4. **The first test in a file could fail on a slow machine.** A lazy-loaded
+   screen took longer to compile than `findBy`'s one second. The Vitest
+   setup now loads the screens before any test waits.
+
+The run after these fixes, locally on 2026-11-10: **20 passed, 0 failed**
+(5 journeys; 15 axe scans, 0 violations).
+
 ## M5 tasks
 
 | Task | Status | Where |
