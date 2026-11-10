@@ -79,8 +79,8 @@ function Editor({ appeal, workItemId }: { appeal: Appeal; workItemId: string }) 
           </ul>
         </div>
       )}
-      {revise.isError && <ErrorPanel what="the letter" error={revise.error} onRetry={save} />}
-      {sign.isError && <ErrorPanel what="the appeal" error={sign.error} onRetry={send} />}
+      {revise.isError && <ErrorPanel what="the letter" action="save" error={revise.error} onRetry={save} />}
+      {sign.isError && <ErrorPanel what="the appeal" action="send" error={sign.error} onRetry={send} />}
       {prompts && !dirty && (
         <p className="text-sm text-warn-strong">
           Replace every [bracketed] prompt with your own words before signing.
@@ -150,7 +150,7 @@ export function AppealPanel({ denial }: { denial: DenialWorkbench }) {
           <div className="flex flex-col gap-2">
             {draft.isError && (
               <ErrorPanel
-                what="the draft"
+                what="the draft" action="make"
                 error={draft.error}
                 onRetry={() => {
                   draft.mutate({ idempotencyKey: key });

@@ -138,11 +138,22 @@ def queue_for(kind: WorkItemKind) -> QueueDef:
     raise LookupError(f"{kind} is in no queue")
 
 
-def queue_summaries(session: Session, *, principal: Principal, now: datetime) -> list[QueueSummary]:
-    """Open work per queue the principal may see, inside its client scope."""
+def queue_summaries(
+    session: Session, *, principal: Principal, now: datetime, payer_id: str | None = None
+) -> list[QueueSummary]:
+    """Open work per queue the principal may see, inside its client scope.
+
+    With `payer_id`, only work on that payer's claims (UR-19); an item with
+    no claim belongs to no payer, so it is not counted then.
+    """
     queues = visible_queues(principal)
     if not queues:
         return []
+    payer = (
+        [WorkItem.claim_id.in_(select(Claim.claim_id).where(Claim.payer_id == payer_id))]
+        if payer_id is not None
+        else []
+    )
     counts: dict[str, tuple[int, int, int, int, int]] = {
         kind: (total, unassigned, mine, pinned, overdue)
         for kind, total, unassigned, mine, pinned, overdue in session.execute(
@@ -154,7 +165,7 @@ def queue_summaries(session: Session, *, principal: Principal, now: datetime) ->
                     func.count().filter(WorkItem.assigned_to == principal.subject),
                     func.count().filter(WorkItem.deadline_pinned.is_(True)),
                     func.count().filter(WorkItem.sla_due_at < now),
-                ).where(WorkItem.state.in_([str(s) for s in OPEN_STATES])),
+                ).where(WorkItem.state.in_([str(s) for s in OPEN_STATES]), *payer),
                 WorkItem,
                 principal,
             ).group_by(WorkItem.kind)

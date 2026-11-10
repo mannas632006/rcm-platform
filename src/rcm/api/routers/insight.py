@@ -8,14 +8,18 @@ platform reference data behind `rule:read`.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from rcm.api.dependencies import CurrentPrincipal, DbSession, require_permission
 from rcm.api.schemas import (
     AUTH_ERRORS,
     DashboardOut,
+    DashboardSegmentsOut,
+    PayerChoiceOut,
     PayerRegistryOut,
     RegistryEntryOut,
     RuleOut,
@@ -35,9 +39,27 @@ router = APIRouter(prefix="/api/v1", tags=["insight"], responses=AUTH_ERRORS)
     summary="KPIs for my clients",
     dependencies=[require_permission(Permission.REPORT_READ)],
 )
-def get_dashboard(principal: CurrentPrincipal, session: DbSession) -> DashboardOut:
-    """Denial rate, first-pass clean rate, claims by state and queue health."""
-    d = insight.dashboard(session, principal=principal, now=datetime.now(UTC))
+def get_dashboard(
+    principal: CurrentPrincipal,
+    session: DbSession,
+    client_id: Annotated[
+        uuid.UUID | None, Query(description="One of my clients; omit for all of them.")
+    ] = None,
+    payer_id: Annotated[
+        str | None, Query(min_length=1, max_length=80, description="One payer, by payer_id.")
+    ] = None,
+) -> DashboardOut:
+    """Denial rate, first-pass clean rate, claims by state and queue health,
+    for all my clients and payers or segmented to one of each (UR-19). A
+    client outside my scope is refused like any other (PD-20)."""
+    d = insight.dashboard(
+        session,
+        principal=principal,
+        now=datetime.now(UTC),
+        client_id=client_id,
+        payer_id=payer_id,
+    )
+    choices = insight.segments(session, principal=principal)
     return DashboardOut(
         adjudicated_claims=d.adjudicated_claims,
         denied_claims=d.denied_claims,
@@ -50,6 +72,12 @@ def get_dashboard(principal: CurrentPrincipal, session: DbSession) -> DashboardO
         pinned_work=d.pinned_work,
         overdue_work=d.overdue_work,
         steps_awaiting_review=d.steps_awaiting_review,
+        client_id=client_id,
+        payer_id=payer_id,
+        segments=DashboardSegmentsOut(
+            client_ids=choices.client_ids,
+            payers=[PayerChoiceOut(payer_id=p.payer_id, name=p.name) for p in choices.payers],
+        ),
     )
 
 
@@ -60,12 +88,14 @@ def get_dashboard(principal: CurrentPrincipal, session: DbSession) -> DashboardO
     dependencies=[require_permission(Permission.RULE_READ)],
 )
 def list_rules(principal: CurrentPrincipal, session: DbSession) -> RulesOut:
-    """Each rule's latest version, status and latest backtest (M4.4-M4.6)."""
+    """Each rule's latest version, status and latest backtest (M4.4-M4.6),
+    with where Promote would take it and why it cannot yet (UR-30)."""
     return RulesOut(
         rules=[
             RuleOut.model_validate(row, from_attributes=True)
             for row in insight.rules(session, principal=principal)
-        ]
+        ],
+        fp_rate_cap=get_settings().blocking_rule_max_false_positive_rate,
     )
 
 

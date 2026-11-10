@@ -202,14 +202,17 @@ def denied_submitter_claim_ids(client_id: uuid.UUID) -> Select[str]:
     return _denied_submitter_claim_ids(client_id)
 
 
-def denial_rate(session: Session, *, client_id: uuid.UUID) -> DenialRate:
-    """Denial rate for one client, counted per claim (BR-DATA-03).
+def denial_rate(
+    session: Session, *, client_id: uuid.UUID, payer_id: str | None = None
+) -> DenialRate:
+    """Denial rate for one client, counted per claim (BR-DATA-03), optionally
+    for one payer (UR-19: aggregates hide where problems concentrate).
 
     Scoped by `client_id` explicitly rather than through `scoped_query`,
     because this is an aggregate over two tables rather than a select of one
     entity; every `WHERE` here carries the client, and the test in
     `tests/security` asserts that a second client's rows cannot reach the
-    result.
+    result. The payer is the claim's `payer_id`, never a name (PD-8).
     """
     denied_ids = _denied_submitter_claim_ids(client_id)
 
@@ -226,6 +229,7 @@ def denial_rate(session: Session, *, client_id: uuid.UUID) -> DenialRate:
                     ClaimPayment.client_id == client_id,
                 )
             ),
+            *([Claim.payer_id == payer_id] if payer_id is not None else []),
         )
         .subquery()
     )

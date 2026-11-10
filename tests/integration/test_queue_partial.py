@@ -96,6 +96,37 @@ def test_a_failing_model_never_blocks_the_queue(
     assert "CLM-A" not in str(page["recovery_unavailable"])
 
 
+@pytest.mark.invariant
+@pytest.mark.parametrize("model", [None, "fails"])
+def test_model_degradation_falls_back_to_rules(
+    api: TestClient,  # noqa: F811
+    claims: dict[str, uuid.UUID],
+    model: str | None,
+) -> None:
+    """CLAUDE.md 7.2 / M5.12: with the model absent or failing, the queue is
+    the rules' order -- the priority score -- and every item is still there.
+
+    CLM-B is given the higher rules priority. Neither the model's silence
+    nor its failure may move the queue off the rules (PD-5, PD-18).
+    """
+    with session_scope() as session:
+        session.execute(
+            text("UPDATE work_item SET priority_score = :p WHERE claim_id = :c"),
+            [{"p": 10, "c": claims["CLM-A"]}, {"p": 90, "c": claims["CLM-B"]}],
+        )
+    if model == "fails":
+        scoring.deploy_recovery_model(Answers(RuntimeError("model unreachable")))
+
+    page = items(api, "data-quality")
+    rows = page["items"]
+    assert isinstance(rows, list)
+    assert [row["submitter_claim_id"] for row in rows] == ["CLM-B", "CLM-A"]
+    assert {row["recovery_probability"] for row in rows} == {None}
+    assert page["recovery_unavailable"] == (
+        scoring.FAILED if model == "fails" else scoring.NOT_DEPLOYED
+    )
+
+
 def test_a_model_that_breaks_its_database_work_does_not_take_the_page(
     api: TestClient,  # noqa: F811
     claims: dict[str, uuid.UUID],

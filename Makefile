@@ -27,7 +27,7 @@ COMPOSE := docker compose
 .PHONY: help venv install up down migrate seed openapi \
         lint typecheck test test-unit test-property test-integration \
         test-security test-contract coverage verify clean frontend-install frontend-lint \
-        frontend test-db
+        frontend test-db e2e
 # `frontend` must be phony: a directory of that name exists, and without this
 # make treats the gate as already built and silently skips it.
 
@@ -85,6 +85,14 @@ frontend: ## Frontend gate: types, lint, tokens, API drift, tests, build
 	cd frontend && npm run api:check
 	cd frontend && npm test
 	cd frontend && npx vite build
+
+# GATE M5 (ADR-0023): the five journeys, then axe on every screen, in a real
+# browser against the real API and `rcm_test` -- which the run wipes and
+# reseeds, never `rcm`. Needs `make up` and `make seed-smoke`; Playwright
+# starts its own API and UI on ports of its own.
+e2e: test-db ## GATE M5: Playwright journeys, then axe (WCAG 2.1 AA)
+	cd frontend && npx playwright test journeys
+	cd frontend && npx playwright test accessibility
 
 # --- quality gates ----------------------------------------------------------
 
@@ -157,7 +165,7 @@ coverage: ## Combine every suite's coverage and enforce the floor (CLAUDE.md sec
 verify-ci: ## THE GATE, as CI runs it: separate env, empty DB, CI's step order
 	$(PYTHON) -m tools.verify_ci $(ARGS)
 
-verify: lint typecheck test coverage frontend ## THE GATE: lint + types + every suite + the coverage floor + the frontend
+verify: lint typecheck test coverage frontend e2e ## THE GATE: lint + types + every suite + the coverage floor + the frontend + e2e/a11y
 	@echo ""
 	@echo "verify: PASS"
 

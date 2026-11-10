@@ -60,7 +60,7 @@ function PatientShare({ denial, share }: { denial: DenialWorkbench; share: strin
         <MoneyDisplay amount={share} className="font-semibold" />, their share. The contractual
         amount is never billed to the patient.
       </p>
-      {bill.isError && <ErrorPanel what="the patient bill" error={bill.error} onRetry={send} />}
+      {bill.isError && <ErrorPanel what="the patient bill" action="make" error={bill.error} onRetry={send} />}
       <div className="flex gap-2">
         {/* UR-37: a second, deliberate step. */}
         <Button size="sm" variant="danger" disabled={bill.isPending} onClick={send}>
@@ -71,6 +71,19 @@ function PatientShare({ denial, share }: { denial: DenialWorkbench; share: strin
         </Button>
       </div>
     </div>
+  );
+}
+
+/** What was written off, why, and who asked and decided (PD-1, visible). */
+function Applied({ writeOff }: { writeOff: WriteOffSummary }) {
+  const reason = REASONS.find((r) => r.value === writeOff.reason)?.label ?? writeOff.reason;
+  return (
+    <p role="status" className="text-sm">
+      Written off: <MoneyDisplay amount={writeOff.amount} className="font-semibold" />. {reason}
+      {writeOff.note ? ` (${writeOff.note})` : ""}. Asked by {writeOff.requested_by} on{" "}
+      {formatDate(writeOff.requested_at)}
+      {writeOff.decided_by ? `, approved by ${writeOff.decided_by}` : ""}.
+    </p>
   );
 }
 
@@ -103,7 +116,7 @@ function Waiting({ waiting, workItemId }: { waiting: WriteOffSummary; workItemId
           {decide.data.status === "APPLIED" ? "Approved and written off." : "Rejected."}
         </p>
       )}
-      {decide.isError && <ErrorPanel what="the decision" error={decide.error} onRetry={send} />}
+      {decide.isError && <ErrorPanel what="the decision" action="record" error={decide.error} onRetry={send} />}
       {canDecide && !decide.isSuccess && approve === null && (
         <div className="flex gap-2">
           <Button size="sm" onClick={() => { setApprove(true); }}>
@@ -179,7 +192,7 @@ function Request({ denial, share }: { denial: DenialWorkbench; share: string }) 
           share of the denied lines. What the patient owes is not written off.
         </p>
         {writeOff.isError && (
-          <ErrorPanel what="the write-off" error={writeOff.error} onRetry={send} />
+          <ErrorPanel what="the write-off" action="make" error={writeOff.error} onRetry={send} />
         )}
         <div className="flex gap-2">
           {/* UR-37: the write-off is a second, deliberate step. */}
@@ -245,18 +258,23 @@ function Request({ denial, share }: { denial: DenialWorkbench; share: string }) 
 export function WriteOffPanel({ denial }: { denial: DenialWorkbench }) {
   const me = useMe();
   const waiting = denial.write_offs.find((w) => w.status === "PENDING_APPROVAL");
+  // Once applied the denial is resolved, and without this the panel went
+  // blank: the confirmation lived in Request, which a refetch unmounts.
+  const applied = denial.write_offs.find((w) => w.status === "APPLIED");
   const canDispose = hasPermission(me.data, "denial:disposition");
   const share = deniedShare(denial, false);
   const patient = deniedShare(denial, true);
   const resolved = denial.outcome !== null;
 
-  if (!waiting && (resolved || !canDispose)) return null;
+  if (!waiting && !applied && (resolved || !canDispose)) return null;
   return (
     <Card aria-labelledby="decide-heading">
       <CardHeader id="decide-heading" title="Decide" />
       <div className="p-4">
         {waiting ? (
           <Waiting waiting={waiting} workItemId={denial.work_item_id} />
+        ) : applied ? (
+          <Applied writeOff={applied} />
         ) : (
           <div className="flex flex-col gap-4">
             {share === null || share === "0.00" ? (

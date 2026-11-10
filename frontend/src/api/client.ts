@@ -45,6 +45,10 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: string | undefined;
   readonly requestId: string | undefined;
+  /** Why, when the server says: the problem's scrubbed `context.reason`
+   * ("the scrubber blocks the corrected claim: ..."). The detail is fixed
+   * per error class, so without this the operator learns only that it failed. */
+  readonly reason: string | undefined;
 
   constructor(status: number, problem: unknown) {
     const body: Record<string, unknown> =
@@ -58,6 +62,12 @@ export class ApiError extends Error {
     this.status = status;
     this.code = field("code");
     this.requestId = field("request_id");
+    const context = body.context;
+    const reason =
+      typeof context === "object" && context !== null
+        ? (context as Record<string, unknown>).reason
+        : undefined;
+    this.reason = typeof reason === "string" ? reason : undefined;
   }
 }
 

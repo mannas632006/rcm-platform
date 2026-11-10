@@ -151,6 +151,27 @@ class DashboardOut(_Out):
     steps_awaiting_review: int = Field(
         description="Automatic claim steps waiting for the submitter's approval (ADR-0006)."
     )
+    client_id: uuid.UUID | None = Field(
+        description="The client these figures are segmented to (UR-19); null for all of mine."
+    )
+    payer_id: str | None = Field(
+        description="The payer these figures are segmented to (UR-19, PD-8); null for all."
+    )
+    segments: DashboardSegmentsOut
+
+
+class PayerChoiceOut(_Out):
+    payer_id: str
+    name: str
+
+
+class DashboardSegmentsOut(_Out):
+    """What the dashboard may be segmented by, inside my client scope."""
+
+    client_ids: list[uuid.UUID]
+    payers: list[PayerChoiceOut] = Field(
+        description="Payers with at least one claim in my clients, by name."
+    )
 
 
 class RuleOut(_Out):
@@ -166,10 +187,43 @@ class RuleOut(_Out):
         "client's latest that saw a claim, the worst of them (M4.6). Null when none has run "
         "or one flagged nothing."
     )
+    next_status: str | None = Field(
+        description="Where Promote would take this version (S-06); null once BLOCKING or "
+        "DEPRECATED."
+    )
+    promotion_blocked_by: str | None = Field(
+        description="UR-30: why promotion would be refused now, judged on every client's "
+        "backtests as the step itself is. Null when it would be taken."
+    )
 
 
 class RulesOut(_Out):
     rules: list[RuleOut]
+    fp_rate_cap: Decimal = Field(
+        description="FR-RULES-03 / TBD-45: a rule above this false-positive rate may not be "
+        "BLOCKING."
+    )
+
+
+RULE_PROMOTION_ERRORS: dict[int | str, dict[str, Any]] = {
+    404: {"model": Problem, "description": "No such rule version."},
+    409: {
+        "model": Problem,
+        "description": "The step is not the version's next promotion, or the lifecycle refuses "
+        "it: no backtest, an unmeasured or too-high false-positive rate, a severity that never "
+        "blocks, or another version already live.",
+    },
+}
+
+
+class RulePromotionOut(_Out):
+    rule_id: str
+    version: int
+    from_status: str
+    to_status: str
+    fp_rate: Decimal | None = Field(
+        description="The false-positive rate the step rested on, for SHADOW and BLOCKING."
+    )
 
 
 class RegistryEntryOut(_Out):
@@ -443,6 +497,15 @@ class DenialWorkbenchOut(_Out):
 
 class _In(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class RulePromoteIn(_In):
+    """S-06 Promote: one step along FR-RULES-06's path, named so a stale
+    screen cannot promote twice."""
+
+    version: int = Field(ge=1)
+    to_status: Literal["BACKTESTING", "SHADOW", "ADVISORY", "BLOCKING"]
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 class DispositionIn(_In):

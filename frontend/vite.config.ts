@@ -5,9 +5,10 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react-swc";
 import { defineConfig } from "vite";
 
-// The API runs on :8000 (make up / uvicorn). In development the UI proxies to
+// The API runs on :8000 (make up / uvicorn); the E2E run points elsewhere
+// with RCM_API_URL. In development the UI proxies to
 // it, so the browser sees one origin and no CORS policy is needed.
-const API = "http://localhost:8000";
+const API = process.env.RCM_API_URL ?? "http://localhost:8000";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
