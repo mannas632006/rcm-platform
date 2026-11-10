@@ -193,23 +193,56 @@ KEY_COLUMNS: Final[frozenset[str]] = columns_with_role(ColumnRole.KEY)
 _DESCRIPTOR_MARKERS: Final = ("descriptor", "description")
 
 
-def assert_trainable(columns: Iterable[str]) -> None:
+class Stage(StrEnum):
+    """When a model decides, which fixes what it may already know."""
+
+    #: ML-1: the second before SEND (PD-11).
+    SUBMISSION = "SUBMISSION"
+    #: ML-2, ML-3: the 835 has said no. The denial itself is a fact; what
+    #: happened after it -- a resubmission, a payment, the final outcome --
+    #: is not.
+    DENIAL = "DENIAL"
+
+
+#: LABEL columns that are the 835's own facts: answers for a model at
+#: submission, inputs for one at denial. Nothing after the 835 is here.
+KNOWN_AT_DENIAL: Final[frozenset[str]] = frozenset(
+    {
+        "cas_group_code",
+        "carc_code",
+        "rarc_codes",
+        "adjustment_amount",
+        "claim_status_code",
+        "line_paid",
+        "line_allowed",
+        "denial_category",
+        "preventability",
+        "days_submission_to_adjudication",
+    }
+)
+
+
+def assert_trainable(columns: Iterable[str], *, stage: Stage = Stage.SUBMISSION) -> None:
     """FR-ML-01: refuse, before a row is read, any input a model may not see.
 
-    Each column must be classified in `MART_COLUMNS` as a FEATURE, must have
-    a source (a PENDING column is null on every row, so a model "trained" on
-    it learns nothing and reports that it did), and must not be CPT
-    descriptor text. The first offender is named; a training job that hits
-    this stops rather than dropping the column and carrying on, because a
-    feature list that silently shrinks is a model nobody specified.
+    Each column must be classified in `MART_COLUMNS` as a FEATURE -- or, for
+    a model that decides at `Stage.DENIAL`, one of the 835's own facts in
+    `KNOWN_AT_DENIAL` -- must have a source (a PENDING column is null on
+    every row, so a model "trained" on it learns nothing and reports that it
+    did), and must not be CPT descriptor text. The first offender is named;
+    a training job that hits this stops rather than dropping the column and
+    carrying on, because a feature list that silently shrinks is a model
+    nobody specified.
     """
     for name in columns:
         role = MART_COLUMNS.get(name)
         if role is None:
             raise LeakageError(column=name, reason="not a mart column; classify it first")
-        if role is not ColumnRole.FEATURE:
+        known_at_denial = stage is Stage.DENIAL and name in KNOWN_AT_DENIAL
+        if role is not ColumnRole.FEATURE and not known_at_denial:
             raise LeakageError(
-                column=name, reason=f"a {role} column; only FEATURE columns may train (PD-11)"
+                column=name,
+                reason=f"a {role} column, not knowable at {stage.lower()} (PD-11)",
             )
         if name in PENDING_COLUMNS:
             raise LeakageError(

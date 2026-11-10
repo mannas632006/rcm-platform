@@ -27,12 +27,12 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
-from typing import Final
+from typing import Any, Final
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from rcm.analytics.features import assert_trainable
+from rcm.analytics.features import Stage, assert_trainable
 
 #: Where dbt builds the marts (`analytics` + `_marts`; see dbt_project.yml).
 MART_SCHEMA: Final = "analytics_marts"
@@ -150,30 +150,31 @@ def _value(raw: object, kind: Kind) -> Value:
     return float(raw)
 
 
-def _mart(columns: Sequence[str]) -> sa.TableClause:
-    return sa.table(TRAINING_MART, *(sa.column(name) for name in columns), schema=MART_SCHEMA)
+def _mart(columns: Sequence[str], *, name: str = TRAINING_MART) -> sa.TableClause:
+    return sa.table(name, *(sa.column(c) for c in columns), schema=MART_SCHEMA)
 
 
-def denial_lines(
-    session: Session, *, features: Sequence[Feature] = DENIAL_RISK_FEATURES
+def _read(
+    session: Session,
+    features: Sequence[Feature],
+    *,
+    where: Sequence[sa.ColumnElement[bool]],
+    label: sa.ColumnElement[bool],
+    first: Sequence[sa.ColumnElement[Any]],
+    mart: sa.TableClause,
 ) -> LineDataset:
-    """Every matured, adjudicated service line, with `is_denied` as the label."""
-    assert_trainable(f.name for f in features)
-    keys = ("service_line_id", "claim_id", "client_id", "submission_date")
-    names = [f.name for f in features]
-    # payer_id is both a feature and the key the per-payer report groups by.
-    selected = list(dict.fromkeys([*keys, "payer_id", *names, "is_denied"]))
-    mart = _mart([*selected, "adjustment_sequence"])
-    # Ordered so a line's first adjustment row comes first; that row is kept
-    # and the line's other rows, which repeat its features, are skipped.
+    """One row per service line: the first of its rows in `first`'s order."""
+    keys = ("service_line_id", "claim_id", "client_id", "submission_date", "payer_id")
+    names = list(dict.fromkeys([*keys, *(f.name for f in features)]))
     query = (
-        sa.select(*(mart.c[name] for name in selected))
-        .where(mart.c.is_denied.is_not(None), mart.c.submission_date.is_not(None))
-        .order_by(mart.c.service_line_id, mart.c.adjustment_sequence.asc().nulls_first())
+        sa.select(*(mart.c[n] for n in names), label.label("label"))
+        .where(mart.c.submission_date.is_not(None), *where)
+        .order_by(mart.c.service_line_id, *first)
     )
     rows: list[LineRow] = []
     seen: set[uuid.UUID] = set()
     for row in session.execute(query):
+        # A line's other adjustment rows repeat its features: keep the first.
         if row.service_line_id in seen:
             continue
         seen.add(row.service_line_id)
@@ -185,7 +186,106 @@ def denial_lines(
                 payer_id=row.payer_id,
                 submission_date=row.submission_date,
                 values=tuple(_value(getattr(row, f.name), f.kind) for f in features),
-                label=bool(row.is_denied),
+                label=bool(row.label),
             )
         )
     return LineDataset(tuple(features), tuple(sorted(rows, key=lambda r: r.submission_date)))
+
+
+def denial_lines(
+    session: Session, *, features: Sequence[Feature] = DENIAL_RISK_FEATURES
+) -> LineDataset:
+    """ML-1: every matured, adjudicated service line; the label is `is_denied`."""
+    assert_trainable(f.name for f in features)
+    names = [f.name for f in features]
+    mart = _mart(
+        list(
+            dict.fromkeys(
+                [
+                    "service_line_id",
+                    "claim_id",
+                    "client_id",
+                    "submission_date",
+                    "payer_id",
+                    *names,
+                    "is_denied",
+                    "adjustment_sequence",
+                ]
+            )
+        )
+    )
+    return _read(
+        session,
+        features,
+        where=[mart.c.is_denied.is_not(None)],
+        label=mart.c.is_denied,
+        first=[mart.c.adjustment_sequence.asc().nulls_first()],
+        mart=mart,
+    )
+
+
+#: ML-3's inputs (SRS 9.1: "denial + history"): the line as it was sent, and
+#: the 835's answer to it (Stage.DENIAL). Nothing after the 835.
+RECOVERY_FEATURES: Final[tuple[Feature, ...]] = (
+    *DENIAL_RISK_FEATURES,
+    Feature("carc_code", Kind.CATEGORY),
+    Feature("cas_group_code", Kind.CATEGORY),
+    Feature("denial_category", Kind.CATEGORY),
+    Feature("preventability", Kind.CATEGORY),
+    Feature("adjustment_amount", Kind.NUMBER),
+    Feature("days_submission_to_adjudication", Kind.NUMBER),
+)
+
+
+def recovery_lines(
+    session: Session, *, features: Sequence[Feature] = RECOVERY_FEATURES
+) -> LineDataset:
+    """ML-3: every matured denied line; the label is whether it was recovered.
+
+    Recovered means a later submission in the same chain (PD-7: resubmissions
+    chain to the original) was paid on the same procedure. Taken at the
+    denial: the line's features are as it was sent, its CARC is the payer's
+    refusal (a patient-share row is read only when the line has nothing
+    else), and the label is the one fact from after it.
+    """
+    assert_trainable((f.name for f in features), stage=Stage.DENIAL)
+    names = [f.name for f in features]
+    columns = list(
+        dict.fromkeys(
+            [
+                "service_line_id",
+                "claim_id",
+                "client_id",
+                "submission_date",
+                "payer_id",
+                *names,
+                "is_denied",
+                "adjustment_sequence",
+                "root_claim_id",
+                "submission_attempt",
+                "cpt_hcpcs",
+                "line_paid",
+            ]
+        )
+    )
+    denied = _mart(columns)
+    later = _mart(columns).alias("later")
+    chain = sa.func.coalesce(denied.c.root_claim_id, denied.c.claim_id)
+    recovered = sa.exists().where(
+        sa.func.coalesce(later.c.root_claim_id, later.c.claim_id) == chain,
+        later.c.client_id == denied.c.client_id,
+        later.c.submission_attempt > denied.c.submission_attempt,
+        later.c.cpt_hcpcs == denied.c.cpt_hcpcs,
+        later.c.line_paid > 0,
+    )
+    return _read(
+        session,
+        features,
+        where=[denied.c.is_denied.is_(True)],
+        label=recovered,
+        first=[
+            (denied.c.cas_group_code == "PR").asc().nulls_last(),
+            denied.c.adjustment_sequence.asc().nulls_first(),
+        ],
+        mart=denied,
+    )
