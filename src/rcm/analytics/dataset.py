@@ -357,3 +357,123 @@ def category_lines(
         first=_refusal_first(mart),
         mart=mart,
     )
+
+
+# ---------------------------------------------------------------------------
+# Serving (M6.4, ADR-0028): the same columns, from the same mart
+# ---------------------------------------------------------------------------
+
+#: The mart `mart_final_outcome` is the matured part of. A line is scored
+#: long before its outcome matures, so serving reads this one; the columns
+#: are the same, so training and serving cannot see different features.
+SERVING_MART: Final = "mart_claim_line_outcome"
+
+#: Features a line may lawfully lack: a modifier or further diagnosis the
+#: claim does not carry, a trailing rate with nothing yet in its window, and
+#: columns no source fills on every payer. A model learned what their
+#: absence means. Any *other* feature is on every training row, so a line
+#: without it is one the model never saw the like of: it is not scored
+#: (FR-ML-06). `tests/leakage/test_ml_serving.py` holds this list to the
+#: data.
+OPTIONAL_FEATURES: Final[frozenset[str]] = frozenset(
+    {
+        "plan_type",
+        "modifier_1",
+        "modifier_2",
+        "modifier_3",
+        "modifier_4",
+        "dx_2",
+        "dx_3",
+        "dx_4",
+        "days_to_filing_deadline",
+        "payer_cpt_denial_rate_90d",
+        "payer_provider_denial_rate_90d",
+        "cpt_modifier_denial_rate_90d",
+        "rarc_codes",
+    }
+)
+
+_IN_CHUNK: Final = 500
+
+
+def serving_lines(
+    session: Session,
+    *,
+    features: Sequence[Feature],
+    stage: Stage,
+    claim_ids: Sequence[uuid.UUID],
+    denied_only: bool,
+) -> LineDataset[None]:
+    """One row per service line of these claims, with a model's inputs and
+    no answer. The leakage gate runs here as it does for training."""
+    assert_trainable((f.name for f in features), stage=stage)
+    columns = list(
+        dict.fromkeys(
+            [
+                "service_line_id",
+                "claim_id",
+                "client_id",
+                "submission_date",
+                "payer_id",
+                *(f.name for f in features),
+                "is_denied",
+                "cas_group_code",
+                "adjustment_sequence",
+            ]
+        )
+    )
+    mart = _mart(columns, name=SERVING_MART)
+    rows: list[LineRow[None]] = []
+    wanted = list(dict.fromkeys(claim_ids))
+    for start in range(0, len(wanted), _IN_CHUNK):
+        where: list[sa.ColumnElement[bool]] = [
+            mart.c.claim_id.in_(wanted[start : start + _IN_CHUNK]),
+            # A line the payer never adjudicated has no service line id to
+            # record a score against (it comes from the 835).
+            mart.c.service_line_id.is_not(None),
+        ]
+        if denied_only:
+            where.append(mart.c.is_denied.is_(True))
+        rows.extend(
+            _read(
+                session,
+                features,
+                where=where,
+                label=sa.null(),
+                decode=lambda _: None,
+                first=_refusal_first(mart),
+                mart=mart,
+            ).rows
+        )
+    return LineDataset(tuple(features), tuple(rows))
+
+
+def claims_in_warehouse(session: Session, claim_ids: Sequence[uuid.UUID]) -> set[uuid.UUID]:
+    """Which of these claims the serving mart holds any row for."""
+    mart = _mart(["claim_id"], name=SERVING_MART)
+    found: set[uuid.UUID] = set()
+    wanted = list(dict.fromkeys(claim_ids))
+    for start in range(0, len(wanted), _IN_CHUNK):
+        found.update(
+            session.scalars(
+                sa.select(mart.c.claim_id)
+                .where(mart.c.claim_id.in_(wanted[start : start + _IN_CHUNK]))
+                .distinct()
+            )
+        )
+    return found
+
+
+def claims_submitted(session: Session, *, since: date, until: date) -> list[uuid.UUID]:
+    """The claims submitted in `[since, until)`, oldest first: what a shadow
+    run scores (M6.6)."""
+    mart = _mart(["claim_id", "submission_date"], name=SERVING_MART)
+    first = sa.func.min(mart.c.submission_date)
+    return list(
+        session.scalars(
+            sa.select(mart.c.claim_id)
+            .where(mart.c.submission_date >= since, mart.c.submission_date < until)
+            .group_by(mart.c.claim_id)
+            .order_by(first, mart.c.claim_id)
+        )
+    )

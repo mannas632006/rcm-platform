@@ -17,6 +17,7 @@ from alembic import context
 from rcm.decision.denial_models import DenialClassification  # noqa: F401 - metadata
 from rcm.decision.feedback_models import DenialFeedback  # noqa: F401 - metadata
 from rcm.decision.ml.registry_models import ModelVersion  # noqa: F401 - metadata
+from rcm.decision.ml.serving_models import Deployment  # noqa: F401 - metadata
 from rcm.decision.registry_models import PayerRegistryEntry  # noqa: F401 - metadata
 from rcm.decision.rules.models import RulesetMember  # noqa: F401 - registers metadata
 from rcm.domain.acknowledgement import ClaimAcknowledgement  # noqa: F401 - metadata

@@ -21,6 +21,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from rcm.api.routers import claims, denials, insight, rules, shell, work_items
+from rcm.decision import scoring
+from rcm.decision.ml.recovery import ServedRecovery
 from rcm.platform.config import Settings, get_settings
 from rcm.platform.errors import PlatformError
 from rcm.platform.idempotency import IdempotencyMiddleware
@@ -49,6 +51,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 for name, spec in sorted(unresolved.items())
             ],
         )
+    # The queues read P(recovery) through one seam (ADR-0020); this is the
+    # model behind it. Until a version is ACTIVE it answers "unavailable",
+    # with the reason, and the queues run on the rules-based score.
+    scoring.deploy_recovery_model(ServedRecovery())
     log.info("app.started", environment=settings.environment)
     yield
     log.info("app.stopped")

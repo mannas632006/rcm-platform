@@ -101,6 +101,8 @@ def _raw(**overrides: Any) -> dict[str, Any]:
             "psi_critical": 0.25,
             "ece_critical": 0.1,
             "min_coverage": 0.9,
+            "window_days": 30,
+            "min_predictions": 200,
         },
         "shadow": {"min_days": 28},
     }

@@ -52,3 +52,21 @@ def population_stability_index(
     e = np.maximum(e / e.sum(), floor)
     a = np.maximum(a / a.sum(), floor)
     return float(np.sum((a - e) * np.log(a / e)))
+
+
+def stability_index_of_counts(
+    expected: ArrayLike, actual: ArrayLike, *, floor: float = 1e-4
+) -> float:
+    """PSI between two samples already counted into the same bins.
+
+    For a quantity that is not a number -- a payer, a procedure code -- and
+    for the share of rows where a feature is missing, which no histogram
+    edge can hold.
+    """
+    e = np.asarray(expected, dtype=np.float64)
+    a = np.asarray(actual, dtype=np.float64)
+    if e.sum() == 0 or a.sum() == 0:
+        return 0.0
+    e = np.maximum(e / e.sum(), floor)
+    a = np.maximum(a / a.sum(), floor)
+    return float(np.sum((a - e) * np.log(a / e)))

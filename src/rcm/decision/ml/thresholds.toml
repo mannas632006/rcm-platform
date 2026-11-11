@@ -9,7 +9,7 @@
 # the sponsor sets it; `decided = false` says so, and the gate report lists
 # every one.
 
-version = 2
+version = 3
 decided = false
 
 [acceptance]
@@ -37,6 +37,13 @@ psi_critical = 0.25
 ece_critical = 0.10
 # Share of requests the model must answer; below it, it is not serving.
 min_coverage = 0.90
+# Days of recent predictions the monitor reads (M6.7). SRS 9.4 says "daily
+# monitor" and gives no window.
+window_days = 30
+# Predictions below which drift, calibration and coverage are not judged:
+# on a handful of rows every one of them is noise, and a model reverted on
+# noise teaches people to ignore the alarm.
+min_predictions = 200
 
 [shadow]
 # Days a model runs in shadow before it may be promoted (FR-ML-04). SRS 9.2

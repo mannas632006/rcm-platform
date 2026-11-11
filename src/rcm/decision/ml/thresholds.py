@@ -39,6 +39,8 @@ class Drift:
     psi_critical: float
     ece_critical: float
     min_coverage: float
+    window_days: int
+    min_predictions: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +78,13 @@ def _number(section: Mapping[str, Any], key: str, *, probability: bool = True) -
     return number
 
 
+def _count(section: Mapping[str, Any], key: str) -> int:
+    value = section.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValidationFailedError(field="thresholds", reason=f"{key} is missing")
+    return value
+
+
 def parse(raw: Mapping[str, Any]) -> Thresholds:
     version = raw.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
@@ -86,9 +95,6 @@ def parse(raw: Mapping[str, Any]) -> Thresholds:
     models = _section(raw, "models")
     drift = _section(raw, "drift")
     shadow = _section(raw, "shadow")
-    days = shadow.get("min_days")
-    if isinstance(days, bool) or not isinstance(days, int) or days < 1:
-        raise ValidationFailedError(field="thresholds", reason="shadow min_days is missing")
     return Thresholds(
         version=version,
         decided=decided,
@@ -100,8 +106,10 @@ def parse(raw: Mapping[str, Any]) -> Thresholds:
             psi_critical=_number(drift, "psi_critical", probability=False),
             ece_critical=_number(drift, "ece_critical"),
             min_coverage=_number(drift, "min_coverage"),
+            window_days=_count(drift, "window_days"),
+            min_predictions=_count(drift, "min_predictions"),
         ),
-        shadow_min_days=days,
+        shadow_min_days=_count(shadow, "min_days"),
     )
 
 

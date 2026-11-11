@@ -38,6 +38,15 @@ NOT_DEPLOYED: Final = "No recovery model is deployed yet (M6)."
 FAILED: Final = "The recovery model did not answer."
 
 
+class Unavailable(Exception):  # noqa: N818 -- a state the model reports, not a fault
+    """The model has no scores to give, and says why in words for a screen:
+    it is in shadow, or it was withdrawn (M6.6, M6.8)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class RecoveryModel(Protocol):
     """ML-3, as M6 will deploy it."""
 
@@ -93,6 +102,8 @@ def recovery_scores(
         # Read inside the boundary: an answer that is not a mapping is a
         # failed model too, not a crash of the screen around it.
         pairs = list(answered.items())
+    except Unavailable as exc:
+        return Scores(unavailable=exc.reason)
     except Exception as exc:  # the model boundary: any failure degrades
         # Logged by type only: a model's error text may echo its inputs (PD-13).
         log.error("scoring.recovery_unavailable", error=type(exc).__name__)
