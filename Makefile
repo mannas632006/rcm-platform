@@ -152,19 +152,27 @@ dbt: ## Build the warehouse: staging -> core -> marts, with its tests
 # the 6-month smoke one, and is neither the operator UI's `rcm` nor
 # `rcm_test`, which the suites wipe. The same URL swap as TEST_ENV.
 ML_DB ?= rcm_ml
+ML_ARCHIVE := data/archive/ml
 ML_ENV := RCM_DATABASE_URL=$(patsubst %/rcm,%/$(ML_DB),$(RCM_DATABASE_URL)) \
           RCM_MIGRATION_DATABASE_URL=$(patsubst %/rcm,%/$(ML_DB),$(RCM_MIGRATION_DATABASE_URL)) \
-          RCM_RAW_ARCHIVE_ROOT=data/archive/ml
+          RCM_RAW_ARCHIVE_ROOT=$(ML_ARCHIVE)
 
-ml-corpus: ## Generate the full 24-month corpus into data/full, then restore the smoke one
+ml-reset: ## Empty rcm_ml and its RAW archive (tools/ml_reset.py refuses any other database)
+	$(ML_ENV) $(PYTHON) -m tools.ml_reset db
+
+# A new corpus over the old one would be skipped where the files match and
+# added where they do not: two corpora in one database. So it starts empty.
+ml-corpus: ml-reset ## Generate the full 24-month corpus into data/full, then restore the smoke one
 	$(PYTHON) -m tools.synthetic --config tools/synthetic/config/config.yaml
 	$(PYTHON) -m tools.synthetic.validate
-	$(PYTHON) -c "import shutil; shutil.rmtree('data/full', ignore_errors=True); shutil.move('data/synthetic', 'data/full')"
+	$(PYTHON) -m tools.ml_reset corpus data/synthetic data/full
 	$(PYTHON) -m tools.synthetic --config tools/synthetic/config/smoke.yaml
 
+# The archive is named: training reads the files back from RCM_RAW_ARCHIVE_ROOT
+# (provenance), and load_corpus would otherwise archive under the corpus's name.
 ml-db: ## Full corpus into rcm_ml, the rules system (M4 gate) on it, then the warehouse
 	$(ML_ENV) $(BIN)/alembic upgrade head
-	$(ML_ENV) $(PYTHON) -m tools.load_corpus --corpus data/full
+	$(ML_ENV) $(PYTHON) -m tools.load_corpus --corpus data/full --archive $(ML_ARCHIVE)
 	$(ML_ENV) $(PYTHON) -m tools.m4_gate
 	$(ML_ENV) $(PYTHON) tools/run_dbt.py build --select staging core marts
 
