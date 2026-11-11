@@ -223,7 +223,11 @@ def review_candidates(
     session: Session, client_id: uuid.UUID, claims: dict[str, Submitted], cutoff: date
 ) -> list[dict[str, object]]:
     """Promote, in the reviewer's place, each candidate whose pre-cutoff FP
-    rate is within the cap. Every step goes through M4.5's lifecycle."""
+    rate is within the cap. Every step goes through M4.5's lifecycle.
+
+    A candidate an earlier run promoted is measured again and reported as
+    promoted, and nothing is written for it: run twice, the gate reports the
+    same thing and changes nothing."""
     cap = get_settings().blocking_rule_max_false_positive_rate
     facts = {c.submitter_claim_id: f for c, f in client_facts(session, client_id=client_id)}
     before = [
@@ -237,7 +241,7 @@ def review_candidates(
     reviewed: list[dict[str, object]] = []
     candidates = session.scalars(
         select(RuleVersion)
-        .where(RuleVersion.status == str(RuleStatus.BACKTESTING))
+        .where(RuleVersion.status.in_([str(RuleStatus.BACKTESTING), str(RuleStatus.ADVISORY)]))
         .order_by(RuleVersion.rule_id)
     ).all()
     for row in candidates:
@@ -251,8 +255,9 @@ def review_candidates(
                 flagged += 1
                 false_positive += claims[key].outcome == "CLEAN"
         rate = Decimal(false_positive) / Decimal(flagged) if flagged else None
-        promoted = rate is not None and rate <= cap
-        if promoted:
+        already = row.status == str(RuleStatus.ADVISORY)
+        promoted = already or (rate is not None and rate <= cap)
+        if promoted and not already:
             reason = (
                 f"GATE M4 review: before {cutoff.isoformat()} it flagged {flagged} claims, "
                 f"false-positive rate {rate:.2%}, within the {cap:.0%} cap"
@@ -273,6 +278,7 @@ def review_candidates(
                 "flagged_before_cutoff": flagged,
                 "fp_rate_before_cutoff": rate,
                 "promoted": promoted,
+                "already": already,
             }
         )
     return reviewed
@@ -452,11 +458,16 @@ def main(argv: list[str] | None = None) -> int:
         dated = sorted(s.submitted_on for s in claims.values() if s.submitted_on and s.outcome)
         cutoff = dated[len(dated) // 2]
         reviewed = review_candidates(session, client_id, claims, cutoff)
-        publish_ruleset(session, published_by=REVIEWER)
-    promoted = [r for r in reviewed if r["promoted"]]
+        promoted = [r for r in reviewed if r["promoted"]]
+        earlier = [r for r in promoted if r["already"]]
+        # A ruleset is a snapshot of the live rules: publish one only when
+        # this run changed them, or when no run has promoted anything yet.
+        if len(earlier) < len(promoted) or not earlier:
+            publish_ruleset(session, published_by=REVIEWER)
     _say(
         f"\ncutoff {cutoff.isoformat()}: {len(reviewed)} candidates reviewed, "
         f"{len(promoted)} promoted to ADVISORY"
+        + (f" ({len(earlier)} by an earlier run; nothing republished)" if earlier else "")
     )
     for review in reviewed:
         rate = review["fp_rate_before_cutoff"]
