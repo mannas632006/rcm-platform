@@ -168,7 +168,7 @@ ml-db: ## Full corpus into rcm_ml, the rules system (M4 gate) on it, then the wa
 	$(ML_ENV) $(PYTHON) -m tools.m4_gate
 	$(ML_ENV) $(PYTHON) tools/run_dbt.py build --select staging core marts
 
-ml-train: ## Train ML-1 on rcm_ml, judge it against the rules, register it (M6.1, M6.2)
+ml-train: ## Train ML-1, ML-2, ML-3 on rcm_ml, judge each against its baseline, register them (M6.1-M6.3)
 	$(ML_ENV) $(PYTHON) -m tools.train_model
 
 test: test-unit test-property test-integration test-security test-leakage ## All Python suites

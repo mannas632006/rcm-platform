@@ -94,7 +94,7 @@ def _raw(**overrides: Any) -> dict[str, Any]:
     raw: dict[str, Any] = {
         "version": 1,
         "decided": False,
-        "acceptance": {"min_pr_auc_lift": 0.0},
+        "acceptance": {"min_pr_auc_lift": 0.0, "min_macro_f1_lift": 0.0},
         "models": {"ML-1": {"review_at": 0.5}},
         "drift": {
             "psi_warning": 0.1,
@@ -117,6 +117,7 @@ def _raw(**overrides: Any) -> dict[str, Any]:
         {"models": {"ML-1": {}}},
         {"drift": {"psi_warning": 0.1}},
         {"shadow": {}},
+        {"acceptance": {"min_pr_auc_lift": 0.0}},
     ],
 )
 def test_a_threshold_file_missing_a_value_is_refused(broken: dict[str, Any]) -> None:

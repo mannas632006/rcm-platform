@@ -7,7 +7,9 @@ made-up index would let it pretend it had. LightGBM sends missing values down
 the branch it learned for them.
 
 The vocabulary is stored with the model (`to_json`), so serving encodes
-exactly as training did.
+exactly as training did. So are a multiclass model's `classes` (ML-2): its
+output columns are indices, and the names they stand for are part of the
+model.
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ class Encoding:
     features: tuple[Feature, ...]
     #: Each CATEGORY feature's codes, in index order.
     vocabulary: Mapping[str, tuple[str, ...]]
+    #: A multiclass model's answers, in output order. Empty for a binary one.
+    classes: tuple[str, ...] = ()
 
     @classmethod
     def fit(cls, features: Sequence[Feature], rows: Iterable[Sequence[Value]]) -> Encoding:
@@ -67,14 +71,30 @@ class Encoding:
                     out[r, c] = value
         return out
 
+    def with_classes(self, labels: Iterable[str]) -> Encoding:
+        """This encoding, with the answers a multiclass model chooses among."""
+        return Encoding(self.features, self.vocabulary, tuple(sorted(set(labels))))
+
+    def class_index(self, labels: Sequence[str]) -> list[int]:
+        index = {name: i for i, name in enumerate(self.classes)}
+        unknown = sorted({label for label in labels if label not in index})
+        if unknown:
+            # Training learns the classes it saw; a later window naming
+            # another cannot be scored as if it were one of them.
+            raise ValidationFailedError(field="label", reason=f"classes not trained on: {unknown}")
+        return [index[label] for label in labels]
+
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "features": [{"name": f.name, "kind": str(f.kind)} for f in self.features],
             "vocabulary": {name: list(codes) for name, codes in self.vocabulary.items()},
         }
+        if self.classes:
+            out["classes"] = list(self.classes)
+        return out
 
     @classmethod
     def from_json(cls, raw: Mapping[str, Any]) -> Encoding:
         features = tuple(Feature(f["name"], Kind(f["kind"])) for f in raw["features"])
         vocabulary = {name: tuple(codes) for name, codes in raw["vocabulary"].items()}
-        return cls(features, vocabulary)
+        return cls(features, vocabulary, tuple(raw.get("classes", ())))

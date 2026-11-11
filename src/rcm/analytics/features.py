@@ -222,22 +222,36 @@ KNOWN_AT_DENIAL: Final[frozenset[str]] = frozenset(
 )
 
 
-def assert_trainable(columns: Iterable[str], *, stage: Stage = Stage.SUBMISSION) -> None:
+#: Columns computed from another, so a model whose answer is the one may not
+#: read the other: preventability is looked up from the category
+#: (BR-TAX-01), so it would hand ML-2 its answer.
+DERIVED_FROM: Final[dict[str, frozenset[str]]] = {
+    "denial_category": frozenset({"preventability"}),
+}
+
+
+def assert_trainable(
+    columns: Iterable[str], *, stage: Stage = Stage.SUBMISSION, label: str | None = None
+) -> None:
     """FR-ML-01: refuse, before a row is read, any input a model may not see.
 
     Each column must be classified in `MART_COLUMNS` as a FEATURE -- or, for
     a model that decides at `Stage.DENIAL`, one of the 835's own facts in
     `KNOWN_AT_DENIAL` -- must have a source (a PENDING column is null on
     every row, so a model "trained" on it learns nothing and reports that it
-    did), and must not be CPT descriptor text. The first offender is named;
-    a training job that hits this stops rather than dropping the column and
-    carrying on, because a feature list that silently shrinks is a model
-    nobody specified.
+    did), and must not be CPT descriptor text. Whatever the stage, a model
+    never reads its own `label`, nor a column `DERIVED_FROM` it. The first
+    offender is named; a training job that hits this stops rather than
+    dropping the column and carrying on, because a feature list that
+    silently shrinks is a model nobody specified.
     """
+    answers = {label, *DERIVED_FROM.get(label, ())} if label is not None else set()
     for name in columns:
         role = MART_COLUMNS.get(name)
         if role is None:
             raise LeakageError(column=name, reason="not a mart column; classify it first")
+        if name in answers:
+            raise LeakageError(column=name, reason=f"it is, or is read off, the answer {label}")
         known_at_denial = stage is Stage.DENIAL and name in KNOWN_AT_DENIAL
         if role is not ColumnRole.FEATURE and not known_at_denial:
             raise LeakageError(

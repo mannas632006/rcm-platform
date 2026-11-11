@@ -9,7 +9,7 @@
 # the sponsor sets it; `decided = false` says so, and the gate report lists
 # every one.
 
-version = 1
+version = 2
 decided = false
 
 [acceptance]
@@ -17,6 +17,9 @@ decided = false
 # baseline's, and the current production model's, by more than this. The
 # spec says "beats"; any margin above zero is a sponsor's call.
 min_pr_auc_lift = 0.0
+# The same rule for ML-2, which chooses a category: its macro-F1 must exceed
+# the taxonomy table's, and the current model's, by more than this.
+min_macro_f1_lift = 0.0
 
 [models.ML-1]
 # P(denial) at or above which a claim goes to a person before it is sent.

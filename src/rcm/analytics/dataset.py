@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -100,8 +100,12 @@ Value = str | float | None
 
 
 @dataclass(frozen=True, slots=True)
-class LineRow:
-    """One adjudicated service line: who it is, its features, its answer."""
+class LineRow[L]:
+    """One adjudicated service line: who it is, its features, its answer.
+
+    The answer is a yes or no for a binary model (ML-1, ML-3), a category
+    for ML-2.
+    """
 
     service_line_id: uuid.UUID
     claim_id: uuid.UUID
@@ -109,15 +113,15 @@ class LineRow:
     payer_id: str | None
     submission_date: date
     values: tuple[Value, ...]
-    label: bool
+    label: L
 
 
 @dataclass(frozen=True, slots=True)
-class LineDataset:
+class LineDataset[L]:
     features: tuple[Feature, ...]
-    rows: tuple[LineRow, ...]
+    rows: tuple[LineRow[L], ...]
 
-    def window(self, start: date, end: date) -> LineDataset:
+    def window(self, start: date, end: date) -> LineDataset[L]:
         """The rows submitted in `[start, end)`."""
         return LineDataset(
             self.features, tuple(r for r in self.rows if start <= r.submission_date < end)
@@ -154,15 +158,16 @@ def _mart(columns: Sequence[str], *, name: str = TRAINING_MART) -> sa.TableClaus
     return sa.table(name, *(sa.column(c) for c in columns), schema=MART_SCHEMA)
 
 
-def _read(
+def _read[L](
     session: Session,
     features: Sequence[Feature],
     *,
     where: Sequence[sa.ColumnElement[bool]],
-    label: sa.ColumnElement[bool],
+    label: sa.ColumnElement[Any],
+    decode: Callable[[Any], L],
     first: Sequence[sa.ColumnElement[Any]],
     mart: sa.TableClause,
-) -> LineDataset:
+) -> LineDataset[L]:
     """One row per service line: the first of its rows in `first`'s order."""
     keys = ("service_line_id", "claim_id", "client_id", "submission_date", "payer_id")
     names = list(dict.fromkeys([*keys, *(f.name for f in features)]))
@@ -171,7 +176,7 @@ def _read(
         .where(mart.c.submission_date.is_not(None), *where)
         .order_by(mart.c.service_line_id, *first)
     )
-    rows: list[LineRow] = []
+    rows: list[LineRow[L]] = []
     seen: set[uuid.UUID] = set()
     for row in session.execute(query):
         # A line's other adjustment rows repeat its features: keep the first.
@@ -186,7 +191,7 @@ def _read(
                 payer_id=row.payer_id,
                 submission_date=row.submission_date,
                 values=tuple(_value(getattr(row, f.name), f.kind) for f in features),
-                label=bool(row.label),
+                label=decode(row.label),
             )
         )
     return LineDataset(tuple(features), tuple(sorted(rows, key=lambda r: r.submission_date)))
@@ -194,7 +199,7 @@ def _read(
 
 def denial_lines(
     session: Session, *, features: Sequence[Feature] = DENIAL_RISK_FEATURES
-) -> LineDataset:
+) -> LineDataset[bool]:
     """ML-1: every matured, adjudicated service line; the label is `is_denied`."""
     assert_trainable(f.name for f in features)
     names = [f.name for f in features]
@@ -219,6 +224,7 @@ def denial_lines(
         features,
         where=[mart.c.is_denied.is_not(None)],
         label=mart.c.is_denied,
+        decode=bool,
         first=[mart.c.adjustment_sequence.asc().nulls_first()],
         mart=mart,
     )
@@ -239,7 +245,7 @@ RECOVERY_FEATURES: Final[tuple[Feature, ...]] = (
 
 def recovery_lines(
     session: Session, *, features: Sequence[Feature] = RECOVERY_FEATURES
-) -> LineDataset:
+) -> LineDataset[bool]:
     """ML-3: every matured denied line; the label is whether it was recovered.
 
     Recovered means a later submission in the same chain (PD-7: resubmissions
@@ -283,9 +289,71 @@ def recovery_lines(
         features,
         where=[denied.c.is_denied.is_(True)],
         label=recovered,
-        first=[
-            (denied.c.cas_group_code == "PR").asc().nulls_last(),
-            denied.c.adjustment_sequence.asc().nulls_first(),
-        ],
+        decode=bool,
+        first=_refusal_first(denied),
         mart=denied,
+    )
+
+
+def _refusal_first(mart: sa.TableClause) -> list[sa.ColumnElement[Any]]:
+    # The payer's refusal before the patient's share (PR), then CAS order.
+    return [
+        (mart.c.cas_group_code == "PR").asc().nulls_last(),
+        mart.c.adjustment_sequence.asc().nulls_first(),
+    ]
+
+
+#: ML-2's inputs (SRS 9.1: "line + CARC + RARC"). Its answer, the category,
+#: is never one of them, nor preventability, which is read off the category.
+CATEGORY_FEATURES: Final[tuple[Feature, ...]] = (
+    *DENIAL_RISK_FEATURES,
+    Feature("carc_code", Kind.CATEGORY),
+    Feature("cas_group_code", Kind.CATEGORY),
+    Feature("rarc_codes", Kind.CATEGORY),
+)
+
+#: The mart's word for a refusal code the taxonomy does not hold (PD-18).
+UNMAPPED: Final = "UNMAPPED"
+
+
+def category_lines(
+    session: Session, *, features: Sequence[Feature] = CATEGORY_FEATURES
+) -> LineDataset[str]:
+    """ML-2: every matured denied line the taxonomy classified; the label is
+    its `denial_category`.
+
+    An UNMAPPED line has no answer to learn from, so it is left out rather
+    than taught as a category of its own.
+    """
+    assert_trainable((f.name for f in features), stage=Stage.DENIAL, label="denial_category")
+    names = [f.name for f in features]
+    columns = list(
+        dict.fromkeys(
+            [
+                "service_line_id",
+                "claim_id",
+                "client_id",
+                "submission_date",
+                "payer_id",
+                *names,
+                "is_denied",
+                "denial_category",
+                "cas_group_code",
+                "adjustment_sequence",
+            ]
+        )
+    )
+    mart = _mart(columns)
+    return _read(
+        session,
+        features,
+        where=[
+            mart.c.is_denied.is_(True),
+            mart.c.denial_category.is_not(None),
+            mart.c.denial_category != UNMAPPED,
+        ],
+        label=mart.c.denial_category,
+        decode=str,
+        first=_refusal_first(mart),
+        mart=mart,
     )

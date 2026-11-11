@@ -1,4 +1,5 @@
-"""ML-1 end to end, against the warehouse the leakage suite builds (M6.1, M6.2).
+"""ML-1, ML-2 and ML-3 end to end, against the warehouse the leakage suite
+builds (M6.1-M6.3).
 
 The smoke corpus covers six months, too few for SRS 9.2's 18 / 3 / 3, so the
 pipeline runs here on 3 / 1 / 1. Everything else is as `make ml-train` runs
@@ -18,9 +19,18 @@ import pytest
 from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import ProgrammingError
 
-from rcm.analytics.dataset import denial_lines
+from rcm.analytics.dataset import category_lines, denial_lines, recovery_lines
 from rcm.decision.ml import registry
-from rcm.decision.ml.pipeline import DENIAL_RISK, TrainingReport, train_denial_risk
+from rcm.decision.ml.pipeline import (
+    DENIAL_CATEGORY,
+    DENIAL_RISK,
+    RECOVERY,
+    Task,
+    TrainingReport,
+    train_denial_category,
+    train_denial_risk,
+    train_recovery,
+)
 from rcm.decision.ml.registry import CodeVersion
 from rcm.decision.ml.registry_models import DataSource, ModelVersion
 from rcm.decision.rules.store import publish_ruleset
@@ -30,6 +40,10 @@ from rcm.platform.errors import ValidationFailedError
 pytestmark = pytest.mark.leakage
 
 SMOKE_MONTHS = (3, 1, 1)
+# ML-3's answer is a later paid resubmission, so recoveries thin out towards
+# the end of the six-month smoke corpus (May has none). Wider valid and test
+# windows give every window both answers; the full corpus needs no such care.
+RECOVERY_MONTHS = (2, 2, 3)
 CODE = CodeVersion(commit="0" * 40, dirty=True)
 
 
@@ -59,11 +73,11 @@ def first(ruleset: None, raw_archive: Path) -> TrainingReport:
     return _train(raw_archive)
 
 
-def _row(version: int) -> ModelVersion:
+def _row(version: int, model_name: str = DENIAL_RISK) -> ModelVersion:
     with session_scope() as session:
         row = session.scalar(
             select(ModelVersion).where(
-                ModelVersion.model_name == DENIAL_RISK, ModelVersion.version == version
+                ModelVersion.model_name == model_name, ModelVersion.version == version
             )
         )
         assert row is not None
@@ -149,3 +163,97 @@ def test_a_second_version_is_judged_against_the_first(
         # The same rows and code: the same model, which does not beat itself.
         assert second.verdict == "REJECTED"
     assert uuid.UUID(str(_row(second.version).model_version_id))
+
+
+# ---------------------------------------------------------------------------
+# M6.3: the models that decide at the denial
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def recovery(ruleset: None, raw_archive: Path) -> TrainingReport:
+    with session_scope() as session:
+        return train_recovery(
+            session,
+            archive_root=raw_archive,
+            code=CODE,
+            trained_by="test:ml-pipeline",
+            months=RECOVERY_MONTHS,
+        )
+
+
+@pytest.fixture(scope="module")
+def category(ruleset: None, raw_archive: Path) -> TrainingReport:
+    with session_scope() as session:
+        return train_denial_category(
+            session,
+            archive_root=raw_archive,
+            code=CODE,
+            trained_by="test:ml-pipeline",
+            months=SMOKE_MONTHS,
+        )
+
+
+def test_ml3_is_judged_against_the_queue_prior(recovery: TrainingReport) -> None:
+    row = _row(recovery.version, RECOVERY)
+    assert (recovery.task, row.verdict) == (Task.BINARY, str(recovery.verdict))
+    assert set(row.baseline) == {"queue prior"}
+    assert row.params["objective"] == "binary"
+    # A constant prior ranks nothing: its PR-AUC is the share recovered.
+    prior = row.baseline["queue prior"]
+    assert prior["pr_auc"] == pytest.approx(prior["prevalence"])
+    assert recovery.data_source is DataSource.SYNTHETIC
+
+
+def test_a_recovered_denial_was_paid_later_in_its_chain(
+    recovery: TrainingReport, warehouse: Engine
+) -> None:
+    """ML-3's answer, checked against the mart independently of the reader."""
+    with session_scope() as session:
+        rows = recovery_lines(session).rows
+    recovered = [r for r in rows if r.label]
+    assert recovered and len(recovered) < len(rows)
+    with warehouse.begin() as conn:
+        paid_later: int = conn.execute(
+            text(
+                "SELECT count(*) FROM analytics_marts.mart_final_outcome d "
+                "JOIN analytics_marts.mart_final_outcome l "
+                "  ON coalesce(l.root_claim_id, l.claim_id) "
+                "   = coalesce(d.root_claim_id, d.claim_id) "
+                " AND l.client_id = d.client_id "
+                " AND l.submission_attempt > d.submission_attempt "
+                " AND l.cpt_hcpcs = d.cpt_hcpcs AND l.line_paid > 0 "
+                "WHERE d.service_line_id = :line"
+            ),
+            {"line": recovered[0].service_line_id},
+        ).scalar_one()
+    assert paid_later >= 1
+
+
+def test_ml2_is_judged_against_the_taxonomy_table(category: TrainingReport) -> None:
+    """Option (a), ADR-0027: the table is the rules baseline, and ML-2 must
+    beat it. The mart's category is the table's answer, so it does not."""
+    row = _row(category.version, DENIAL_CATEGORY)
+    assert category.task is Task.MULTICLASS
+    assert set(row.baseline) == {"taxonomy table"}
+    assert row.params["objective"] == "multiclass"
+    assert row.params["num_class"] == len(row.encoding["classes"]) >= 2
+    table = row.baseline["taxonomy table"]["macro_f1"]
+    assert category.metrics["macro_f1"] is not None
+    if category.metrics["macro_f1"] <= table:
+        assert category.verdict == "REJECTED"
+    assert "taxonomy table" in category.reason
+
+
+def test_ml2_never_learns_from_an_unmapped_denial(category: TrainingReport) -> None:
+    with session_scope() as session:
+        labels = {r.label for r in category_lines(session).rows}
+    assert labels and "UNMAPPED" not in labels
+
+
+def test_the_registered_ml2_answers_in_categories(category: TrainingReport) -> None:
+    model = registry.load(_row(category.version, DENIAL_CATEGORY))
+    with session_scope() as session:
+        rows = category_lines(session).rows[:50]
+    answers = model.predict_class([r.values for r in rows])
+    assert set(answers) <= set(model.encoding.classes)

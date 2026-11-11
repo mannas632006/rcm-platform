@@ -47,6 +47,7 @@ class Thresholds:
     #: False while every value is a placeholder (ADR-0026).
     decided: bool
     min_pr_auc_lift: float
+    min_macro_f1_lift: float
     #: P(at or above which) a model routes to a person, by model name.
     review_at: Mapping[str, float]
     drift: Drift
@@ -92,6 +93,7 @@ def parse(raw: Mapping[str, Any]) -> Thresholds:
         version=version,
         decided=decided,
         min_pr_auc_lift=_number(_section(raw, "acceptance"), "min_pr_auc_lift"),
+        min_macro_f1_lift=_number(_section(raw, "acceptance"), "min_macro_f1_lift"),
         review_at={name: _number(_section(models, name), "review_at") for name in sorted(models)},
         drift=Drift(
             psi_warning=_number(drift, "psi_warning", probability=False),
