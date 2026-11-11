@@ -33,8 +33,33 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 from rcm.platform.config import get_settings
+from tools.e2e_seed import _WIPE
 
 ML_DB = "rcm_ml"
+
+_COUNT_TABLES = text(
+    "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'alembic_version'"
+)
+
+#: The dbt schemas, dropped as the database owner. As with `e2e_seed._WIPE`,
+#: the statement is built inside Postgres with `format('%I')`, so no SQL is
+#: assembled here (S-11).
+_DROP_WAREHOUSE = text(
+    """
+    DO $$
+    DECLARE
+        name text;
+    BEGIN
+        FOR name IN
+            SELECT schema_name FROM information_schema.schemata
+            WHERE schema_name LIKE 'analytics%'
+        LOOP
+            EXECUTE format('DROP SCHEMA %I CASCADE', name);
+        END LOOP;
+    END
+    $$
+    """
+)
 
 
 def _clear_read_only(function: Callable[..., Any], path: str, _exc: BaseException) -> None:
@@ -55,7 +80,7 @@ def replace_corpus(source: Path, destination: Path) -> None:
     shutil.move(source, destination)
 
 
-def reset_db(database: str = ML_DB) -> list[str]:
+def reset_db(database: str = ML_DB) -> int:
     settings = get_settings()
     url = make_url(settings.migration_database_url.get_secret_value())
     if url.database != database:
@@ -64,32 +89,15 @@ def reset_db(database: str = ML_DB) -> list[str]:
             "Run it through `make ml-reset`."
         )
     engine = create_engine(url)
-    with engine.begin() as conn:
-        tables: list[str] = list(
-            conn.execute(
-                text(
-                    "SELECT tablename FROM pg_tables "
-                    "WHERE schemaname = 'public' AND tablename <> 'alembic_version' "
-                    "ORDER BY tablename"
-                )
-            ).scalars()
-        )
-        if tables:
-            quoted = ", ".join(f'public."{t}"' for t in tables)
-            conn.execute(text(f"TRUNCATE {quoted} RESTART IDENTITY CASCADE"))
-        schemas: list[str] = list(
-            conn.execute(
-                text(
-                    "SELECT schema_name FROM information_schema.schemata "
-                    "WHERE schema_name LIKE 'analytics%'"
-                )
-            ).scalars()
-        )
-        for schema in schemas:
-            conn.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-    engine.dispose()
+    try:
+        with engine.begin() as conn:
+            emptied = int(conn.execute(_COUNT_TABLES).scalar_one())
+            conn.execute(_WIPE)
+            conn.execute(_DROP_WAREHOUSE)
+    finally:
+        engine.dispose()
     remove_tree(Path(settings.raw_archive_root))
-    return tables
+    return emptied
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -102,8 +110,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "db":
-        tables = reset_db()
-        sys.stdout.write(f"{ML_DB}: {len(tables)} tables emptied, warehouse and archive removed\n")
+        emptied = reset_db()
+        sys.stdout.write(f"{ML_DB}: {emptied} tables emptied, warehouse and archive removed\n")
     else:
         replace_corpus(args.source, args.destination)
         sys.stdout.write(f"corpus moved to {args.destination}\n")
