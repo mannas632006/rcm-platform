@@ -75,6 +75,12 @@ MONITOR: Final = "monitor:auto"
 #: codes for a category. How a quantity is measured, not a limit on it.
 BINS: Final = 10
 
+#: Features that shift by design: a later window is always a later month and
+#: a different spread of weekdays, so their PSI measures the calendar, not
+#: the model's world. On the full corpus `submission_month` alone scored
+#: PSI 6.4 (ADR-0028). The model still reads them; drift does not judge them.
+CALENDAR: Final = frozenset({"submission_month", "submission_dow"})
+
 #: The matured rows each model trained on, and is judged against.
 TRAINING: Final[Mapping[str, Callable[[Session], LineDataset[bool]]]] = {
     DENIAL_RISK: lambda session: denial_lines(session),
@@ -171,6 +177,7 @@ def measure(
         by_feature = {
             f.name: feature_psi(f, [r[i] for r in reference], [r[i] for r in recent])
             for i, f in enumerate(features)
+            if f.name not in CALENDAR
         }
         edges = np.linspace(0.0, 1.0, CALIBRATION_BINS + 1)
         by_feature_and_output = {
@@ -207,9 +214,18 @@ def _as_value(raw: object, kind: Kind) -> Value:
     return float(raw) if isinstance(raw, int | float) else None
 
 
-def _window(dataset: LineDataset[bool], windows: Mapping[str, str]) -> LineDataset[bool]:
+def reference_window(dataset: LineDataset[bool], windows: Mapping[str, str]) -> LineDataset[bool]:
+    """The rows recent inputs are compared with: the validation and test
+    windows, the latest the model was judged on and found good.
+
+    Not the training window. Its first months have trailing-rate windows
+    that are still filling (a 90-day rate needs 90 days), so against them
+    every later month looks drifted. Measured on the full corpus, ML-1 on
+    Oct-Nov 2025 against its training window: payer x provider window size
+    PSI 0.57, while its calibration error was 0.011 (ADR-0028).
+    """
     return dataset.window(
-        date.fromisoformat(windows["train_start"]), date.fromisoformat(windows["valid_start"])
+        date.fromisoformat(windows["valid_start"]), date.fromisoformat(windows["test_end"])
     )
 
 
@@ -244,7 +260,7 @@ def run(session: Session, *, model_name: str, version: int, now: datetime) -> Mo
     recent_scores = [float(p.score) for p, _ in scored if p.score is not None]
 
     dataset = TRAINING[model_name](session)
-    reference = [r.values for r in _window(dataset, row.windows).rows]
+    reference = [r.values for r in reference_window(dataset, row.windows).rows]
     answers: dict[uuid.UUID, bool] = {r.service_line_id: r.label for r in dataset.rows}
     realised = [
         (float(p.score), answers[p.service_line_id])

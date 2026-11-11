@@ -27,7 +27,7 @@ COMPOSE := docker compose
 .PHONY: help venv install up down migrate seed openapi \
         lint typecheck test test-unit test-property test-integration \
         test-security test-contract coverage verify clean frontend-install frontend-lint \
-        frontend test-db e2e
+        frontend test-db e2e ml-reset ml-corpus ml-db ml-train m6-gate
 # `frontend` must be phony: a directory of that name exists, and without this
 # make treats the gate as already built and silently skips it.
 
@@ -178,6 +178,9 @@ ml-db: ## Full corpus into rcm_ml, the rules system (M4 gate) on it, then the wa
 
 ml-train: ## Train ML-1, ML-2, ML-3 on rcm_ml, judge each against its baseline, register them (M6.1-M6.3)
 	$(ML_ENV) $(PYTHON) -m tools.train_model
+
+m6-gate: ## GATE M6: auto-revert under simulated drift, on rcm_ml, rolled back (ADR-0028)
+	$(ML_ENV) $(PYTHON) -m tools.m6_gate
 
 test: test-unit test-property test-integration test-security test-leakage ## All Python suites
 

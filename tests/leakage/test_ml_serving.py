@@ -56,6 +56,9 @@ from rcm.decision.ml.serving_models import (
     PredictionStatus,
     Severity,
 )
+from rcm.decision.ml.submission import combine
+from rcm.decision.rules.evaluate import Verdict as ScrubVerdict
+from rcm.decision.rules.scrub import scrub_claim
 from rcm.decision.rules.store import publish_ruleset
 from rcm.platform.audit import DecisionRecord
 from rcm.platform.db import session_scope
@@ -364,6 +367,42 @@ def test_no_model_is_promoted_before_its_shadow_period(risk: TrainingReport) -> 
     assert all(0.0 <= s <= 1.0 for s in served.scores.values())
 
 
+def test_the_scrub_consults_the_active_model_and_rules_still_decide(
+    risk: TrainingReport,
+) -> None:
+    """ML-1 on the live path (PD-5): the scrub records the rules' verdict, the
+    model's score, and the verdict they make together, which the model can
+    only raise from PASS to ADVISE."""
+    claim_ids = list(dict.fromkeys(r.claim_id for r in _lines(claims=10)))
+    review_at = thresholds.load().review_threshold(DENIAL_RISK)
+    with session_scope() as session:
+        for claim_id in claim_ids:
+            result = scrub_claim(session, claim_id=claim_id, client_id=CLIENT, today=T0.date())
+            assert result.denial_risk is not None
+            score = result.denial_risk.score
+            assert score is not None, result.denial_risk.unavailable
+            assert result.verdict == combine(result.evaluation.verdict, score)
+            if result.evaluation.verdict == ScrubVerdict.PASS:
+                expected = ScrubVerdict.ADVISE if score >= review_at else ScrubVerdict.PASS
+                assert result.verdict == expected
+            else:
+                assert result.verdict == result.evaluation.verdict
+            record = session.scalars(
+                select(DecisionRecord)
+                .where(
+                    DecisionRecord.entity_id == claim_id, DecisionRecord.decision_type == "SCRUB"
+                )
+                .order_by(DecisionRecord.decided_at.desc())
+            ).first()
+            assert record is not None
+            output = record.output
+            assert output["rules_verdict"] == str(result.evaluation.verdict)
+            assert output["verdict"] == str(result.verdict)
+            assert output["denial_risk"]["score"] == score
+        # The scrub corrects claims it passes; this test keeps none of it.
+        session.rollback()
+
+
 # ---------------------------------------------------------------------------
 # M6.7 and M6.8: drift, and the revert nobody has to pull
 # ---------------------------------------------------------------------------
@@ -388,10 +427,11 @@ def _drifted(rows: list[LineRow[None]]) -> list[LineRow[None]]:
 
 
 def test_a_model_on_the_population_it_learned_is_not_reverted(risk: TrainingReport) -> None:
-    """The negative: the monitor does not fire on the training window's own
-    lines, so when it fires below it is the drift that fired it."""
+    """The negative: the monitor does not fire on the lines the model was
+    validated and tested on, so when it fires below it is the drift that fired it."""
     quiet = T0 + timedelta(days=100)
-    rows = _lines(window=(0, 3))
+    # The months the model was validated and tested on: its reference.
+    rows = _lines(window=(3, 5))
     assert len(rows) >= thresholds.load().drift.min_predictions
     with session_scope() as session:
         state = deployment.states(session, DENIAL_RISK)[risk.version]
@@ -409,7 +449,8 @@ def test_critical_drift_auto_reverts(risk: TrainingReport) -> None:
     """FR-ML-08, GATE M6: under drift the model path disables itself, with
     nobody asked, and stays disabled."""
     later = T0 + timedelta(days=200)
-    rows = _drifted(_lines(window=(3, 6)))
+    # Lines the quiet test did not score: a line is scored once per version.
+    rows = _drifted(_lines(window=(0, 3)))
     assert len(rows) >= thresholds.load().drift.min_predictions
     with session_scope() as session:
         state = deployment.states(session, DENIAL_RISK)[risk.version]

@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from rcm.decision import ncci_store, registry
+from rcm.decision.ml.submission import Risk, combine, denial_risk
 from rcm.decision.ncci import NcciCheck
 from rcm.decision.registry import RegistryCheck
 from rcm.decision.rules.correct import Corrected, Correction, run_pipeline
@@ -47,6 +48,11 @@ class ScrubResult:
     evaluation: Evaluation
     #: Fixes applied to the stored claim before the final evaluation.
     corrections: tuple[Correction, ...] = ()
+    #: The rules' verdict, raised from PASS to ADVISE when ML-1 is ACTIVE and
+    #: its P(denial) reaches the review threshold (PD-5: never lowered).
+    verdict: Verdict | None = None
+    #: What ML-1 said, or why it said nothing.
+    denial_risk: Risk | None = None
 
 
 def claim_facts(session: Session, *, claim_id: uuid.UUID, client_id: uuid.UUID) -> ClaimFacts:
@@ -196,6 +202,14 @@ def scrub_claim(
             rounds=1,
         )
     evaluation = corrected.evaluation
+    # ML-1 advises only before a claim is sent; a review of a sent claim
+    # has nothing left for it to change.
+    risk = (
+        denial_risk(session, client_id=client_id, claim_id=claim_id, now=datetime.now(UTC))
+        if apply_corrections
+        else None
+    )
+    verdict = combine(evaluation.verdict, risk.score if risk is not None else None)
     # The verdict rests on the corrected facts, so the stored claim is
     # corrected in this same transaction: a PASS never describes a claim the
     # database still holds uncorrected.
@@ -241,7 +255,9 @@ def scrub_claim(
             ],
         },
         output={
-            "verdict": str(evaluation.verdict),
+            "verdict": str(verdict),
+            "rules_verdict": str(evaluation.verdict),
+            "denial_risk": risk.as_dict() if risk is not None else None,
             "layers_run": [str(layer) for layer in evaluation.layers_run],
             "findings": [
                 {
@@ -275,4 +291,6 @@ def scrub_claim(
         ruleset_digest=ruleset.digest,
         evaluation=evaluation,
         corrections=corrected.corrections,
+        verdict=verdict,
+        denial_risk=risk,
     )
