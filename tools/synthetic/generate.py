@@ -418,11 +418,14 @@ class Adjudicator:
         if line["is_em"] and claim["has_procedure_same_day"] and "25" not in line["modifiers"]:
             out.append("4")
 
-        # duplicate of a line already billed for this patient/cpt/dos
+        # duplicate of a line already billed for this patient/cpt/dos. A
+        # corrected claim (REF*F8) replaces its original, so the same line in
+        # the same chain is not a duplicate; billed again in another chain, it is.
         key = (claim["patient_id"], line["cpt"], claim["dos"])
-        if key in history["billed"]:
+        chain = claim.get("original_claim_id") or claim["claim_id"]
+        if history["billed"].get(key, chain) != chain:
             out.append("18")
-        history["billed"].add(key)
+        history["billed"].setdefault(key, chain)
 
         # invalid member id format for this payer
         if not claim["member_id_valid"]:
