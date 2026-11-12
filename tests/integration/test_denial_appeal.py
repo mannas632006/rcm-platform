@@ -28,11 +28,12 @@ from rcm.platform.errors import (
     ValidationFailedError,
 )
 from rcm.work import appeals, dispositions
-from rcm.work.models import AppealSignoff, WorkItem
+from rcm.work.models import AppealSignoff, WorkItem, WorkItemKind
 from tests.integration.test_acknowledgement_loading import CLIENT_A
 from tests.integration.test_api_shell import api, bearer, clean  # noqa: F401
-from tests.integration.test_denial_classification import NOW
-from tests.integration.test_denial_write_off import SPECIALIST, denied, person
+from tests.integration.test_claim_progression import advance
+from tests.integration.test_denial_classification import NOW, route
+from tests.integration.test_denial_write_off import SPECIALIST, denied, person, write_off
 
 pytestmark = pytest.mark.integration
 
@@ -147,6 +148,41 @@ def test_a_sent_appeal_is_not_sent_again(root: Path) -> None:
     sign(reviewed.appeal_id, reviewed.version)
     with pytest.raises(StateTransitionError):
         sign(reviewed.appeal_id, reviewed.version)
+
+
+def test_a_claim_under_appeal_is_not_worked_a_second_time(root: Path) -> None:
+    """EC-57 / BR-M11-06: sending the appeal closes the denial item, and
+    nothing opens another. The denial run and claim progression leave the
+    claim's work exactly as it was, and it cannot be appealed again or
+    written off beside the appeal. It waits on its follow-up date."""
+    item = denied(root)
+    reviewed = revise(draft(item).appeal_id, REVIEWED)
+    sign(reviewed.appeal_id, reviewed.version)
+
+    def work() -> list[tuple[uuid.UUID, str, str]]:
+        with session_scope() as session:
+            rows = session.execute(
+                select(WorkItem.work_item_id, WorkItem.kind, WorkItem.state).order_by(
+                    WorkItem.work_item_id
+                )
+            ).all()
+        return [(r.work_item_id, r.kind, r.state) for r in rows]
+
+    before = work()
+    route()
+    advance()
+    assert work() == before
+    assert [state for _, kind, state in before if kind == str(WorkItemKind.DENIAL)] == ["Resolved"]
+
+    with pytest.raises(StateTransitionError):
+        draft(item)
+    with pytest.raises(StateTransitionError):
+        write_off(item)
+    with session_scope() as session:
+        claim = session.scalar(select(Claim).where(Claim.submitter_claim_id == "CLM-WO"))
+        assert claim is not None
+        assert claim.state == str(ClaimState.APPEALING)
+        assert claim.next_action_due is not None
 
 
 def test_no_appeal_while_a_write_off_waits(root: Path) -> None:

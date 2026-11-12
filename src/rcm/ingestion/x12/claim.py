@@ -540,14 +540,14 @@ def parse_837(transaction: TransactionSet, separators: Separators) -> ClaimSubmi
         elif tag == "DTP":
             qualifier = segment.get(1).strip()
             value = segment.get(3)
+            # D8 is a single date; RD8 is a range, whose start is the date of
+            # service for our purposes. A line carries one too when a service
+            # runs past midnight or over several days (EC-32).
+            start = value.split("-")[0]
             if qualifier == "472" and line is not None:
-                line.service_date = parse_date(value, field_name="DTP03", segment=segment)
+                line.service_date = parse_date(start, field_name="DTP03", segment=segment)
             elif qualifier == "434" and claim is not None:
-                # D8 is a single date; RD8 is a range, whose start is the date
-                # of service for our purposes.
-                claim.service_date = parse_date(
-                    value.split("-")[0], field_name="DTP03", segment=segment
-                )
+                claim.service_date = parse_date(start, field_name="DTP03", segment=segment)
 
     close_line()
 

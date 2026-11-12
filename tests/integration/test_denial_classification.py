@@ -23,7 +23,7 @@ from rcm.analytics.denials import denial_rate
 from rcm.decision import denials
 from rcm.decision.denial_models import DenialClassification
 from rcm.domain.claim import Claim
-from rcm.domain.remittance import ClaimPayment
+from rcm.domain.remittance import ClaimPayment, RemittanceServiceLine
 from rcm.platform.audit import DecisionRecord, DecisionType
 from rcm.platform.db import reset_engines, session_scope
 from rcm.work import denials as work_denials
@@ -40,7 +40,7 @@ from tests.integration.test_acknowledgement_loading import (
     remit,
     submit,
 )
-from tests.integration.test_claim_progression import TABLES
+from tests.integration.test_claim_progression import TABLES, resubmit
 
 pytestmark = pytest.mark.integration
 
@@ -148,6 +148,56 @@ def test_pr_204_is_classified_as_a_denial(root: Path) -> None:
 
 
 @pytest.mark.invariant
+@pytest.mark.parametrize(
+    ("remark", "stored"),
+    [((), []), (("LQ*HE*N290~",), ["N290"])],
+    ids=["no-rarc", "with-rarc"],
+)
+def test_a_generic_co_16_is_classified_and_shows_what_the_payer_said(
+    root: Path, remark: tuple[str, ...], stored: list[str]
+) -> None:
+    """EC-59: CO-16, "lacks information", usually with no RARC to say what
+    is missing. The denial is never dropped or left unmapped: it takes the
+    category the CARC allows (ADR-0012), and the line keeps exactly the
+    remark codes the payer sent -- none, when it sent none -- for the person
+    who works it."""
+    submit("CLM-16", root, control="0001")
+    remit(
+        one_line("CLM-16", f"CAS*CO*16*{CHARGE}~", *remark, control="0001"),
+        root,
+        name="16.835",
+    )
+    report = classify()
+    assert (report.classified, report.unmapped) == (1, [])
+    assert classified_claims() == {("CLM-16", "REGISTRATION_ELIGIBILITY", "PREVENTABLE")}
+    with session_scope() as session:
+        assert session.scalars(select(RemittanceServiceLine.remark_codes)).all() == [stored]
+
+
+def test_a_resubmission_denied_for_another_reason_keeps_both_lessons(root: Path) -> None:
+    """EC-65: denied for medical necessity, corrected and resent, then denied
+    for want of authorisation. Each denial is classified by its own reason,
+    so neither cause is lost to the feedback loop, and the two submissions
+    are still one denied claim (BR-DATA-03)."""
+    submit("CLM-RD", root, control="0001")
+    remit(denial_for("CLM-RD", control="0001"), root, name="first.835")
+    resubmit("CLM-RD-R2", "CLM-RD", root, frequency="7")
+    remit(
+        one_line("CLM-RD-R2", f"CAS*CO*197*{CHARGE}~", control="0002"),
+        root,
+        name="second.835",
+    )
+    assert classify().classified == 2
+    assert classified_claims() == {
+        ("CLM-RD", "MEDICAL_NECESSITY", "PARTIALLY_PREVENTABLE"),
+        ("CLM-RD-R2", "AUTHORISATION", "PREVENTABLE"),
+    }
+    with session_scope() as session:
+        rate = denial_rate(session, client_id=CLIENT_A)
+    assert (rate.denied_submissions, rate.submissions) == (2, 2)
+    assert (rate.denied_claims, rate.claims) == (1, 1)
+
+
 def test_an_unknown_refusal_is_reported_not_guessed(root: Path) -> None:
     submit("CLM-UNK", root, control="0001")
     remit(one_line("CLM-UNK", f"CAS*CO*A1*{CHARGE}~", control="0001"), root, name="unk.835")

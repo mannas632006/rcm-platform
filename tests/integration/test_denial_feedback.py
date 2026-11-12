@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from rcm.decision.rules.scrub import scrub_claim
 from rcm.decision.rules.store import publish_ruleset
 from rcm.domain.claim import Claim
 from rcm.domain.remittance import ClaimPayment
+from rcm.ingestion.claim_loader import load_claim_file
 from rcm.platform.audit import DecisionRecord, DecisionType
 from rcm.platform.db import reset_engines, session_scope
 from rcm.work import denials as work_denials
@@ -36,6 +38,7 @@ from tests.integration.test_acknowledgement_loading import (
     remit,
     submit,
 )
+from tests.integration.test_claim_loading import claim, file_for
 from tests.integration.test_denial_classification import one_line
 from tests.integration.test_rule_backtest import ALL
 
@@ -138,6 +141,35 @@ def test_a_not_preventable_denial_is_logged_not_ruled(root: Path) -> None:
     route()
     assert candidates() == []
     assert outcomes() == {"CLM-NC": str(feedback.FeedbackOutcome.NOT_PREVENTABLE)}
+
+
+def test_an_auth_denial_on_a_claim_that_carried_one_drafts_no_rule(root: Path) -> None:
+    """EC-60: the payer denies for want of authorisation, and the claim it
+    denied carried one. A rule asking "is an authorisation on the claim?"
+    would not have flagged it, so none is drafted: the reason is recorded
+    (FR-RULES-07) and the denial is in the workbench to appeal."""
+    with session_scope() as session:
+        load_claim_file(
+            session,
+            file_for(
+                replace(claim("CLM-HA", charge=str(CHARGE)), prior_auth_number="AUTH12345678"),
+                control="0001",
+            ),
+            client_id=CLIENT_A,
+            original_filename="CLM-HA.edi",
+            archive_root=root,
+        )
+    remit(one_line("CLM-HA", f"CAS*CO*197*{CHARGE}~", control="0001"), root, name="CLM-HA.835")
+    route()
+    assert candidates() == []
+    assert outcomes() == {"CLM-HA": str(feedback.FeedbackOutcome.NO_RULE)}
+    with session_scope() as session:
+        (answer,) = session.scalars(select(DenialFeedback)).all()
+        assert "An authorisation was on the claim" in answer.reason
+        (item,) = session.scalars(
+            select(WorkItem).where(WorkItem.kind == str(WorkItemKind.DENIAL))
+        ).all()
+        assert item.claim_id == answer.claim_id
 
 
 @pytest.mark.invariant

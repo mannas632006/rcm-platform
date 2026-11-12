@@ -534,6 +534,39 @@ def test_an_impossible_date_is_refused() -> None:
         )
 
 
+def test_a_service_spanning_days_is_dated_from_its_first_day() -> None:
+    """EC-32: a service that runs past midnight is sent as a date range
+    (DTP*472*RD8). The line is read, not refused, and its date of service is
+    the day it began; the range itself stays in the archived file."""
+    found = one_claim(
+        build_837_text(
+            claim_segments=[
+                "CLM*CLM1*100.00***11:B:1*Y*A*Y*Y~",
+                "HI*ABK:J06.9~",
+                "LX*1~",
+                "SV1*HC:99213*100.00*UN*1***1~",
+                "DTP*472*RD8*20240131-20240201~",
+            ]
+        )
+    )
+    assert found.lines[0].service_date == date(2024, 1, 31)
+
+
+def test_a_range_whose_first_day_is_not_a_date_is_refused() -> None:
+    with pytest.raises(MalformedX12Error):
+        read_claims(
+            build_837_text(
+                claim_segments=[
+                    "CLM*CLM1*100.00***11:B:1*Y*A*Y*Y~",
+                    "HI*ABK:J06.9~",
+                    "LX*1~",
+                    "SV1*HC:99213*100.00*UN*1***1~",
+                    "DTP*472*RD8*2024013-20240201~",
+                ]
+            )
+        )
+
+
 def test_every_refusal_is_a_platform_error() -> None:
     """DR-10 again: a quarantined file must name the assertion it failed, and
     an unnamed exception names nothing."""

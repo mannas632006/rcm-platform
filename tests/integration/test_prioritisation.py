@@ -266,6 +266,48 @@ def test_the_queue_reads_pinned_first_then_by_score(
     assert order == [small_item, big_item]
 
 
+def test_a_scrubber_block_near_the_deadline_is_pinned_first(
+    archive_root: Path, owner_engine: Engine
+) -> None:
+    """EC-39 / BR-GLOBAL-04: a rule blocks a claim six days from its filing
+    deadline. The deadline wins: the block is a person's next item, ahead of
+    a denial worth 100 times more."""
+    big, blocked = load(archive_root, "CLM-BIG", "CLM-BLOCKED")
+    set_filing_term(owner_engine, 365)
+    with owner_engine.begin() as conn:
+        conn.execute(
+            text("UPDATE claim SET total_charge = 50000 WHERE submitter_claim_id = 'CLM-BIG'")
+        )
+        # 359 days before FAR: six days left on a 365-day term.
+        conn.execute(
+            text(
+                "UPDATE claim SET date_of_service = '2023-06-08' "
+                "WHERE submitter_claim_id = 'CLM-BLOCKED'"
+            )
+        )
+    big_item = denial_for(big)
+    with session_scope() as session:
+        block = raise_exception(
+            session,
+            client_id=CLIENT,
+            kind=WorkItemKind.SCRUB_EXCEPTION,
+            problem="Scrubber rule NO_MOD25_ON_EM v1 blocks line 1: review modifier 25",
+            record=RecordRef("claim", blocked),
+            source_key=f"scrub:NO_MOD25_ON_EM:1:{blocked}",
+            now=FAR,
+            claim_id=blocked,
+        ).work_item_id
+    run(big_item, FAR)
+    run(block, FAR)
+
+    pinned = get(block)
+    assert (pinned.deadline_pinned, pinned.priority_score) == (True, 100)
+    assert "6 days" in pinned.priority_reason
+    with session_scope() as session:
+        order = [i.work_item_id for i in priority.next_items(session, client_id=CLIENT)]
+    assert order == [block, big_item]
+
+
 def test_bulk_work_is_kept_out_of_the_individual_queue(
     archive_root: Path, owner_engine: Engine
 ) -> None:
