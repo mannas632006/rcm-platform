@@ -14,7 +14,7 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
-    "sqlalchemy>=2.0.36",
+    "sqlalchemy>=2.1",
     "alembic>=1.14",
     "psycopg[binary]>=3.2",
     "celery[redis]>=5.4",
@@ -23,10 +23,23 @@ dependencies = [
     "pyjwt[crypto]>=2.10",
     "httpx>=0.28",
     "python-multipart>=0.0.20",
+    # M6 (ADR-0026): a model is served where requests are, so LightGBM and
+    # NumPy are runtime dependencies. Its SHAP drivers come from LightGBM's
+    # own TreeSHAP, so serving needs nothing more.
+    "lightgbm>=4.6",
+    "numpy>=2.1",
 ]
 
 [project.optional-dependencies]
+# Training only: evaluation, experiment tracking, and the SHAP cross-check.
+# Nothing a request reaches imports these.
+ml = [
+    "scikit-learn>=1.6",
+    "mlflow-skinny>=3.0",
+    "shap>=0.47",
+]
 dev = [
+    "rcm-platform[ml]",
     "pytest>=8.3",
     "pytest-cov>=6.0",
     "pytest-asyncio>=0.24",
@@ -140,7 +153,7 @@ mypy_path = "src"
 packages = ["rcm"]
 
 [[tool.mypy.overrides]]
-module = ["celery.*", "structlog.*"]
+module = ["celery.*", "structlog.*", "sklearn.*", "shap.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------

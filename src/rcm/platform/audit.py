@@ -67,6 +67,9 @@ class DecisionType(StrEnum):
     PAYER_MATCH = "PAYER_MATCH"
     #: ADR-0006: the system moved a claim on evidence already on file.
     PROGRESS = "PROGRESS"
+    #: ADR-0028: a model scored a service line (FR-ML-05). The output says
+    #: whether the score was used or only recorded in shadow.
+    PREDICT = "PREDICT"
     #: ADR-0013: what a preventable denial produced -- a candidate rule, or
     #: the recorded reason for none (FR-RULES-07).
     DENIAL_FEEDBACK = "DENIAL_FEEDBACK"

@@ -125,6 +125,16 @@ def test_corpus_contains_resubmissions(corpus: dict[str, object]) -> None:
     assert counts["claims"] > counts["original_claims"]  # type: ignore[index]
 
 
+def test_corpus_contains_a_recovered_resubmission(corpus: dict[str, object]) -> None:
+    """A corrected claim replaces its original; it is not a duplicate of it.
+
+    ML-3 (ADR-0027) learns which denials are recovered. A corpus where every
+    resubmission is refused as a CARC 18 duplicate of its own original has no
+    recovery to learn, and its label is constant.
+    """
+    assert corpus["counts"]["recovered_resubmissions"] > 0  # type: ignore[index]
+
+
 def test_corpus_contains_recoupments(corpus: dict[str, object]) -> None:
     """A paid claim reversed months later must reopen, not create a negative claim."""
     assert corpus["counts"]["recouped_claims"] > 0  # type: ignore[index]

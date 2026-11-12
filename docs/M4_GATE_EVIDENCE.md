@@ -27,7 +27,7 @@ python -m tools.m4_gate                                                  # the g
    denial: classification (M4.8), then the feedback loop (M4.9).
 3. **Review in the rules reviewer's place**, recorded as
    `gate:m4-rules-reviewer`.
-   - The cutoff is the median submission date, 2025-01-13.
+   - The cutoff is the median submission date, 2025-01-06.
    - A candidate is promoted to ADVISORY only if, on claims submitted before
      the cutoff, it flagged something and its false-positive rate is within
      the 10% cap (TBD-45).
@@ -46,53 +46,61 @@ a caught claim is corrected before it is sent.
 The **out-of-time** view is the honest one: rules are judged on claims
 before the cutoff and measured on claims after it.
 
-Run on 2026-11-03 against a cleared database, after loading the full corpus.
-The corpus had 34,773 claims (34,000 originals and 773 resubmissions) in
-12,173 files, with 1 quarantined by design. The gate exited with code 0 in
-37m51s, at commit `70df808` plus this tool.
+First run on 2026-11-03. **Re-measured on 2026-11-11**, against a cleared
+database, after the generator stopped refusing every corrected claim as a
+duplicate of its own original (ADR-0027). That fix moved the generator's
+random draws, so this is a new corpus of the same size, and every number
+below is from it. The 2026-11-03 figures are in this file's history.
+
+The corpus had 34,773 claims (34,000 originals and 773 resubmissions, 464 of
+them paid) in 12,169 files, with 1 quarantined by design. The gate ran as
+part of `make ml-db`, at commit `27a1502`. The review and replay figures are
+from a second run of the gate on the same database, at `24c8b75` plus the
+change that lets it run twice: it reported the same 63 promotions, wrote
+nothing, and exited with code 0.
 
 ### Loop activity
 
 | | Count |
 |---|---|
-| Denied lines classified | 7,834 |
+| Denied lines classified | 7,282 |
 | Unmapped refusal codes | 0 |
-| Candidates drafted and backtested | 610 |
-| Denials joining an existing candidate | 5,661 |
-| No claim rule possible (recorded reason) | 1,113 |
-| Not preventable (logged) | 450 |
+| Candidates drafted and backtested | 607 |
+| Denials joining an existing candidate | 5,634 |
+| No claim rule possible (recorded reason) | 585 |
+| Not preventable (logged) | 456 |
 | Candidates promoted after review | 63 (all Authorisation) |
-| Candidates held: false-positive rate over the cap, or no pre-cutoff evidence | 547 (206 eligibility, 186 medical necessity, 155 coding) |
+| Candidates held: false-positive rate over the cap, or no pre-cutoff evidence | 544 (207 eligibility, 187 medical necessity, 150 coding) |
 
 ## First-pass clean-claim rate
 
 | View | Claims | Before | After |
 |---|---|---|---|
-| In-sample (all claims) | 33,337 | **79.11%** | **88.52%** |
-| **Out-of-time** (from 2025-01-13) | 16,731 | **78.36%** | **87.69%** |
+| In-sample (all claims) | 33,248 | **79.02%** | **88.35%** |
+| **Out-of-time** (from 2025-01-06) | 16,961 | **78.33%** | **87.52%** |
 
 Out of time, by denial cause:
 
 | Cause | Denied | Caught |
 |---|---|---|
-| Coding | 1,442 | 1,173 |
-| Registration/Eligibility | 537 | 0 |
-| Authorisation | 393 | 392 |
-| Medical Necessity | 272 | 0 |
-| Contractual/Non-covered | 225 | 0 (not preventable) |
-| Timely Filing | 187 | 0 (no claim rule: PD-15 prioritisation) |
-| Duplicate | 8 | 0 (no claim rule) |
+| Coding | 1,436 | 1,172 |
+| Registration/Eligibility | 559 | 0 |
+| Authorisation | 391 | 390 |
+| Medical Necessity | 283 | 0 |
+| Contractual/Non-covered | 231 | 0 (not preventable) |
+| Timely Filing | 190 | 0 (no claim rule: PD-15 prioritisation) |
+| Duplicate | 9 | 0 (no claim rule) |
 
 Paid claims also flagged: **0**.
 
 ### Where the gain comes from
 
-All 1,560 out-of-time catches are made by reference data alone: NCCI catches
+All 1,559 out-of-time catches are made by reference data alone: NCCI catches
 the bundling denials (CARC 97), and the registry catches the authorisation
 denials (CARC 197). The promoted learned rules add **no** catches beyond
 them. That is not a failure of the loop. The registry was seeded from the
 same payer authorisation rules the generator uses, so the learned rules and
-the registry cover exactly the same claims. Read the 9.3-point gain as the
+the registry cover exactly the same claims. Read the 9.2-point gain as the
 value of the NCCI and registry checks, not of the learned rules.
 
 ## The feedback loop closing
@@ -102,14 +110,14 @@ no hand-written rule. Of those, 63 Authorisation patterns (payer × CPT,
 claim without an authorisation) met the review bar on pre-cutoff claims. On
 claims submitted **after** the cutoff, those learned rules:
 
-- flagged **567** later denied lines of the pattern they were drafted from;
+- flagged **560** later denied lines of the pattern they were drafted from;
 - flagged **0** paid claims.
 
 | Example | Denials answered | Before cutoff | Later caught | Later false |
 |---|---|---|---|---|
-| `FB_AUTH_60054_29881_27F4D924` | 36 | 15 | 19 | 0 |
+| `FB_AUTH_60054_29881_27F4D924` | 39 | 16 | 20 | 0 |
 | `FB_AUTH_60054_45380_B12D981E` | 43 | 18 | 19 | 0 |
-| `FB_AUTH_87726_90837_0C832198` | 41 | 25 | 15 | 0 |
+| `FB_AUTH_87726_90837_0C832198` | 42 | 25 | 16 | 0 |
 
 The full table of 63 rows is in the tool's output. Each row is a denial
 pattern that was drafted, backtested, reviewed, promoted and then caught
@@ -128,7 +136,7 @@ otherwise have to write down by hand.
   on facts a payer × CPT rule cannot see: a terminated policy, a diagnosis
   pairing, a missing modifier 25. This is the guardrail working. Sharpening
   those rules is a reviewer's job.
-- **269 coding denials stay uncaught out of time** (1,442 − 1,173). Most are
+- **264 coding denials stay uncaught out of time** (1,436 − 1,172). Most are
   CO-4: an E/M billed with a same-day procedure and no modifier 25. A rule
   may *flag* that. It may never *add* the modifier (PD-16, ADR-0011).
   Writing that flag is the clearest next rule for a reviewer.

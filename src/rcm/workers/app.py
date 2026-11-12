@@ -9,6 +9,7 @@ alongside the API rather than bolting them on later.
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab
 
 from rcm.platform.config import get_settings
 from rcm.platform.logging import configure_logging
@@ -35,6 +36,12 @@ def create_celery() -> Celery:
         task_acks_late=True,
         task_reject_on_worker_lost=True,
         worker_prefetch_multiplier=1,
+        imports=("rcm.workers.tasks",),
+        # SRS 9.4: the daily monitor. It reverts a model in critical drift
+        # by itself (FR-ML-08), so it must not depend on anyone starting it.
+        beat_schedule={
+            "ml-monitor-daily": {"task": "rcm.ml.monitor", "schedule": crontab(hour=6, minute=0)},
+        },
     )
     return celery
 

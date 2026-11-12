@@ -1,0 +1,51 @@
+# Every number a model decision turns on (M6.5, FR-ML-07, BR-HITL-03).
+#
+# Governed: a change here is a reviewed pull request that also raises
+# `version`. Every prediction records the version it was judged by, so a
+# decision can always be read against the thresholds that made it.
+#
+# NOTHING IN THIS FILE IS DECIDED. No [TBD-nn] covers these values, and no
+# specification gives them. Each is a labelled placeholder (ADR-0026) until
+# the sponsor sets it; `decided = false` says so, and the gate report lists
+# every one.
+
+version = 3
+decided = false
+
+[acceptance]
+# A candidate is accepted only if its test-window PR-AUC exceeds the rules
+# baseline's, and the current production model's, by more than this. The
+# spec says "beats"; any margin above zero is a sponsor's call.
+min_pr_auc_lift = 0.0
+# The same rule for ML-2, which chooses a category: its macro-F1 must exceed
+# the taxonomy table's, and the current model's, by more than this.
+min_macro_f1_lift = 0.0
+
+[models.ML-1]
+# P(denial) at or above which a claim goes to a person before it is sent.
+# 0.5 is the point of equal odds: a placeholder with no claim to fit this
+# book of business.
+review_at = 0.5
+
+[drift]
+# Population stability index between the training window and recent
+# inputs (M6.7). 0.10 and 0.25 are the conventional bands.
+psi_warning = 0.10
+psi_critical = 0.25
+# Expected calibration error on realised outcomes, above which the model
+# is no longer telling the truth about its own confidence.
+ece_critical = 0.10
+# Share of requests the model must answer; below it, it is not serving.
+min_coverage = 0.90
+# Days of recent predictions the monitor reads (M6.7). SRS 9.4 says "daily
+# monitor" and gives no window.
+window_days = 30
+# Predictions below which drift, calibration and coverage are not judged:
+# on a handful of rows every one of them is noise, and a model reverted on
+# noise teaches people to ignore the alarm.
+min_predictions = 200
+
+[shadow]
+# Days a model runs in shadow before it may be promoted (FR-ML-04). SRS 9.2
+# says "N weeks".
+min_days = 28

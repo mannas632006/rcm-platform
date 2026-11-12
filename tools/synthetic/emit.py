@@ -82,7 +82,7 @@ def run(config_path: pathlib.Path):
             f.unlink()
 
     adj = Adjudicator(ref, rng, cfg)
-    history = {"billed": set()}
+    history: dict[str, dict] = {"billed": {}}
 
     enc_by_claim = {e["claim_id"]: e for e in encounters}
     claims.sort(key=lambda c: c["submission_date"])
@@ -721,6 +721,9 @@ def run(config_path: pathlib.Path):
             "claims": len(adjudicated),
             "original_claims": len(adjudicated) - len(resubmissions),
             "resubmissions": len(resubmissions),
+            "recovered_resubmissions": sum(
+                1 for c in resubmissions if any(l["paid"] > 0 for l in c["result"]["lines"])
+            ),
             "service_lines": len(line_rows),
             "adjustment_rows": len(adj_rows),
             "encounters": len(encounters),

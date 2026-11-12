@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     x12_max_segments: int = 5_000_000
     x12_max_loop_depth: int = 32
 
+    # --- ml (M6, ADR-0026) ------------------------------------------------
+    # Where training runs are tracked. Read by the training tool only; the
+    # API never imports MLflow.
+    ml_tracking_uri: str = "sqlite:///data/mlflow/mlflow.db"
+
     # --- logging -----------------------------------------------------------
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_json: bool = True

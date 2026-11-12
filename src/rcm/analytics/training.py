@@ -132,6 +132,69 @@ def split(
     return SplitStrategy.TEMPORAL
 
 
+#: SRS 9.2's split: 18 months to train, 3 to validate, 3 to test.
+TRAIN_MONTHS: Final = 18
+VALID_MONTHS: Final = 3
+TEST_MONTHS: Final = 3
+
+
+@dataclass(frozen=True, slots=True)
+class Windows:
+    """Three consecutive date windows, each start inclusive, each end exclusive.
+
+    Train is `[train_start, valid_start)`, validation `[valid_start,
+    test_start)`, test `[test_start, test_end)`. Nothing is drawn at random,
+    so every test row was submitted after every training row (DR-08).
+    """
+
+    train_start: date
+    valid_start: date
+    test_start: date
+    test_end: date
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "train_start": self.train_start.isoformat(),
+            "valid_start": self.valid_start.isoformat(),
+            "test_start": self.test_start.isoformat(),
+            "test_end": self.test_end.isoformat(),
+        }
+
+
+def _add_months(day: date, months: int) -> date:
+    index = day.month - 1 + months
+    return date(day.year + index // 12, index % 12 + 1, 1)
+
+
+def temporal_windows(
+    first_submission: date,
+    *,
+    train_months: int = TRAIN_MONTHS,
+    valid_months: int = VALID_MONTHS,
+    test_months: int = TEST_MONTHS,
+) -> Windows:
+    """The 18 / 3 / 3 windows, starting at the month of the first submission.
+
+    Goes through `split()`, so the refusals there apply here too: this is the
+    temporal strategy with its cutoff named, not a second way to split.
+    """
+    if min(train_months, valid_months, test_months) < 1:
+        raise LeakageError(
+            strategy=str(SplitStrategy.TEMPORAL),
+            reason="every window needs at least one month, or one side measures nothing",
+        )
+    start = first_submission.replace(day=1)
+    valid_start = _add_months(start, train_months)
+    split(strategy=SplitStrategy.TEMPORAL, cutoff=valid_start)
+    test_start = _add_months(valid_start, valid_months)
+    return Windows(
+        train_start=start,
+        valid_start=valid_start,
+        test_start=test_start,
+        test_end=_add_months(test_start, test_months),
+    )
+
+
 def maturity_date(date_of_service: date, *, maturity_days: int = DEFAULT_MATURITY_DAYS) -> date:
     """When this row's outcome stops moving (DR-09).
 

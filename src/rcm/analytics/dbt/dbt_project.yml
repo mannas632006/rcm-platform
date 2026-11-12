@@ -75,3 +75,13 @@ models:
     marts:
       +materialized: table
       +schema: marts
+      # The application role reads the marts, and only the marts (ADR-0026):
+      # a model is scored from the same mart row it was trained on, so
+      # training and serving cannot see different features. Read only; dbt,
+      # with the migration role, stays the only writer.
+      +grants:
+        select: ["rcm_app"]
+
+# Grants on a table are not enough: Postgres also wants USAGE on its schema.
+on-run-end:
+  - "grant usage on schema {{ target.schema }}_marts to rcm_app"

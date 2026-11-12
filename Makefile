@@ -27,7 +27,7 @@ COMPOSE := docker compose
 .PHONY: help venv install up down migrate seed openapi \
         lint typecheck test test-unit test-property test-integration \
         test-security test-contract coverage verify clean frontend-install frontend-lint \
-        frontend test-db e2e
+        frontend test-db e2e ml-reset ml-corpus ml-db ml-train m6-gate
 # `frontend` must be phony: a directory of that name exists, and without this
 # make treats the gate as already built and silently skips it.
 
@@ -146,6 +146,41 @@ test-leakage: test-db ## PD-11 leakage suite; builds the warehouse twice (M2.4)
 
 dbt: ## Build the warehouse: staging -> core -> marts, with its tests
 	$(PYTHON) tools/run_dbt.py build --select staging core marts
+
+# M6 (ADR-0026). Models train against `rcm_ml` (infra/postgres/03), which
+# holds the full 24-month corpus (`data/full`, from config.yaml) rather than
+# the 6-month smoke one, and is neither the operator UI's `rcm` nor
+# `rcm_test`, which the suites wipe. The same URL swap as TEST_ENV.
+ML_DB ?= rcm_ml
+ML_ARCHIVE := data/archive/ml
+ML_ENV := RCM_DATABASE_URL=$(patsubst %/rcm,%/$(ML_DB),$(RCM_DATABASE_URL)) \
+          RCM_MIGRATION_DATABASE_URL=$(patsubst %/rcm,%/$(ML_DB),$(RCM_MIGRATION_DATABASE_URL)) \
+          RCM_RAW_ARCHIVE_ROOT=$(ML_ARCHIVE)
+
+ml-reset: ## Empty rcm_ml and its RAW archive (tools/ml_reset.py refuses any other database)
+	$(ML_ENV) $(PYTHON) -m tools.ml_reset db
+
+# A new corpus over the old one would be skipped where the files match and
+# added where they do not: two corpora in one database. So it starts empty.
+ml-corpus: ml-reset ## Generate the full 24-month corpus into data/full, then restore the smoke one
+	$(PYTHON) -m tools.synthetic --config tools/synthetic/config/config.yaml
+	$(PYTHON) -m tools.synthetic.validate
+	$(PYTHON) -m tools.ml_reset corpus data/synthetic data/full
+	$(PYTHON) -m tools.synthetic --config tools/synthetic/config/smoke.yaml
+
+# The archive is named: training reads the files back from RCM_RAW_ARCHIVE_ROOT
+# (provenance), and load_corpus would otherwise archive under the corpus's name.
+ml-db: ## Full corpus into rcm_ml, the rules system (M4 gate) on it, then the warehouse
+	$(ML_ENV) $(BIN)/alembic upgrade head
+	$(ML_ENV) $(PYTHON) -m tools.load_corpus --corpus data/full --archive $(ML_ARCHIVE)
+	$(ML_ENV) $(PYTHON) -m tools.m4_gate
+	$(ML_ENV) $(PYTHON) tools/run_dbt.py build --select staging core marts
+
+ml-train: ## Train ML-1, ML-2, ML-3 on rcm_ml, judge each against its baseline, register them (M6.1-M6.3)
+	$(ML_ENV) $(PYTHON) -m tools.train_model
+
+m6-gate: ## GATE M6: auto-revert under simulated drift, on rcm_ml, rolled back (ADR-0028)
+	$(ML_ENV) $(PYTHON) -m tools.m6_gate
 
 test: test-unit test-property test-integration test-security test-leakage ## All Python suites
 

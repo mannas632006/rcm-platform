@@ -34,8 +34,11 @@ not care how a column was written or what it is called.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from enum import StrEnum
 from typing import Final
+
+from rcm.platform.errors import LeakageError
 
 
 class ColumnRole(StrEnum):
@@ -181,3 +184,85 @@ def columns_with_role(role: ColumnRole) -> frozenset[str]:
 FEATURE_COLUMNS: Final[frozenset[str]] = columns_with_role(ColumnRole.FEATURE)
 LABEL_COLUMNS: Final[frozenset[str]] = columns_with_role(ColumnRole.LABEL)
 KEY_COLUMNS: Final[frozenset[str]] = columns_with_role(ColumnRole.KEY)
+
+
+#: BR-GLOBAL-03 / [TBD-36]: no model trains on CPT descriptor text until the
+#: AMA licensing position is confirmed. Procedure *codes* are identifiers and
+#: are not gated; a column whose name says it holds descriptions is refused
+#: before anyone has to remember why.
+_DESCRIPTOR_MARKERS: Final = ("descriptor", "description")
+
+
+class Stage(StrEnum):
+    """When a model decides, which fixes what it may already know."""
+
+    #: ML-1: the second before SEND (PD-11).
+    SUBMISSION = "SUBMISSION"
+    #: ML-2, ML-3: the 835 has said no. The denial itself is a fact; what
+    #: happened after it -- a resubmission, a payment, the final outcome --
+    #: is not.
+    DENIAL = "DENIAL"
+
+
+#: LABEL columns that are the 835's own facts: answers for a model at
+#: submission, inputs for one at denial. Nothing after the 835 is here.
+KNOWN_AT_DENIAL: Final[frozenset[str]] = frozenset(
+    {
+        "cas_group_code",
+        "carc_code",
+        "rarc_codes",
+        "adjustment_amount",
+        "claim_status_code",
+        "line_paid",
+        "line_allowed",
+        "denial_category",
+        "preventability",
+        "days_submission_to_adjudication",
+    }
+)
+
+
+#: Columns computed from another, so a model whose answer is the one may not
+#: read the other: preventability is looked up from the category
+#: (BR-TAX-01), so it would hand ML-2 its answer.
+DERIVED_FROM: Final[dict[str, frozenset[str]]] = {
+    "denial_category": frozenset({"preventability"}),
+}
+
+
+def assert_trainable(
+    columns: Iterable[str], *, stage: Stage = Stage.SUBMISSION, label: str | None = None
+) -> None:
+    """FR-ML-01: refuse, before a row is read, any input a model may not see.
+
+    Each column must be classified in `MART_COLUMNS` as a FEATURE -- or, for
+    a model that decides at `Stage.DENIAL`, one of the 835's own facts in
+    `KNOWN_AT_DENIAL` -- must have a source (a PENDING column is null on
+    every row, so a model "trained" on it learns nothing and reports that it
+    did), and must not be CPT descriptor text. Whatever the stage, a model
+    never reads its own `label`, nor a column `DERIVED_FROM` it. The first
+    offender is named; a training job that hits this stops rather than
+    dropping the column and carrying on, because a feature list that
+    silently shrinks is a model nobody specified.
+    """
+    answers = {label, *DERIVED_FROM.get(label, ())} if label is not None else set()
+    for name in columns:
+        role = MART_COLUMNS.get(name)
+        if role is None:
+            raise LeakageError(column=name, reason="not a mart column; classify it first")
+        if name in answers:
+            raise LeakageError(column=name, reason=f"it is, or is read off, the answer {label}")
+        known_at_denial = stage is Stage.DENIAL and name in KNOWN_AT_DENIAL
+        if role is not ColumnRole.FEATURE and not known_at_denial:
+            raise LeakageError(
+                column=name,
+                reason=f"a {role} column, not knowable at {stage.lower()} (PD-11)",
+            )
+        if name in PENDING_COLUMNS:
+            raise LeakageError(
+                column=name, reason=f"no source yet ({PENDING_COLUMNS[name]}); null on every row"
+            )
+        if any(marker in name.lower() for marker in _DESCRIPTOR_MARKERS):
+            raise LeakageError(
+                column=name, reason="CPT descriptor text is gated on [TBD-36] (BR-GLOBAL-03)"
+            )
