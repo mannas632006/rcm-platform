@@ -82,12 +82,14 @@ def test_a_window_of_no_months_is_refused() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_thresholds_ship_with_a_version_and_say_they_are_undecided() -> None:
+def test_the_thresholds_ship_with_a_version_and_say_who_decided_them() -> None:
     config = thresholds.load()
-    assert config.version >= 1
-    # ADR-0026: every value is a placeholder until the sponsor sets it.
-    assert config.decided is False
-    assert 0 <= config.review_threshold("ML-1") <= 1
+    # ADR-0031: the owner adopted version 3's placeholders as version 4.
+    assert config.version >= 4
+    assert config.decided is True
+    assert config.review_threshold("ML-1") == 0.5
+    assert (config.drift.psi_warning, config.drift.psi_critical) == (0.10, 0.25)
+    assert config.shadow_min_days == 28
 
 
 def _raw(**overrides: Any) -> dict[str, Any]:

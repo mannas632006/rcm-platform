@@ -4,18 +4,19 @@
 # `version`. Every prediction records the version it was judged by, so a
 # decision can always be read against the thresholds that made it.
 #
-# NOTHING IN THIS FILE IS DECIDED. No [TBD-nn] covers these values, and no
-# specification gives them. Each is a labelled placeholder (ADR-0026) until
-# the sponsor sets it; `decided = false` says so, and the gate report lists
-# every one.
+# DECIDED by the owner on 2026-11-12 (ADR-0031): every value below was
+# adopted as it stood in version 3, where each was a labelled placeholder
+# (ADR-0026). No specification gives these numbers, and none was tuned to a
+# book of business: 0.5 is equal odds, and 0.10 / 0.25 are the conventional
+# PSI bands. Changing one is a new decision and a new version.
 
-version = 3
-decided = false
+version = 4
+decided = true
 
 [acceptance]
 # A candidate is accepted only if its test-window PR-AUC exceeds the rules
 # baseline's, and the current production model's, by more than this. The
-# spec says "beats"; any margin above zero is a sponsor's call.
+# spec says "beats"; the owner kept the margin at zero.
 min_pr_auc_lift = 0.0
 # The same rule for ML-2, which chooses a category: its macro-F1 must exceed
 # the taxonomy table's, and the current model's, by more than this.
@@ -23,8 +24,8 @@ min_macro_f1_lift = 0.0
 
 [models.ML-1]
 # P(denial) at or above which a claim goes to a person before it is sent.
-# 0.5 is the point of equal odds: a placeholder with no claim to fit this
-# book of business.
+# 0.5 is the point of equal odds. It makes no claim to fit a book of
+# business, and is the owner's choice until one is measured.
 review_at = 0.5
 
 [drift]
