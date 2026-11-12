@@ -18,6 +18,7 @@ a request reaches imports it.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Final
 
@@ -61,18 +62,41 @@ def run(
     return len(claims)
 
 
-def _scores(session: Session, model_name: str, version: int) -> dict[uuid.UUID, float]:
-    return {
-        line: score
-        for line, score in session.execute(
-            select(Prediction.service_line_id, Prediction.score).where(
-                Prediction.model_name == model_name,
-                Prediction.version == version,
-                Prediction.status == str(PredictionStatus.SCORED),
-            )
+@dataclass(frozen=True, slots=True)
+class _Scores:
+    """A version's recorded scores: by the 835's line, and by the line as
+    submitted for those made before an 835 existed (ADR-0032)."""
+
+    by_service_line: dict[uuid.UUID, float]
+    by_claim_line: dict[uuid.UUID, float]
+
+    def __len__(self) -> int:
+        return len(self.by_service_line) + len(self.by_claim_line)
+
+    def of(self, row: LineRow[bool]) -> float | None:
+        if row.service_line_id in self.by_service_line:
+            return self.by_service_line[row.service_line_id]
+        if row.claim_line_id is not None:
+            return self.by_claim_line.get(row.claim_line_id)
+        return None
+
+
+def _scores(session: Session, model_name: str, version: int) -> _Scores:
+    found = _Scores({}, {})
+    for service_line, claim_line, score in session.execute(
+        select(Prediction.service_line_id, Prediction.claim_line_id, Prediction.score).where(
+            Prediction.model_name == model_name,
+            Prediction.version == version,
+            Prediction.status == str(PredictionStatus.SCORED),
         )
-        if line is not None and score is not None
-    }
+    ):
+        if score is None:
+            continue
+        if service_line is not None:
+            found.by_service_line[service_line] = score
+        elif claim_line is not None:
+            found.by_claim_line[claim_line] = score
+    return found
 
 
 def compare(session: Session, *, model_name: str, version: int, today: date) -> dict[str, Any]:
@@ -83,9 +107,13 @@ def compare(session: Session, *, model_name: str, version: int, today: date) -> 
             Prediction.model_name == model_name, Prediction.version == version
         )
     ).all()
-    matured: list[LineRow[bool]] = [
-        r for r in monitoring.TRAINING[model_name](session).rows if r.service_line_id in scores
-    ]
+    ours: dict[uuid.UUID, float] = {}
+    matured: list[LineRow[bool]] = []
+    for row in monitoring.TRAINING[model_name](session).rows:
+        score = scores.of(row)
+        if score is not None:
+            matured.append(row)
+            ours[row.service_line_id] = score
     report: dict[str, Any] = {
         "model": model_name,
         "version": version,
@@ -100,7 +128,7 @@ def compare(session: Session, *, model_name: str, version: int, today: date) -> 
     truth = [r.label for r in matured]
     payers = [r.payer_id for r in matured]
     report["model_metrics"] = binary_report(
-        truth, [scores[r.service_line_id] for r in matured], payers=payers
+        truth, [ours[r.service_line_id] for r in matured], payers=payers
     )
     if model_name == RECOVERY:
         report["rivals"]["queue prior"] = binary_report(
@@ -112,7 +140,10 @@ def compare(session: Session, *, model_name: str, version: int, today: date) -> 
         )
     for other, state in deployment.states(session, model_name).items():
         if other != version and state.status == str(Status.ACTIVE):
-            theirs = _scores(session, model_name, other)
+            rival = _scores(session, model_name, other)
+            theirs = {
+                r.service_line_id: score for r in matured if (score := rival.of(r)) is not None
+            }
             both = [r for r in matured if r.service_line_id in theirs]
             if both:
                 # Like for like: the same lines, each version's own score.
@@ -125,7 +156,7 @@ def compare(session: Session, *, model_name: str, version: int, today: date) -> 
                     ),
                     "ours": binary_report(
                         [r.label for r in both],
-                        [scores[r.service_line_id] for r in both],
+                        [ours[r.service_line_id] for r in both],
                         payers=[r.payer_id for r in both],
                     ),
                 }

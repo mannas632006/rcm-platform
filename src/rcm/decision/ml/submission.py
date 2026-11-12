@@ -47,7 +47,10 @@ class Risk:
 def denial_risk(
     session: Session, *, client_id: uuid.UUID, claim_id: uuid.UUID, now: datetime
 ) -> Risk:
-    """Score the claim's lines with the serving ML-1 versions.
+    """Score the claim's lines as submitted with the serving ML-1 versions.
+
+    The claim need not be in the warehouse: its inputs are computed from
+    CORE as the warehouse will compute them (ADR-0032).
 
     A claim is as risky as its riskiest line. A claim with any line the model
     could not score has no score: the line it could not see may be the one
@@ -55,7 +58,7 @@ def denial_risk(
     """
     try:
         with session.begin_nested():
-            served = serving.score(
+            served = serving.score_submission(
                 session, DENIAL_RISK, client_id=client_id, claim_ids=[claim_id], now=now
             )
     except Exception as exc:  # the model boundary: any failure degrades
@@ -65,7 +68,7 @@ def denial_risk(
         return Risk(score=None, unavailable=served.unavailable)
     lines = [line for line, claim in served.claim_of.items() if claim == claim_id]
     if not lines:
-        return Risk(score=None, unavailable=serving.NO_FEATURE_ROW)
+        return Risk(score=None, unavailable=serving.NO_LINES)
     if any(line not in served.scores for line in lines):
         return Risk(score=None, unavailable=NOT_ALL_LINES)
     return Risk(score=max(served.scores[line] for line in lines), unavailable=None)

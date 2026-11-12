@@ -27,6 +27,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -101,11 +102,21 @@ class Prediction(Base):
         CheckConstraint("status IN ('SCORED', 'DEGRADED')", name="status_known"),
         CheckConstraint(
             "(status = 'SCORED' AND score IS NOT NULL AND score >= 0 AND score <= 1 "
-            "AND decision_id IS NOT NULL AND service_line_id IS NOT NULL) "
+            "AND decision_id IS NOT NULL "
+            "AND (service_line_id IS NOT NULL OR claim_line_id IS NOT NULL)) "
             "OR (status = 'DEGRADED' AND score IS NULL AND reason IS NOT NULL)",
             name="scored_or_explained",
         ),
         UniqueConstraint("model_version_id", "service_line_id"),
+        # A line scored before its 835 existed is scored once too (ADR-0032).
+        Index(
+            "uq_ml_prediction_version_claim_line_at_submission",
+            "model_version_id",
+            "claim_line_id",
+            unique=True,
+            postgresql_where=text("service_line_id IS NULL AND claim_line_id IS NOT NULL"),
+        ),
+        Index("ix_ml_prediction_claim_line_id", "claim_line_id"),
         Index("ix_ml_prediction_version_predicted_at", "model_version_id", "predicted_at"),
         Index("ix_ml_prediction_claim_id", "claim_id"),
     )
@@ -122,8 +133,12 @@ class Prediction(Base):
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
     client_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     claim_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
-    #: Null only for a claim the warehouse holds no row for at all.
+    #: The 835's line. Null for a line scored before its 835 existed, and
+    #: for a claim the warehouse holds no row for at all.
     service_line_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    #: The line as submitted: what ML-1 scores before a claim is sent
+    #: (ADR-0032). Null on rows written before migration 0030.
+    claim_line_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True))
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     score: Mapped[float | None] = mapped_column(Float)
     #: Why there is no score.

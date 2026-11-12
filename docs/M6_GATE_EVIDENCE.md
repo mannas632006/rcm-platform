@@ -114,6 +114,7 @@ Two choices came from these measurements (ADR-0028):
 | FR-ML-06, M6.9 | `test_model_degradation_falls_back_to_rules` (queues), `test_missing_features_route_to_rules_never_a_guess` | pass |
 | PD-5 | `test_rules_override_model_on_conflict`, `test_the_scrub_consults_the_active_model_and_rules_still_decide` | pass |
 | FR-ML-05, PD-1 | `test_a_prediction_persists_its_inputs_score_and_shap_drivers` | pass |
+| PD-11, FR-ML-05 at the scrub (ADR-0032) | `test_features_computed_at_submission_are_exactly_the_marts`, `test_a_claim_the_warehouse_has_never_seen_is_scored_at_the_scrub`, `test_a_line_is_scored_once_whichever_way_it_is_reached` | pass |
 | FR-ML-04 | `test_a_shadow_score_is_recorded_and_not_used`, `test_no_model_is_promoted_before_its_shadow_period` | pass |
 | PD-20 | `test_another_clients_line_is_never_scored` | pass |
 | Evidence is not rewritten | `test_serving_records_reject_update_and_delete` | pass |
@@ -131,10 +132,13 @@ scored.
 
 - **The models learned the generator.** Their numbers say the pipeline
   works, not that a payer behaves this way.
-- **The live scrub does not get an ML-1 score yet.** A claim scrubbed before
-  it is sent is not in the warehouse, so ML-1 records it DEGRADED and the
-  rules' verdict stands. Scoring at submission needs point-in-time features
-  for a claim not yet in the mart (ADR-0028).
+- **The live scrub now gets an ML-1 score (ADR-0032, after this gate).**
+  When the gate ran, a claim scrubbed before it was sent was not in the
+  warehouse and ML-1 recorded it DEGRADED. The inputs are now computed from
+  CORE as the warehouse computes them, and held to the mart's values by
+  `test_features_computed_at_submission_are_exactly_the_marts`. The score
+  is recorded and can raise PASS to ADVISE; the correction screen does not
+  show it to the operator before a replacement is sent.
 - **ML-5 is not built** (ADR-0029).
 - **No threshold was tuned to a book of business.** The gate above ran
   under `thresholds.toml` version 3, where every value was a placeholder.

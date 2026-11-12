@@ -114,6 +114,9 @@ class LineRow[L]:
     submission_date: date
     values: tuple[Value, ...]
     label: L
+    #: The line as submitted. The 835's line above answers it; a score
+    #: made before any 835 existed is filed under this one (ADR-0032).
+    claim_line_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,7 +145,7 @@ class LineDataset[L]:
         return digest.hexdigest()
 
 
-def _value(raw: object, kind: Kind) -> Value:
+def as_value(raw: object, kind: Kind) -> Value:
     if raw is None:
         return None
     if kind is Kind.CATEGORY:
@@ -155,7 +158,10 @@ def _value(raw: object, kind: Kind) -> Value:
 
 
 def _mart(columns: Sequence[str], *, name: str = TRAINING_MART) -> sa.TableClause:
-    return sa.table(name, *(sa.column(c) for c in columns), schema=MART_SCHEMA)
+    # `claim_line_id` rides along with whatever is asked for: a key, never
+    # a model input, naming the submitted line a row describes.
+    names = dict.fromkeys([*columns, "claim_line_id"])
+    return sa.table(name, *(sa.column(c) for c in names), schema=MART_SCHEMA)
 
 
 def _read[L](
@@ -169,7 +175,14 @@ def _read[L](
     mart: sa.TableClause,
 ) -> LineDataset[L]:
     """One row per service line: the first of its rows in `first`'s order."""
-    keys = ("service_line_id", "claim_id", "client_id", "submission_date", "payer_id")
+    keys = (
+        "service_line_id",
+        "claim_line_id",
+        "claim_id",
+        "client_id",
+        "submission_date",
+        "payer_id",
+    )
     names = list(dict.fromkeys([*keys, *(f.name for f in features)]))
     query = (
         sa.select(*(mart.c[n] for n in names), label.label("label"))
@@ -190,8 +203,9 @@ def _read[L](
                 client_id=row.client_id,
                 payer_id=row.payer_id,
                 submission_date=row.submission_date,
-                values=tuple(_value(getattr(row, f.name), f.kind) for f in features),
+                values=tuple(as_value(getattr(row, f.name), f.kind) for f in features),
                 label=decode(row.label),
+                claim_line_id=row.claim_line_id,
             )
         )
     return LineDataset(tuple(features), tuple(sorted(rows, key=lambda r: r.submission_date)))
