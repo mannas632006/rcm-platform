@@ -38,6 +38,7 @@ from rcm.domain.acknowledgement import (
     AcknowledgementOutcome,
     AcknowledgementSource,
     ClaimAcknowledgement,
+    ClaimStatusAnswer,
 )
 from rcm.domain.remittance import RawFile, RawFileStatus
 from rcm.ingestion.archive import ArchivedFile, archive
@@ -68,6 +69,9 @@ class AcknowledgementLoadResult:
     raw_file_id: uuid.UUID
     accepted: int = 0
     rejected: int = 0
+    #: Answers to status enquiries (277, 005010X212), kept apart from
+    #: verdicts: they move no claim.
+    status_answers: int = 0
     #: 271s are parsed and reported but not stored: eligibility belongs to
     #: M3's module, and a table nothing reads is a table that rots.
     eligibility_responses: int = 0
@@ -213,7 +217,7 @@ def load_acknowledgement_file(
         if unknown:
             return quarantined(
                 ASSERTION_KNOWN_STATUS_CATEGORY,
-                "a claim status category is outside the accepted and rejected code lists",
+                "a claim status category is outside the code lists this platform reads",
                 {"categories": list(unknown)},
             )
 
@@ -283,7 +287,31 @@ def load_acknowledgement_file(
                 ),
             )
 
+    answers: list[ClaimStatusAnswer] = []
+    answered: set[tuple[str, str, str]] = set()
     for response in statuses:
+        if response.is_status_response:
+            for status in response.statuses:
+                fact = (status.claim_id, status.category_code, status.status_code)
+                if status.answer is None or fact in answered:
+                    continue
+                answered.add(fact)
+                answers.append(
+                    ClaimStatusAnswer(
+                        client_id=client_id,
+                        raw_file_id=raw_file.raw_file_id,
+                        claim_id=status.claim_id or "UNKNOWN",
+                        payer_claim_number=status.payer_claim_number,
+                        answer=str(status.answer),
+                        category_code=status.category_code,
+                        status_code=status.status_code,
+                        description=status.description,
+                        payment_amount=status.payment_amount,
+                        effective_date=status.effective_date,
+                        received_at=archived.received_at,
+                    )
+                )
+            continue
         for status in response.statuses:
             add(
                 claim_id=status.claim_id or "UNKNOWN",
@@ -302,6 +330,8 @@ def load_acknowledgement_file(
 
     for row in rows:
         session.add(row)
+    for answer in answers:
+        session.add(answer)
 
     accepted = sum(1 for r in rows if r.outcome == str(AcknowledgementOutcome.ACCEPTED))
     rejected = len(rows) - accepted
@@ -317,7 +347,11 @@ def load_acknowledgement_file(
         action="acknowledgement.loaded",
         entity_type="raw_file",
         entity_id=raw_file.raw_file_id,
-        after_state={"accepted": accepted, "rejected": rejected},
+        after_state={
+            "accepted": accepted,
+            "rejected": rejected,
+            "status_answers": len(answers),
+        },
     )
     log.info(
         "acknowledgement.loaded",
@@ -332,5 +366,6 @@ def load_acknowledgement_file(
         raw_file_id=raw_file.raw_file_id,
         accepted=accepted,
         rejected=rejected,
+        status_answers=len(answers),
         eligibility_responses=len(eligibility),
     )

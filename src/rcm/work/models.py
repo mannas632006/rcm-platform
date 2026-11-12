@@ -82,6 +82,10 @@ class WorkItemKind(StrEnum):
     MISSING_FILING_DEADLINE = "MISSING_FILING_DEADLINE"
     #: ADR-0006: automatic steps on a claim waiting for the submitter.
     CLAIM_STEP_REVIEW = "CLAIM_STEP_REVIEW"
+    #: ADR-0033: a payer's answer to a status enquiry needs a person --
+    #: chase an 835 (EC-54), ask why it keeps pending (EC-56), send what
+    #: it asks for, resend what it never got.
+    CLAIM_STATUS_FOLLOW_UP = "CLAIM_STATUS_FOLLOW_UP"
 
 
 class ExceptionCategory(StrEnum):

@@ -20,7 +20,10 @@ from rcm.decision.ml.registry_models import ModelVersion  # noqa: F401 - metadat
 from rcm.decision.ml.serving_models import Deployment  # noqa: F401 - metadata
 from rcm.decision.registry_models import PayerRegistryEntry  # noqa: F401 - metadata
 from rcm.decision.rules.models import RulesetMember  # noqa: F401 - registers metadata
-from rcm.domain.acknowledgement import ClaimAcknowledgement  # noqa: F401 - metadata
+from rcm.domain.acknowledgement import (  # noqa: F401 - metadata
+    ClaimAcknowledgement,
+    ClaimStatusAnswer,
+)
 from rcm.domain.claim import Claim, ClaimLine  # noqa: F401 - registers metadata
 from rcm.domain.claim_state_log import ClaimStateTransition  # noqa: F401 - metadata
 from rcm.domain.payer import (  # noqa: F401 - registers metadata

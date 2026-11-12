@@ -34,6 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
+from enum import StrEnum
 from typing import Final
 
 from rcm.ingestion.x12.envelope import TransactionSet
@@ -58,6 +59,69 @@ ACCEPTED_CATEGORIES: Final[frozenset[str]] = frozenset({"A1", "A2"})
 #:   A8  rejected, relational field in error
 REJECTED_CATEGORIES: Final[frozenset[str]] = frozenset({"A3", "A4", "A6", "A7", "A8"})
 
+#: ST03 of a 277 that answers a 276 status enquiry (X12 005010X212). A 277CA
+#: is 005010X214. The two share every segment; what a category means does
+#: not, so the implementation guide decides how a status is read.
+STATUS_RESPONSE_GUIDE: Final = "005010X212"
+
+
+class StatusAnswer(StrEnum):
+    """What a 277 status response says about a claim (code list 507).
+
+    **Not an outcome.** An outcome comes from the 835: a status answer says
+    where the claim is and what the payer will do, and nothing here moves a
+    claim or counts as a denial (PD-4). It decides who looks next.
+    """
+
+    #: A1, A2: received, or accepted into adjudication.
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    #: F0, F3, F3F, F3N: finalised; any payment comes on an 835.
+    FINALIZED = "FINALIZED"
+    #: F1: finalised and paid. The 835 and the funds should follow.
+    PAID = "PAID"
+    #: F2: finalised and denied. The 835 says why.
+    DENIED = "DENIED"
+    #: F4: adjudication complete, no payment forthcoming.
+    NO_PAYMENT = "NO_PAYMENT"
+    #: P0, P1, P2, P5: pending.
+    PENDING = "PENDING"
+    #: R0-R16, and P3/P4 pending on requested information: the payer wants
+    #: something before it will decide.
+    INFO_REQUESTED = "INFO_REQUESTED"
+    #: A4, D0: the payer has no record of the claim.
+    NOT_FOUND = "NOT_FOUND"
+    #: A3, A6-A8: returned unprocessed.
+    RETURNED = "RETURNED"
+    #: E0-E4: the payer could not answer the enquiry.
+    NO_ANSWER = "NO_ANSWER"
+
+
+_ANSWERS: Final[dict[str, StatusAnswer]] = {
+    "A1": StatusAnswer.ACKNOWLEDGED,
+    "A2": StatusAnswer.ACKNOWLEDGED,
+    "A3": StatusAnswer.RETURNED,
+    "A4": StatusAnswer.NOT_FOUND,
+    "A6": StatusAnswer.RETURNED,
+    "A7": StatusAnswer.RETURNED,
+    "A8": StatusAnswer.RETURNED,
+    "D0": StatusAnswer.NOT_FOUND,
+    "F0": StatusAnswer.FINALIZED,
+    "F1": StatusAnswer.PAID,
+    "F2": StatusAnswer.DENIED,
+    "F3": StatusAnswer.FINALIZED,
+    "F3F": StatusAnswer.FINALIZED,
+    "F3N": StatusAnswer.FINALIZED,
+    "F4": StatusAnswer.NO_PAYMENT,
+    "P0": StatusAnswer.PENDING,
+    "P1": StatusAnswer.PENDING,
+    "P2": StatusAnswer.PENDING,
+    "P3": StatusAnswer.INFO_REQUESTED,
+    "P4": StatusAnswer.INFO_REQUESTED,
+    "P5": StatusAnswer.PENDING,
+    **{f"R{n}": StatusAnswer.INFO_REQUESTED for n in range(17)},
+    **{f"E{n}": StatusAnswer.NO_ANSWER for n in range(5)},
+}
+
 #: HL03 levels in a 277: 20 information source, 21 receiver, 19 provider,
 #: 22 subscriber, 23 dependent. The claim statuses hang below the patient.
 _HL_SUBSCRIBER: Final = "22"
@@ -81,6 +145,8 @@ class ClaimStatus:
     #: STC03 action code, and STC04/05 the amounts the payer is working from.
     action_code: str = ""
     total_charge: Decimal | None = None
+    #: STC05, what the payer says it paid, where it says.
+    payment_amount: Decimal | None = None
     #: STC12, free-form text. Often the only human-readable reason, and the
     #: first thing an operator reads.
     description: str = ""
@@ -117,6 +183,14 @@ class ClaimStatus:
         """
         return self.accepted or self.rejected
 
+    @property
+    def answer(self) -> StatusAnswer | None:
+        """What this status says in answer to an enquiry (005010X212).
+
+        None for a category code list 507 does not hold: the loader stops
+        on it rather than guess (PD-18)."""
+        return _ANSWERS.get(self.category_code.strip().upper())
+
 
 @dataclass(frozen=True, slots=True)
 class ClaimStatusResponse:
@@ -130,6 +204,8 @@ class ClaimStatusResponse:
     payer_name: str = ""
     payer_identifier: str = ""
     statuses: tuple[ClaimStatus, ...] = ()
+    #: An answer to a status enquiry (005010X212), not a 277CA.
+    is_status_response: bool = False
 
     @property
     def accepted_claims(self) -> tuple[ClaimStatus, ...]:
@@ -146,6 +222,8 @@ class ClaimStatusResponse:
         Reported so a loader can refuse the file rather than silently
         treating an unrecognised verdict as one of the two it knows.
         """
+        if self.is_status_response:
+            return tuple(sorted({s.category_code for s in self.statuses if s.answer is None}))
         return tuple(sorted({s.category_code for s in self.statuses if not s.is_known_category}))
 
 
@@ -255,6 +333,11 @@ def parse_277(transaction: TransactionSet, separators: Separators) -> ClaimStatu
                     )
                     if segment.get(4).strip()
                     else None,
+                    "payment_amount": optional_amount(
+                        segment.get(5), field_name="STC05", segment=segment
+                    )
+                    if segment.get(5).strip()
+                    else None,
                     "description": segment.get(12).strip(),
                 }
             )
@@ -269,4 +352,7 @@ def parse_277(transaction: TransactionSet, separators: Separators) -> ClaimStatu
         payer_name=payer_name,
         payer_identifier=payer_identifier,
         statuses=tuple(status for builder in statuses for status in builder.build()),
+        is_status_response=transaction.implementation_reference.strip()
+        .upper()
+        .startswith(STATUS_RESPONSE_GUIDE),
     )
