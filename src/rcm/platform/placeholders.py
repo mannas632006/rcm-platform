@@ -238,15 +238,17 @@ DECLARED: Final[dict[str, Placeholder]] = {
 
 _OWNER: Final = "Muhammad Anas"
 _ON: Final = date(2026, 11, 12)
+_ON_13TH: Final = date(2026, 11, 13)
 
 
-def _decided(value: object) -> Decision:
-    return Decision(value=value, decided_by=_OWNER, decided_on=_ON)
+def _decided(value: object, on: date = _ON) -> Decision:
+    return Decision(value=value, decided_by=_OWNER, decided_on=on)
 
 
 #: The owner's decisions of 2026-11-12 (ADR-0031): each provisional value
 #: adopted as it stood. TBD-45 was decided on 2026-11-03 and was never
 #: registered here; it is a plain setting in `rcm.platform.config`.
+#: The rest were decided on 2026-11-13 (ADR-0035).
 DECIDED: Final[dict[str, Decision]] = {
     "raw_file_retention_days": _decided(2557),
     "session_idle_timeout_minutes": _decided(15),
@@ -265,6 +267,42 @@ DECIDED: Final[dict[str, Decision]] = {
     "outbox_max_attempts": _decided(12),
     "clearinghouse_breaker_failures": _decided(5),
     "clearinghouse_breaker_open_seconds": _decided(60),
+    # ADR-0035. Not the provisional cadence: the owner chose to follow up
+    # sooner while a claim is with the payer (21 days, not 30) and after it
+    # is decided (5, not 7). The states the question did not name keep theirs.
+    "next_action_days": _decided(
+        {
+            "*": 1,
+            "Submitted": 2,
+            "Rejected": 2,
+            "InAdjudication": 21,
+            "Paid": 5,
+            "PartiallyPaid": 5,
+            "Denied": 5,
+            "Correcting": 3,
+            "Appealing": 30,
+            "SecondaryBilling": 3,
+            "PatientBalance": 30,
+            "Reopened": 2,
+        },
+        _ON_13TH,
+    ),
+    "exception_sla_hours": _decided(
+        {
+            "COMPLIANCE": 4,
+            "DEADLINE_RISK": 24,
+            "EXTERNAL_SYSTEM": 8,
+            "DATA_QUALITY": 72,
+            "RULE_CONFLICT": 120,
+            "MODEL_LOW_CONFIDENCE": 48,
+            "OPERATIONAL": 72,
+        },
+        _ON_13TH,
+    ),
+    "exception_trend_ratio": _decided(1.5, _ON_13TH),
+    "exception_trend_min_count": _decided(10, _ON_13TH),
+    "status_remittance_grace_days": _decided(14, _ON_13TH),
+    "status_pending_repeat_limit": _decided(3, _ON_13TH),
 }
 
 #: What nobody has decided yet: reported at startup and at each gate.

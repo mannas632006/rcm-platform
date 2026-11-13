@@ -108,8 +108,8 @@ class Settings(BaseSettings):
     #: Days after an appeal is sent before it is followed up (ADR-0017).
     #: Decided by the owner on 2026-11-12. Payers typically answer in 30-60.
     appeal_follow_up_days: int = Field(default=30, ge=1)
-    # M3.5. No specification gives exception SLAs or a trend threshold;
-    # these are labelled placeholders, keyed by ExceptionCategory.
+    # M3.5. No specification gives exception SLAs or a trend threshold.
+    # Keyed by ExceptionCategory; decided by the owner on 2026-11-13 (ADR-0035).
     exception_sla_hours: dict[str, int] = Field(
         default_factory=lambda: {
             "COMPLIANCE": 4,
@@ -130,20 +130,21 @@ class Settings(BaseSettings):
     outbox_retry_seconds: int = Field(default=300)
     outbox_max_attempts: int = Field(default=12)
     submission_ack_followup_days: int = Field(default=2)
-    # ADR-0033. Placeholders: no specification gives them.
+    # ADR-0033. No specification gives them; decided on 2026-11-13 (ADR-0035).
     status_remittance_grace_days: int = Field(default=14, ge=0)
     status_pending_repeat_limit: int = Field(default=3, ge=1)
     # ADR-0006. Days until the next action, by claim state; "*" for any
     # state not listed. BR-STATE-04 needs a date; no specification gives one.
+    # Decided on 2026-11-13 (ADR-0035): tighter than the provisional 30 and 7.
     next_action_days: dict[str, int] = Field(
         default_factory=lambda: {
             "*": 1,
             "Submitted": 2,
             "Rejected": 2,
-            "InAdjudication": 30,
-            "Paid": 7,
-            "PartiallyPaid": 7,
-            "Denied": 7,
+            "InAdjudication": 21,
+            "Paid": 5,
+            "PartiallyPaid": 5,
+            "Denied": 5,
             "Correcting": 3,
             "Appealing": 30,
             "SecondaryBilling": 3,

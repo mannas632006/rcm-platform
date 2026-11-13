@@ -1,6 +1,6 @@
 # ADR-0031: The owner's decisions of 2026-11-12
 
-**Status:** Accepted · **Date:** 2026-11-12 · **Decided by:** Muhammad Anas
+**Status:** Accepted · **Date:** 2026-11-12 · **Decided by:** Muhammad Anas · **Completed by:** ADR-0035 (the four open settings, decided 2026-11-13)
 
 ## Context
 
