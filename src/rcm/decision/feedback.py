@@ -14,8 +14,9 @@ denial not yet answered:
 
 Categories no claim field can catch (timely filing, duplicates, provider
 enrolment) are answered with the reason, recorded. So is an authorisation
-denial on a claim that carried an authorisation (EC-60): the payer is the one
-to answer for it, on appeal. Every answer is a row in
+denial on a claim that carried an authorisation (EC-60), and a coverage
+denial the payer's own earlier 271 contradicts (EC-61): the payer is the one
+to answer for those, on appeal. Every answer is a row in
 `denial_feedback` and a `decision_record` (PD-1), so no preventable denial
 can recur unexplained -- BR-M7-01's [TBD-44] defect cannot arise.
 
@@ -37,7 +38,7 @@ from typing import Any, Final
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session, aliased
 
-from rcm.decision import ncci_store, registry
+from rcm.decision import eligibility, ncci_store, registry
 from rcm.decision.denial_models import DenialClassification
 from rcm.decision.denials import (
     CATEGORY_RULES,
@@ -77,7 +78,8 @@ __all__ = [
 log = get_logger(__name__)
 
 #: v2: an authorisation denial on a claim that carried one drafts no rule (EC-60).
-LOGIC_VERSION: Final = "feedback-v2"
+#: v3: nor does a coverage denial the payer's own earlier 271 contradicts (EC-61).
+LOGIC_VERSION: Final = "feedback-v3"
 DECIDED_BY: Final = "rules_engine:denial_feedback"
 
 C = DenialCategory
@@ -169,6 +171,17 @@ _NO_RULE: Final[dict[DenialCategory, str]] = {
 _AUTH_ON_CLAIM: Final = (
     "An authorisation was on the claim and the payer denied for want of one; no rule "
     "on the claim's contents catches that. Appeal with the authorisation as evidence"
+)
+
+
+#: EC-61: CARCs that say the patient was not covered on the date of
+#: service, or not known as insured. A payer that said otherwise on its own
+#: 271 before the claim was sent has contradicted itself.
+COVERAGE_CARCS: Final = frozenset({"26", "27", "31"})
+_CONTRADICTED: Final = (
+    "The payer's own eligibility response, before the claim was sent, said the "
+    "patient was covered on the date of service; no rule on the claim catches the "
+    "payer contradicting itself. Appeal with that response"
 )
 
 
@@ -271,6 +284,7 @@ _CHECK_CATEGORY: Final[dict[str, DenialCategory]] = {
     "NCCI_PTP": C.CODING,
     "NCCI_MUE": C.MEDICAL_NECESSITY,
     registry.PRIOR_AUTH_CHECK: C.AUTHORISATION,
+    eligibility.ELIGIBILITY_CHECK: C.REGISTRATION_ELIGIBILITY,
 }
 
 #: Modes that act on a claim. A shadow rule is recorded, never acted on, so
@@ -607,7 +621,29 @@ class _Loop:
             and self._facts[claim_id].claim["claim.has_prior_auth"] is True
         ):
             return _Answer(FeedbackOutcome.NO_RULE, _AUTH_ON_CLAIM)
+        if carc in COVERAGE_CARCS and self._covered_when_sent(claim_id):
+            return _Answer(FeedbackOutcome.NO_RULE, _CONTRADICTED)
         return self._candidate(category=category, payer_id=payer_id, cpt=cpt, carc=carc)
+
+    def _covered_when_sent(self, claim_id: uuid.UUID) -> bool:
+        """Did the payer's latest 271, received by the day the claim was sent,
+        say the patient was covered on the date of service (EC-61)?"""
+        claim = self._session.scalar(
+            select(Claim).where(Claim.client_id == self._client_id, Claim.claim_id == claim_id)
+        )
+        if claim is None or claim.date_of_service is None:
+            return False
+        sent = claim.submitted_on or claim.created_at.date()
+        coverage = eligibility.latest_coverage(
+            self._session,
+            client_id=self._client_id,
+            payer_id=claim.payer_id,
+            member_id=claim.subscriber_member_id,
+            as_of=sent,
+        )
+        return (
+            coverage is not None and coverage.answered and coverage.active_on(claim.date_of_service)
+        )
 
     def _line(self, *, claim_id: uuid.UUID, remit_line: int, cpt: str) -> int | _Answer:
         """The submitted line the denied one answers: same position and

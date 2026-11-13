@@ -19,7 +19,7 @@ from typing import Final
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from rcm.decision import ncci_store, registry
+from rcm.decision import eligibility, ncci_store, registry
 from rcm.decision.ml.submission import Risk, combine, denial_risk
 from rcm.decision.ncci import NcciCheck
 from rcm.decision.registry import RegistryCheck
@@ -96,7 +96,9 @@ def shadow_verdict(
 
     The rules baseline a model is measured against (M6.2, ADR-0026): the same
     rules and checks as `scrub_claim`, without its corrections or its
-    decision record, because measuring history must not change it.
+    decision record, because measuring history must not change it. The
+    eligibility check is left out: it needs the claim's member, which the
+    facts do not carry (ADR-0034).
     """
     return evaluate(
         ruleset.rules, facts, checks=scrub_checks(session, facts, ruleset=ruleset, today=today)
@@ -188,7 +190,15 @@ def scrub_claim(
     ncci, payer_registry = scrub_checks(
         session, facts, ruleset=ruleset, today=today or datetime.now(UTC).date()
     )
-    checks: list[Check] = [ncci, payer_registry]
+    # Coverage on the date of service, from the latest 271 (ADR-0034). Built
+    # for this claim: the member is not among the facts (ADR-0007).
+    coverage = eligibility.check_for(
+        session,
+        claim_id=claim_id,
+        client_id=client_id,
+        today=today or datetime.now(UTC).date(),
+    )
+    checks: list[Check] = [ncci, payer_registry, coverage]
     # Fix what has one right answer, re-run from Layer 1 (ADR-0011).
     if apply_corrections:
         corrected = run_pipeline(ruleset.rules, facts, checks=checks)
@@ -248,6 +258,8 @@ def scrub_claim(
             "ncci_mue_release": ruleset.ncci_mue_release,
             # BR-REG-03: which registry versions applied, and whether stale.
             "registry": payer_registry.snapshot(facts),
+            # ADR-0034: the 271 read, by id; null when none was on file.
+            "eligibility": coverage.snapshot(facts),
             "claim": {k: _plain(v) for k, v in facts.claim.items()},
             "lines": [
                 {"line_number": line.number, **{k: _plain(v) for k, v in line.values.items()}}

@@ -40,6 +40,7 @@ from rcm.domain.acknowledgement import (
     ClaimAcknowledgement,
     ClaimStatusAnswer,
 )
+from rcm.domain.eligibility import EligibilityResponseRecord
 from rcm.domain.remittance import RawFile, RawFileStatus
 from rcm.ingestion.archive import ArchivedFile, archive
 from rcm.ingestion.x12 import Limits, parse_271, parse_277, parse_999, read_interchange
@@ -72,7 +73,8 @@ class AcknowledgementLoadResult:
     #: Answers to status enquiries (277, 005010X212), kept apart from
     #: verdicts: they move no claim.
     status_answers: int = 0
-    #: 271s are parsed and reported but not stored: eligibility belongs to
+    #: 271s stored in `eligibility_response` (ADR-0034). The name says
+    #: responses, as it always did; the comment below is history:
     #: M3's module, and a table nothing reads is a table that rots.
     eligibility_responses: int = 0
     quarantine_assertion: str | None = None
@@ -330,6 +332,48 @@ def load_acknowledgement_file(
 
     for row in rows:
         session.add(row)
+    for reply in eligibility:
+        # ADR-0034: the payer, the member and the benefits. Not the
+        # subscriber's name or date of birth: no check needs them, and
+        # they stay in the archived file (PD-13).
+        session.add(
+            EligibilityResponseRecord(
+                client_id=client_id,
+                raw_file_id=raw_file.raw_file_id,
+                transaction_control_number=reply.transaction_control_number,
+                payer_id=reply.payer_identifier,
+                member_id=reply.member_id,
+                answered=reply.answered,
+                benefits=[
+                    {
+                        "code": b.code,
+                        "coverage_level": b.coverage_level,
+                        "service_type": b.service_type,
+                        "insurance_type": b.plan_coverage,
+                        "plan": b.description,
+                        "periods": [
+                            {
+                                "qualifier": p.qualifier,
+                                "start": p.start.isoformat() if p.start else None,
+                                "end": p.end.isoformat() if p.end else None,
+                            }
+                            for p in b.periods
+                        ],
+                    }
+                    for b in reply.benefits
+                ],
+                problems=[
+                    {
+                        "valid_request": p.valid_request,
+                        "reject_reason_code": p.reject_reason_code,
+                        "follow_up_action": p.follow_up_action,
+                    }
+                    for p in reply.problems
+                ],
+                received_at=archived.received_at,
+                reference=reply.reference,
+            )
+        )
     for answer in answers:
         session.add(answer)
 
