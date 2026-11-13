@@ -113,6 +113,26 @@ def test_a_rule_scoped_to_another_payer_does_not_see_the_claim() -> None:
     assert result.findings == ()
 
 
+def test_a_rule_wrong_for_one_payer_leaves_that_payer_out() -> None:
+    """EC-36: a rule correct in general and wrong for one payer. The exception
+    is written into the rule, so that payer's claims pass and every other
+    payer's are still checked."""
+    general = rule(
+        {"all": [*MOD25_MISSING["all"], {"field": "claim.payer_id", "op": "ne", "value": "77777"}]}
+    )
+
+    exempt = evaluate([general], facts(payer_id="77777"))
+    assert exempt.findings == ()
+    assert exempt.verdict is Verdict.PASS
+
+    everyone_else = evaluate([general], facts())
+    assert [(f.line_number, f.outcome) for f in everyone_else.findings] == [
+        (1, Outcome.FLAGGED),
+        (2, Outcome.FLAGGED),
+    ]
+    assert everyone_else.verdict is Verdict.BLOCK
+
+
 def test_a_claim_rule_is_checked_once() -> None:
     result = evaluate(
         [rule({"field": "claim.total_charge", "op": "gt", "value": "100.00"})], facts()

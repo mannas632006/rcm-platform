@@ -119,6 +119,34 @@ def test_the_scrub_records_the_registry_version_it_used(claim: tuple[uuid.UUID, 
     assert version == 2
 
 
+def test_a_requirement_changed_overnight_is_what_the_next_scrub_reads(
+    claim: tuple[uuid.UUID, str],
+) -> None:
+    """EC-40: the payer starts requiring authorisation. Recording that is a
+    new registry version, and the claim that passed yesterday is blocked by
+    the next scrub with no rule republished. Each scrub names the version it
+    read, so yesterday's pass still explains itself."""
+    claim_id, payer_id = claim
+    before = record(payer_id, verified=TODAY, auth=False)
+    assert scrub(claim_id) is Verdict.PASS
+
+    after = record(payer_id, verified=TODAY, auth=True)
+    assert scrub(claim_id) is Verdict.BLOCK
+
+    with session_scope() as session:
+        decisions = session.scalars(
+            select(DecisionRecord)
+            .where(
+                DecisionRecord.decision_type == str(DecisionType.SCRUB),
+                DecisionRecord.entity_id == claim_id,
+            )
+            .order_by(DecisionRecord.decided_at, DecisionRecord.decision_id)
+        ).all()
+    read = [[used["version"] for used in d.input_snapshot["registry"]] for d in decisions]
+    assert read == [[before], [after]]
+    assert [d.output["verdict"] for d in decisions] == ["PASS", "BLOCK"]
+
+
 def test_a_change_is_a_new_version_and_the_old_one_stays(
     claim: tuple[uuid.UUID, str], app_engine: Engine
 ) -> None:

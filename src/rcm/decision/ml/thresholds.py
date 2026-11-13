@@ -46,7 +46,8 @@ class Drift:
 @dataclass(frozen=True, slots=True)
 class Thresholds:
     version: int
-    #: False while every value is a placeholder (ADR-0026).
+    #: False while the values are placeholders (ADR-0026); true once the
+    #: owner has decided them (ADR-0031).
     decided: bool
     min_pr_auc_lift: float
     min_macro_f1_lift: float

@@ -87,7 +87,9 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_json: bool = True
 
-    # --- values nobody has decided yet (see placeholders.py) ---------------
+    # --- values the specifications left open (see placeholders.py) --------
+    # Most were decided by the owner on 2026-11-12 (ADR-0031, `DECIDED`);
+    # the rest are still placeholders and are reported at startup.
     raw_file_retention_days: int = Field(default=2557)
     session_idle_timeout_minutes: int = Field(default=15)
     work_item_lock_expiry_minutes: int = Field(default=30)
@@ -100,10 +102,11 @@ class Settings(BaseSettings):
     outcome_maturity_days: int = Field(default=180)
     timely_filing_escalation_days: int = Field(default=14)
     preventable_denial_defect_threshold: int = Field(default=3)
-    #: TBD-48 (BR-M11-05). Placeholder 0.00 -- see placeholders.py.
+    #: TBD-48 (BR-M11-05), decided by the owner on 2026-11-12: 0.00, so every
+    #: specialist write-off waits for a named approver.
     write_off_approval_threshold: Decimal = Field(default=Decimal("0.00"), ge=0)
-    #: Unregistered placeholder (ADR-0017): days after an appeal is sent
-    #: before it is followed up. Payers typically answer in 30-60 days.
+    #: Days after an appeal is sent before it is followed up (ADR-0017).
+    #: Decided by the owner on 2026-11-12. Payers typically answer in 30-60.
     appeal_follow_up_days: int = Field(default=30, ge=1)
     # M3.5. No specification gives exception SLAs or a trend threshold;
     # these are labelled placeholders, keyed by ExceptionCategory.

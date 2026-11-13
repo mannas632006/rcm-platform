@@ -235,6 +235,29 @@ def test_a_per_line_mue_does_not_sum() -> None:
     assert found == []
 
 
+@pytest.mark.parametrize("modifier", ["76", "77"])
+def test_a_repeat_procedure_on_its_own_line_is_not_flagged(modifier: str) -> None:
+    """EC-38: the same procedure twice on one day, the repeat on its own line
+    with 76 (same physician) or 77 (another). A line-edit MUE reads each line
+    alone, and a code is never a PTP pair with itself."""
+    limit = MueLimit("71045", Decimal("1"), "1")
+    found = ncci_findings(
+        check(ptp("71046", "71045", "0"), mue=(limit,)),
+        line(1, "71045"),
+        line(2, "71045", modifier),
+    )
+    assert found == []
+
+
+def test_a_repeat_over_a_per_day_mue_goes_to_a_person() -> None:
+    """EC-38, the other half: a date-of-service MUE counts the day's units
+    whatever the modifier, so a repeat past it is put to a person. Nothing
+    removes the line or the modifier."""
+    limit = MueLimit("71045", Decimal("1"), "3")
+    found = ncci_findings(check(mue=(limit,)), line(1, "71045"), line(2, "71045", "76"))
+    assert found == [("NCCI_MUE", 1, Outcome.FLAGGED)]
+
+
 def test_layer_three_runs_rules_then_ncci_in_order() -> None:
     clinical = rule(
         {"field": "line.procedure_code", "op": "eq", "value": "45385"},

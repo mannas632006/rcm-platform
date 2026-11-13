@@ -136,5 +136,8 @@ scored.
   rules' verdict stands. Scoring at submission needs point-in-time features
   for a claim not yet in the mart (ADR-0028).
 - **ML-5 is not built** (ADR-0029).
-- **Every drift and threshold value is a placeholder** (`thresholds.toml`
-  version 3, `decided = false`), awaiting the sponsor.
+- **No threshold was tuned to a book of business.** The gate above ran
+  under `thresholds.toml` version 3, where every value was a placeholder.
+  On 2026-11-12 the owner adopted those values unchanged as version 4,
+  `decided = true` (ADR-0031). They are still the conventional defaults,
+  not measurements.

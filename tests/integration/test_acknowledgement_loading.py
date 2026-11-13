@@ -385,6 +385,22 @@ def test_an_unknown_status_category_quarantines_the_file(archive_root: Path) -> 
         assert "ZZ" in str(raw.quarantine_context)
 
 
+@pytest.mark.parametrize("composite", ["F1:65", "P1:3"], ids=["finalised-paid", "pending"])
+def test_a_status_enquiry_answer_is_not_read_as_a_verdict(
+    archive_root: Path, composite: str
+) -> None:
+    """EC-54, EC-56: "paid" and "pending" are answers to a 276 status enquiry,
+    which this platform does not send yet. A 277 carrying one is neither an
+    acceptance nor a rejection, so it is stopped with the category named and
+    no claim takes an outcome from it (PD-18)."""
+    result = acknowledge(ack_277ca(("C1", composite)), archive_root, name="277.edi")
+
+    assert result.quarantined
+    assert result.quarantine_assertion == ASSERTION_KNOWN_STATUS_CATEGORY
+    with session_scope() as session:
+        assert session.scalar(select(func.count()).select_from(ClaimAcknowledgement)) == 0
+
+
 def test_one_unreadable_category_quarantines_the_whole_file(archive_root: Path) -> None:
     """Partial loading would leave the readable claims in and the unreadable
     one out, with nothing recording the difference (PD-9/PD-10: the file is

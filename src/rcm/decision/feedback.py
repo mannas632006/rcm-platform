@@ -13,7 +13,9 @@ denial not yet answered:
   shadow, advisory and blocking are a person's steps (FR-RULES-06).
 
 Categories no claim field can catch (timely filing, duplicates, provider
-enrolment) are answered with the reason, recorded. Every answer is a row in
+enrolment) are answered with the reason, recorded. So is an authorisation
+denial on a claim that carried an authorisation (EC-60): the payer is the one
+to answer for it, on appeal. Every answer is a row in
 `denial_feedback` and a `decision_record` (PD-1), so no preventable denial
 can recur unexplained -- BR-M7-01's [TBD-44] defect cannot arise.
 
@@ -74,7 +76,8 @@ __all__ = [
 
 log = get_logger(__name__)
 
-LOGIC_VERSION: Final = "feedback-v1"
+#: v2: an authorisation denial on a claim that carried one drafts no rule (EC-60).
+LOGIC_VERSION: Final = "feedback-v2"
 DECIDED_BY: Final = "rules_engine:denial_feedback"
 
 C = DenialCategory
@@ -159,6 +162,14 @@ _NO_RULE: Final[dict[DenialCategory, str]] = {
         "no provider field to test"
     ),
 }
+
+#: EC-60: the payer denied for want of an authorisation the claim carried.
+#: The candidate for this category asks whether one is on the claim, and one
+#: was, so it would not have flagged this claim and cannot stop the next.
+_AUTH_ON_CLAIM: Final = (
+    "An authorisation was on the claim and the payer denied for want of one; no rule "
+    "on the claim's contents catches that. Appeal with the authorisation as evidence"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -591,6 +602,11 @@ class _Loop:
                 rule_id=name,
                 rule_version=version,
             )
+        if (
+            category is C.AUTHORISATION
+            and self._facts[claim_id].claim["claim.has_prior_auth"] is True
+        ):
+            return _Answer(FeedbackOutcome.NO_RULE, _AUTH_ON_CLAIM)
         return self._candidate(category=category, payer_id=payer_id, cpt=cpt, carc=carc)
 
     def _line(self, *, claim_id: uuid.UUID, remit_line: int, cpt: str) -> int | _Answer:

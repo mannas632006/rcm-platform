@@ -128,6 +128,20 @@ def test_deduplicate_modifiers_keeps_order() -> None:
     assert modifiers(fixed, 1) == ["RT", "LT"]
 
 
+def test_deduplicating_modifiers_never_merges_a_repeat_procedure() -> None:
+    """EC-38: two lines for one procedure are a repeat service, not a
+    duplicate to tidy. The fix works inside one line; both lines and the 76
+    stay as billed."""
+    billed = facts(line(1, "71045"), line(2, "71045", "76"))
+    fixed, change = correct.apply_fix(billed, "DEDUPLICATE_MODIFIERS", 2)
+    assert change is None
+    assert [(ln.number, ln.values["line.procedure_code"]) for ln in fixed.lines] == [
+        (1, "71045"),
+        (2, "71045"),
+    ]
+    assert modifiers(fixed, 2) == ["76"]
+
+
 def test_strip_diagnosis_decimal() -> None:
     fixed, change = correct.apply_fix(
         facts(diagnoses=["J06.9", "E11.65"]), "STRIP_DIAGNOSIS_DECIMAL", None

@@ -27,6 +27,7 @@ from rcm.domain.claim_state import ClaimState
 from rcm.domain.claim_state_log import ClaimStateTransition, ReviewStatus
 from rcm.ingestion.claim_loader import load_claim_file
 from rcm.platform.db import reset_engines, session_scope
+from rcm.work import denials as work_denials
 from rcm.work import progression
 from rcm.work.models import WorkItem, WorkItemKind
 from rcm.work.state import WorkItemState
@@ -151,9 +152,12 @@ def test_the_full_path_ends_paid(root: Path) -> None:
 
 @pytest.mark.invariant
 def test_the_full_path_ends_denied(root: Path) -> None:
+    """EC-49 / BR-M9-07: this 835 pays nothing (BPR02 0.00). It is loaded like
+    any other, because the denial is all it carries."""
     submit("CLM-D", root, control="0001")
     acknowledge(ack_277ca(("CLM-D", "A2:20")), root, name="277ca.edi")
-    remit(denial_for("CLM-D", control="0001"), root, name="835.edi")
+    result = remit(denial_for("CLM-D", control="0001"), root, name="835.edi")
+    assert not result.quarantined
     advance()
     assert state_of("CLM-D") is ClaimState.DENIED
 
@@ -298,6 +302,43 @@ def test_a_rejection_after_an_acceptance_goes_to_a_person(root: Path) -> None:
     assert problems_on("CLM-AR") == ["rejected-after-acceptance"]
 
 
+def test_a_claim_not_on_file_after_acceptance_goes_to_a_person(root: Path) -> None:
+    """EC-55: the payer accepted the claim on a 277CA and later answers A4,
+    not found. The claim is not moved to Rejected on evidence that
+    contradicts its acceptance, and it is not left to wait out its 30 days:
+    a named item asks a person to find out which is true."""
+    submit("CLM-NF", root, control="0001")
+    acknowledge(ack_277ca(("CLM-NF", "A2:20")), root, name="277ca.edi")
+    advance()
+    assert state_of("CLM-NF") is ClaimState.IN_ADJUDICATION
+    acknowledge(ack_277ca(("CLM-NF", "A4:35"), control="0002"), root, name="277-status.edi")
+    advance()
+    assert state_of("CLM-NF") is ClaimState.IN_ADJUDICATION
+    assert problems_on("CLM-NF") == ["rejected-after-acceptance"]
+    assert kinds_on("CLM-NF") == [str(WorkItemKind.DATA_QUALITY)]
+
+
+def test_a_partly_accepted_batch_moves_each_claim_on_its_own_verdict(root: Path) -> None:
+    """EC-44: one 277CA accepts two claims of a batch and rejects the third.
+    Each claim follows its own verdict; the rejection holds nothing else back
+    and is a rejection, not a denial (PD-4)."""
+    batch = ("CLM-B1", "CLM-B2", "CLM-B3")
+    for number, claim_id in enumerate(batch, start=1):
+        submit(claim_id, root, control=f"000{number}")
+    result = acknowledge(
+        ack_277ca(("CLM-B1", "A2:20"), ("CLM-B2", "A3:21"), ("CLM-B3", "A2:20")),
+        root,
+        name="277ca.edi",
+    )
+    assert (result.accepted, result.rejected) == (2, 1)
+    advance()
+    assert [state_of(claim_id) for claim_id in batch] == [
+        ClaimState.IN_ADJUDICATION,
+        ClaimState.REJECTED,
+        ClaimState.IN_ADJUDICATION,
+    ]
+
+
 def test_a_hold_is_a_recorded_decision_written_once(root: Path) -> None:
     """PD-1: why a claim waits is a decision like any step, with its version
     and evidence. Run again, the same hold is not recorded again."""
@@ -364,6 +405,29 @@ def test_a_line_paid_nothing_for_the_patient_share_is_not_a_denial(root: Path) -
     assert state_of("CLM-DED") is ClaimState.IN_ADJUDICATION
     assert problems_on("CLM-DED") == ["835-patient-share-only-line"]
     assert kinds_on("CLM-DED") == [str(WorkItemKind.PAYMENT_EXCEPTION)]
+
+
+def test_a_capitated_line_paid_nothing_is_not_a_denial(root: Path) -> None:
+    """EC-51: CO-24, covered under capitation. Nothing was expected on the
+    line, so nothing was refused: the claim is not Denied, no denial work is
+    raised, and a person confirms the outcome."""
+    submit("CLM-CAP", root, control="0001")
+    acknowledge(ack_277ca(("CLM-CAP", "A2:20")), root, name="277ca.edi")
+    body = [
+        f"CLP*CLM-CAP*1*{CHARGE}*0.00**MB*PCNCLM-CAP*11~",
+        "NM1*QC*1*Castellanos*Andre****MI*VAZ957419823~",
+        f"SVC*HC:99203*{CHARGE}*0.00**1~",
+        f"CAS*CO*24*{CHARGE}~",
+        "AMT*B6*0.00~",
+    ]
+    remit(_remittance(body, control="0001", check=Decimal("0.00")), root, name="835.edi")
+    advance()
+    with session_scope() as session:
+        run = work_denials.classify_and_route(session, client_id=CLIENT_A, now=NOW)
+    assert run.classification.classified == 0
+    assert state_of("CLM-CAP") is ClaimState.IN_ADJUDICATION
+    assert problems_on("CLM-CAP") == ["835-patient-share-only-line"]
+    assert kinds_on("CLM-CAP") == [str(WorkItemKind.PAYMENT_EXCEPTION)]
 
 
 def test_a_refusal_billed_to_the_patient_is_still_a_denial(root: Path) -> None:

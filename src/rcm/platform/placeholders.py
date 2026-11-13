@@ -11,12 +11,18 @@ visible in operations rather than buried in a diff. Supplying the corresponding
 environment variable resolves it -- `Settings.unresolved_placeholders()` then stops
 reporting it.
 
+A value its owner has decided is recorded in `DECIDED`, with who decided it and
+when (ADR-0031). It leaves `REGISTRY`, so it is no longer reported, and
+`tests/unit/test_placeholders.py` holds the setting's default to the decision: a
+decided value changes only by another decision.
+
 Registered here, consumed by `rcm.platform.config`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Final
 
 
@@ -40,9 +46,19 @@ class Placeholder:
     """Which document's register declares it."""
 
 
-#: Every placeholder this milestone needs. Extended as later milestones reach
-#: the settings that depend on them.
-REGISTRY: Final[dict[str, Placeholder]] = {
+@dataclass(frozen=True, slots=True)
+class Decision:
+    """A placeholder its owner has settled."""
+
+    value: object
+    """What was decided. The setting's default in `rcm.platform.config`."""
+
+    decided_by: str
+    decided_on: date
+
+
+#: Every value the specifications left open, decided or not.
+DECLARED: Final[dict[str, Placeholder]] = {
     "raw_file_retention_days": Placeholder(
         tbd_id="TBD-55",
         description="Raw X12 file retention period. Minimum 7 years per SRS section 5.8, "
@@ -179,8 +195,7 @@ REGISTRY: Final[dict[str, Placeholder]] = {
         '(BR-M11-05). Applies to roles whose limit is "<= threshold" in SRS 11.5; '
         'an Ops Manager\'s limit is "Any".',
         owner="Muhammad Anas",
-        # 0.00: every specialist write-off waits for approval until the owner
-        # sets the real figure -- the closed side of an open decision.
+        # 0.00: every specialist write-off waits for approval.
         provisional="0.00",
         source="DOC-02 Appendix A",
     ),
@@ -203,4 +218,40 @@ REGISTRY: Final[dict[str, Placeholder]] = {
         provisional=10,
         source="none -- raised at M3.5",
     ),
+}
+
+_OWNER: Final = "Muhammad Anas"
+_ON: Final = date(2026, 11, 12)
+
+
+def _decided(value: object) -> Decision:
+    return Decision(value=value, decided_by=_OWNER, decided_on=_ON)
+
+
+#: The owner's decisions of 2026-11-12 (ADR-0031): each provisional value
+#: adopted as it stood. TBD-45 was decided on 2026-11-03 and was never
+#: registered here; it is a plain setting in `rcm.platform.config`.
+DECIDED: Final[dict[str, Decision]] = {
+    "raw_file_retention_days": _decided(2557),
+    "session_idle_timeout_minutes": _decided(15),
+    "work_item_lock_expiry_minutes": _decided(30),
+    "payer_registry_staleness_days": _decided(180),
+    "outcome_maturity_days": _decided(180),
+    "timely_filing_escalation_days": _decided(14),
+    "preventable_denial_defect_threshold": _decided(3),
+    "bulk_handling_threshold": _decided("25.00"),
+    # 0.00: every specialist write-off waits for a named approver. Decided,
+    # not a default left in place: the owner chose the closed side.
+    "write_off_approval_threshold": _decided("0.00"),
+    "appeal_follow_up_days": _decided(30),
+    "submission_ack_followup_days": _decided(2),
+    "outbox_retry_seconds": _decided(300),
+    "outbox_max_attempts": _decided(12),
+    "clearinghouse_breaker_failures": _decided(5),
+    "clearinghouse_breaker_open_seconds": _decided(60),
+}
+
+#: What nobody has decided yet: reported at startup and at each gate.
+REGISTRY: Final[dict[str, Placeholder]] = {
+    name: spec for name, spec in DECLARED.items() if name not in DECIDED
 }
