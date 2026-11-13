@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import random
 import uuid
+from datetime import date
 
 import pytest
 
-from rcm.analytics.dataset import Feature, Kind, Value
+from rcm.analytics.dataset import Feature, Kind, LineRow, Value
 from rcm.decision.ml import monitoring, recovery, serving, thresholds
 from rcm.decision.ml.serving_models import DENIAL_RISK, Severity
 from rcm.decision.ml.submission import combine
@@ -170,3 +171,37 @@ def test_a_claim_with_an_unscored_line_has_no_score() -> None:
         scores={a: 0.9}, claim_of={a: claim, b: claim}, charge_of={a: 300.0, b: 100.0}
     )
     assert recovery.claim_scores(served) == {}
+
+
+# ---------------------------------------------------------------------------
+# ADR-0032: a score made before the 835 is judged by the line as submitted
+# ---------------------------------------------------------------------------
+
+
+def _outcome(label: bool, claim_line: uuid.UUID | None) -> LineRow[bool]:
+    return LineRow(
+        service_line_id=uuid.uuid4(),
+        claim_id=uuid.uuid4(),
+        client_id=uuid.uuid4(),
+        payer_id="P1",
+        submission_date=date(2026, 1, 5),
+        values=(),
+        label=label,
+        claim_line_id=claim_line,
+    )
+
+
+def test_a_submitted_line_has_an_outcome_only_when_it_has_one() -> None:
+    """A line the payer answered twice, differently (a reversal), has no
+    single outcome to judge an earlier score by: it is left out, not given
+    either answer."""
+    paid, denied, disputed = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    rows = [
+        _outcome(False, paid),
+        _outcome(True, denied),
+        _outcome(True, denied),
+        _outcome(True, disputed),
+        _outcome(False, disputed),
+        _outcome(True, None),
+    ]
+    assert monitoring.answers_by_claim_line(rows) == {paid: False, denied: True}

@@ -389,10 +389,10 @@ def test_an_unknown_status_category_quarantines_the_file(archive_root: Path) -> 
 def test_a_status_enquiry_answer_is_not_read_as_a_verdict(
     archive_root: Path, composite: str
 ) -> None:
-    """EC-54, EC-56: "paid" and "pending" are answers to a 276 status enquiry,
-    which this platform does not send yet. A 277 carrying one is neither an
-    acceptance nor a rejection, so it is stopped with the category named and
-    no claim takes an outcome from it (PD-18)."""
+    """ "Paid" and "pending" answer a status enquiry (005010X212, ADR-0033).
+    On a 277CA they are neither an acceptance nor a rejection, so the file is
+    stopped with the category named and no claim takes an outcome from it
+    (PD-18)."""
     result = acknowledge(ack_277ca(("C1", composite)), archive_root, name="277.edi")
 
     assert result.quarantined

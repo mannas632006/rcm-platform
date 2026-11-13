@@ -130,6 +130,9 @@ class Settings(BaseSettings):
     outbox_retry_seconds: int = Field(default=300)
     outbox_max_attempts: int = Field(default=12)
     submission_ack_followup_days: int = Field(default=2)
+    # ADR-0033. Placeholders: no specification gives them.
+    status_remittance_grace_days: int = Field(default=14, ge=0)
+    status_pending_repeat_limit: int = Field(default=3, ge=1)
     # ADR-0006. Days until the next action, by claim state; "*" for any
     # state not listed. BR-STATE-04 needs a date; no specification gives one.
     next_action_days: dict[str, int] = Field(

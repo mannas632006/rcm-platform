@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from enum import StrEnum
 
 from sqlalchemy import (
@@ -38,6 +39,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -146,4 +148,61 @@ class ClaimAcknowledgement(Base):
         ),
         Index("ix_acknowledgement_client_claim", "client_id", "claim_id"),
         Index("ix_acknowledgement_outcome", "client_id", "outcome"),
+    )
+
+
+class ClaimStatusAnswer(Base):
+    """What a payer said about a claim in answer to a status enquiry (277,
+    005010X212). EC-54, EC-56.
+
+    Kept apart from `claim_acknowledgement` on purpose. An acknowledgement
+    is a front-end verdict that moves a claim; a status answer says where
+    the claim is and moves nothing. A payer saying "denied" here is not a
+    denial either: the denial is what the 835 says, with its reasons (PD-4).
+    `rcm.work.status_follow_up` reads these and decides who looks next.
+    """
+
+    __tablename__ = "claim_status_answer"
+
+    answer_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    client_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    raw_file_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("raw_file.raw_file_id"), nullable=False
+    )
+    #: TRN02, the submitter's claim control number. Text, as on
+    #: `claim_acknowledgement`: an answer about a claim this platform never
+    #: loaded is still kept.
+    claim_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    payer_claim_number: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="", server_default=""
+    )
+    answer: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: STC01-1 and STC01-2, kept so a reader sees the payer's own codes.
+    category_code: Mapped[str] = mapped_column(String(8), nullable=False)
+    status_code: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="", server_default=""
+    )
+    #: STC12. Often the only words the payer gives.
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    payment_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    effective_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "raw_file_id", "claim_id", "category_code", "status_code", name="uq_status_answer_fact"
+        ),
+        CheckConstraint(
+            "answer IN ('ACKNOWLEDGED','FINALIZED','PAID','DENIED','NO_PAYMENT','PENDING',"
+            "'INFO_REQUESTED','NOT_FOUND','RETURNED','NO_ANSWER')",
+            name="status_answer_is_known",
+        ),
+        CheckConstraint("length(claim_id) > 0", name="status_answer_names_its_claim"),
+        CheckConstraint("length(category_code) > 0", name="status_answer_names_its_category"),
+        Index("ix_status_answer_client_claim", "client_id", "claim_id", "received_at"),
     )

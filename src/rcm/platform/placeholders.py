@@ -210,6 +210,22 @@ DECLARED: Final[dict[str, Placeholder]] = {
         provisional=30,
         source="none -- raised at M5.7 (ADR-0017)",
     ),
+    "status_remittance_grace_days": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Days after a payer's status answer says a claim is decided "
+        "(paid, denied, finalised) before a missing 835 is chased (EC-54).",
+        owner="Muhammad Anas",
+        provisional=14,
+        source="none -- raised by ADR-0033",
+    ),
+    "status_pending_repeat_limit": Placeholder(
+        tbd_id="UNREGISTERED",
+        description="Consecutive pending answers with no reason before a person "
+        "asks the payer why (EC-56).",
+        owner="Muhammad Anas",
+        provisional=3,
+        source="none -- raised by ADR-0033",
+    ),
     "exception_trend_min_count": Placeholder(
         tbd_id="UNREGISTERED",
         description="Minimum exceptions in the latest window before a trend can "

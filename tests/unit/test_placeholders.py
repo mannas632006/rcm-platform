@@ -29,6 +29,9 @@ def test_what_is_still_open_is_still_reported() -> None:
         "exception_sla_hours",
         "exception_trend_ratio",
         "exception_trend_min_count",
+        # Raised after the decisions, by ADR-0033.
+        "status_remittance_grace_days",
+        "status_pending_repeat_limit",
     }
 
 

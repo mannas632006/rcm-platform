@@ -10,8 +10,8 @@ DOC-02 — see [ADR-0002](../docs/decisions/ADR-0002-edge-case-priority-discrepa
 **Status values:** `NOT_STARTED` · `COVERED` (test exists and passes) ·
 `DEFERRED` (with a reason and a linked milestone — never a bare skip; CLAUDE.md §7.5).
 
-**Where it stands (2026-11-12, ADR-0030):** 22 covered, 48 deferred, none
-not started. Of the 32 High cases, 11 are covered and 21 deferred.
+**Where it stands (2026-11-13, ADR-0030, ADR-0033):** 24 covered, 46 deferred, none
+not started. Of the 32 High cases, 12 are covered and 20 deferred.
 
 - **Covered** means the case is met where the platform meets it, by a test
   that passes. Where that is narrower than the case as DOC-02 words it, the
@@ -87,9 +87,9 @@ not started. Of the 32 High cases, 11 are covered and 21 deferred.
 | EC-51 | M9 | Capitated zero-payment lines | Med | M3, M4.8 | `integration/test_claim_progression.py::test_a_capitated_line_paid_nothing_is_not_a_denial`; `unit/test_denial_taxonomy.py::test_a_payment_adjustment_is_not_a_refusal` | COVERED |
 | EC-52 | M9 | Paper EOB requiring OCR | Med | SRS 15.7, Stage 5 | No OCR intake for paper EOBs; its accuracy target [TBD-39] is undecided | DEFERRED |
 | EC-53 | M9 | Control number reuse → misposting | High | M1.3 | `integration/test_remittance_loading.py::test_a_repeated_transaction_control_number_is_quarantined` | COVERED |
-| EC-54 | M10 | 277 says paid, no funds | High | SRS 15.6, Stage 4 (4.3, 4.4) | No 276/277 status enquiry: sending a 276 needs a clearinghouse connection (CLAUDE.md section 12). Until then a 277 carrying this answer is stopped by name and gives no claim an outcome (`integration/test_acknowledgement_loading.py::test_a_status_enquiry_answer_is_not_read_as_a_verdict`) | DEFERRED |
+| EC-54 | M10 | 277 says paid, no funds | High | ADR-0033 | `integration/test_status_follow_up.py::test_a_claim_the_payer_says_it_paid_with_no_835_is_chased`, `::test_an_835_on_file_answers_the_claim_and_nothing_is_chased`; `unit/test_status_follow_up.py::test_a_decided_claim_with_no_835_is_chased_once_the_wait_is_over`. Read when a 277 status response arrives; the platform does not send a 276, and deposits are not seen (EC-48) | COVERED |
 | EC-55 | M10 | Not on file despite 277CA acceptance | High | M3 | `integration/test_claim_progression.py::test_a_claim_not_on_file_after_acceptance_goes_to_a_person` | COVERED |
-| EC-56 | M10 | Repeated pending without reason | Med | SRS 15.6, Stage 4 (4.3, 4.4) | No 276/277 status enquiry: sending a 276 needs a clearinghouse connection (CLAUDE.md section 12). Until then a 277 carrying this answer is stopped by name and gives no claim an outcome (`integration/test_acknowledgement_loading.py::test_a_status_enquiry_answer_is_not_read_as_a_verdict`) | DEFERRED |
+| EC-56 | M10 | Repeated pending without reason | Med | ADR-0033 | `integration/test_status_follow_up.py::test_repeated_pends_without_a_reason_go_to_a_person`, `::test_pends_that_state_a_reason_are_waited_out`. Read when a 277 status response arrives; the platform does not send a 276 | COVERED |
 | EC-57 | M10 | Claim under appeal double-worked | Med | M5.7 | `integration/test_denial_appeal.py::test_a_claim_under_appeal_is_not_worked_a_second_time`, `::test_a_sent_appeal_is_not_sent_again` | COVERED |
 | EC-58 | M10 | Balance below pursuit threshold | Low | M3.6 | `unit/test_prioritisation_rules.py::test_small_balances_go_to_bulk_handling`; `integration/test_prioritisation.py::test_bulk_work_is_kept_out_of_the_individual_queue`. The threshold is [TBD-46], a placeholder | COVERED |
 | EC-59 | M11 | Generic CO-16 without specifying RARC | High | M4.8 | `integration/test_denial_classification.py::test_a_generic_co_16_is_classified_and_shows_what_the_payer_said`. The category is the one the CARC allows; a RARC does not refine it yet, a person does (ADR-0012) | COVERED |

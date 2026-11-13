@@ -44,6 +44,7 @@ from rcm.analytics.dataset import (
     Feature,
     Kind,
     LineDataset,
+    LineRow,
     Value,
     denial_lines,
     recovery_lines,
@@ -229,6 +230,23 @@ def reference_window(dataset: LineDataset[bool], windows: Mapping[str, str]) -> 
     )
 
 
+def answers_by_claim_line(rows: Sequence[LineRow[bool]]) -> dict[uuid.UUID, bool]:
+    """Each submitted line's outcome, where it has exactly one (ADR-0032).
+
+    A score made before a claim was sent names the line as submitted. A
+    line the payer answered twice, differently, has no single outcome to
+    judge that score by, and is left out rather than given either.
+    """
+    found: dict[uuid.UUID, bool] = {}
+    disputed: set[uuid.UUID] = set()
+    for row in rows:
+        if row.claim_line_id is None:
+            continue
+        if found.setdefault(row.claim_line_id, row.label) != row.label:
+            disputed.add(row.claim_line_id)
+    return {line: label for line, label in found.items() if line not in disputed}
+
+
 def run(session: Session, *, model_name: str, version: int, now: datetime) -> MonitorRun:
     """Measure one serving version, record it, and revert it if it must be."""
     config = thresholds.load()
@@ -262,11 +280,16 @@ def run(session: Session, *, model_name: str, version: int, now: datetime) -> Mo
     dataset = TRAINING[model_name](session)
     reference = [r.values for r in reference_window(dataset, row.windows).rows]
     answers: dict[uuid.UUID, bool] = {r.service_line_id: r.label for r in dataset.rows}
-    realised = [
-        (float(p.score), answers[p.service_line_id])
-        for p, _ in scored
-        if p.score is not None and p.service_line_id in answers
-    ]
+    submitted = answers_by_claim_line(dataset.rows)
+    realised: list[tuple[float, bool]] = []
+    for p, _ in scored:
+        if p.score is None:
+            continue
+        if p.service_line_id in answers:
+            realised.append((float(p.score), answers[p.service_line_id]))
+        elif p.claim_line_id in submitted:
+            # Scored before its 835 existed: found by the line as submitted.
+            realised.append((float(p.score), submitted[p.claim_line_id]))
 
     metrics, breaches = measure(
         features=features,

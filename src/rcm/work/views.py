@@ -63,6 +63,7 @@ QUEUES: Final[tuple[QueueDef, ...]] = (
                 K.DEADLINE_RISK,
                 K.MISSING_FILING_DEADLINE,
                 K.CLAIM_STEP_REVIEW,
+                K.CLAIM_STATUS_FOLLOW_UP,
             }
         ),
         Permission.CLAIM_READ,

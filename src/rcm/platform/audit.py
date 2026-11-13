@@ -73,6 +73,8 @@ class DecisionType(StrEnum):
     #: ADR-0013: what a preventable denial produced -- a candidate rule, or
     #: the recorded reason for none (FR-RULES-07).
     DENIAL_FEEDBACK = "DENIAL_FEEDBACK"
+    #: ADR-0033: what a payer's status answer put in front of a person.
+    STATUS_FOLLOW_UP = "STATUS_FOLLOW_UP"
 
 
 class DecisionRecord(Base):

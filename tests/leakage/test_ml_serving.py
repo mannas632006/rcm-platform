@@ -15,19 +15,24 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import Engine, func, select, text
+from sqlalchemy import Engine, column, func, select, table, text
 from sqlalchemy.exc import ProgrammingError
 
 from rcm.analytics.dataset import (
     DENIAL_RISK_FEATURES,
+    MART_SCHEMA,
     OPTIONAL_FEATURES,
+    SERVING_MART,
     LineRow,
+    as_value,
     category_lines,
+    claims_in_warehouse,
     denial_lines,
     recovery_lines,
     serving_lines,
 )
 from rcm.analytics.features import Stage
+from rcm.analytics.submission import submission_lines
 from rcm.decision import scoring
 from rcm.decision.ml import (
     deployment,
@@ -60,9 +65,12 @@ from rcm.decision.ml.submission import combine
 from rcm.decision.rules.evaluate import Verdict as ScrubVerdict
 from rcm.decision.rules.scrub import scrub_claim
 from rcm.decision.rules.store import publish_ruleset
+from rcm.domain.claim import Claim, ClaimLine
+from rcm.ingestion.claim_loader import load_claim_file
 from rcm.platform.audit import DecisionRecord
 from rcm.platform.db import session_scope
 from rcm.platform.errors import ValidationFailedError
+from tests.integration.test_claim_loading import claim, file_for
 from tests.leakage.warehouse import CLIENT
 
 pytestmark = pytest.mark.leakage
@@ -401,6 +409,188 @@ def test_the_scrub_consults_the_active_model_and_rules_still_decide(
             assert output["denial_risk"]["score"] == score
         # The scrub corrects claims it passes; this test keeps none of it.
         session.rollback()
+
+
+# ---------------------------------------------------------------------------
+# ADR-0032: ML-1 scores a claim before it is sent
+# ---------------------------------------------------------------------------
+
+
+def test_features_computed_at_submission_are_exactly_the_marts(warehouse: Engine) -> None:
+    """The scrub computes ML-1's inputs from CORE; the model was trained on
+    the mart's. For every submitted line the warehouse describes, the two
+    agree on every feature, value for value -- trailing rates included -- so
+    the model is never asked about inputs it was not trained on."""
+    mart = table(
+        SERVING_MART,
+        column("claim_line_id"),
+        column("claim_id"),
+        *(column(f.name) for f in DENIAL_RISK_FEATURES),
+        schema=MART_SCHEMA,
+    )
+    with session_scope() as session:
+        described = session.execute(select(mart).distinct()).all()
+        expected = {
+            row.claim_line_id: tuple(
+                as_value(getattr(row, f.name), f.kind) for f in DENIAL_RISK_FEATURES
+            )
+            for row in described
+        }
+        computed = {
+            row.claim_line_id: row.values
+            for row in submission_lines(
+                session,
+                client_id=CLIENT,
+                claim_ids=[row.claim_id for row in described],
+            )
+        }
+    # A line's adjustment rows repeat its features: one description per line.
+    assert len(described) == len(expected) > 500
+    assert computed.keys() == expected.keys()
+    differing = [
+        (feature.name, computed[line][index], values[index])
+        for line, values in expected.items()
+        for index, feature in enumerate(DENIAL_RISK_FEATURES)
+        if computed[line][index] != values[index]
+    ]
+    assert differing == []
+    # The comparison means something: trailing windows were not all empty.
+    rate = [f.name for f in DENIAL_RISK_FEATURES].index("payer_cpt_denial_rate_90d")
+    assert sum(1 for values in expected.values() if values[rate] is not None) > 100
+
+
+def test_a_claim_the_warehouse_has_never_seen_is_scored_at_the_scrub(
+    risk: TrainingReport, tmp_path: Path
+) -> None:
+    """ADR-0032: a claim loaded a moment ago is in no mart. The scrub still
+    gets ML-1's score for it, recorded against the line as submitted with
+    every input (FR-ML-05), and scrubbing it again makes no second decision."""
+    with session_scope() as session:
+        load_claim_file(
+            session,
+            file_for(claim("CLM-NEW"), control="000900001"),
+            client_id=CLIENT,
+            original_filename="new.edi",
+            archive_root=tmp_path,
+        )
+        new = session.scalar(select(Claim).where(Claim.submitter_claim_id == "CLM-NEW"))
+        assert new is not None
+        assert claims_in_warehouse(session, [new.claim_id]) == set()
+        line = session.scalar(
+            select(ClaimLine.claim_line_id).where(ClaimLine.claim_id == new.claim_id)
+        )
+
+        result = scrub_claim(session, claim_id=new.claim_id, client_id=CLIENT, today=T0.date())
+        assert result.denial_risk is not None
+        score = result.denial_risk.score
+        assert score is not None, result.denial_risk.unavailable
+        assert 0.0 <= score <= 1.0
+        assert result.verdict == combine(result.evaluation.verdict, score)
+
+        (prediction,) = session.scalars(
+            select(Prediction).where(Prediction.claim_id == new.claim_id)
+        ).all()
+        assert (prediction.claim_line_id, prediction.service_line_id) == (line, None)
+        assert (prediction.status, prediction.score, prediction.mode) == ("SCORED", score, "ACTIVE")
+        decision = session.get(DecisionRecord, prediction.decision_id)
+        assert decision is not None
+        assert (decision.entity_type, decision.entity_id) == ("claim_line", line)
+        assert decision.decided_by == "model:ML-1"
+        assert set(decision.input_snapshot["features"]) == {f.name for f in DENIAL_RISK_FEATURES}
+        assert decision.output["used"] is True
+        assert len(decision.output["drivers"]) == serving.TOP_DRIVERS
+
+        again = scrub_claim(session, claim_id=new.claim_id, client_id=CLIENT, today=T0.date())
+        assert again.denial_risk is not None and again.denial_risk.score == score
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(Prediction)
+                .where(Prediction.claim_id == new.claim_id)
+            )
+            == 1
+        )
+        # The claim was never part of the corpus; this test keeps none of it.
+        session.rollback()
+
+
+def test_a_line_is_scored_once_whichever_way_it_is_reached(risk: TrainingReport) -> None:
+    """A score made at the scrub is the one decision about that line: scoring
+    the claim from the warehouse once its 835 has arrived reads it back. So
+    does the scrub, for a line the warehouse scored first."""
+    rows = _lines()
+    with session_scope() as session:
+        scored = set(
+            session.scalars(select(Prediction.claim_id).where(Prediction.model_name == DENIAL_RISK))
+        )
+    fresh = [c for c in dict.fromkeys(r.claim_id for r in rows) if c not in scored]
+    scrub_first, warehouse_first = fresh[0], fresh[1]
+
+    def lines_of(claim_id: uuid.UUID) -> dict[uuid.UUID, uuid.UUID]:
+        """This claim's adjudicated lines: submitted line -> the 835's line."""
+        found = {r.claim_line_id: r.service_line_id for r in rows if r.claim_id == claim_id}
+        assert found and None not in found
+        return {line: service for line, service in found.items() if line is not None}
+
+    with session_scope() as session:
+
+        def predictions(claim_id: uuid.UUID) -> int:
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(Prediction)
+                    .where(Prediction.claim_id == claim_id)
+                )
+                or 0
+            )
+
+        at_scrub = serving.score_submission(
+            session, DENIAL_RISK, client_id=CLIENT, claim_ids=[scrub_first], now=T0
+        )
+        made = predictions(scrub_first)
+        assert made >= 1
+        later = serving.score(
+            session, DENIAL_RISK, client_id=CLIENT, claim_ids=[scrub_first], now=T0
+        )
+        assert predictions(scrub_first) == made
+        for line, service in lines_of(scrub_first).items():
+            assert later.scores[service] == at_scrub.scores[line]
+
+        from_warehouse = serving.score(
+            session, DENIAL_RISK, client_id=CLIENT, claim_ids=[warehouse_first], now=T0
+        )
+        made = predictions(warehouse_first)
+        pairs = lines_of(warehouse_first)
+        assert made >= len(pairs)
+        at_scrub = serving.score_submission(
+            session, DENIAL_RISK, client_id=CLIENT, claim_ids=[warehouse_first], now=T0
+        )
+        # Only a line the payer never adjudicated is new to the model.
+        unadjudicated = set(at_scrub.claim_of) - set(pairs)
+        assert predictions(warehouse_first) == made + len(unadjudicated)
+        for line, service in pairs.items():
+            assert at_scrub.scores[line] == from_warehouse.scores[service]
+        session.rollback()
+
+
+def test_another_clients_claim_is_never_scored_at_submission(risk: TrainingReport) -> None:
+    """PD-20 at the query layer: whatever claim id is asked for, a client
+    reads only its own."""
+    (row, *_) = _lines(claims=1)
+    with session_scope() as session:
+        served = serving.score_submission(
+            session, DENIAL_RISK, client_id=uuid.uuid4(), claim_ids=[row.claim_id], now=T0
+        )
+        # No line was read, so there was nothing to score or to record.
+        assert (served.scores, served.claim_of) == ({}, {})
+        session.rollback()
+
+
+def test_only_a_model_that_decides_at_submission_is_scored_there(risk: TrainingReport) -> None:
+    """ML-3 scores a refusal, which a claim not yet sent does not have."""
+    with session_scope() as session, pytest.raises(ValidationFailedError) as refused:
+        serving.score_submission(session, RECOVERY, client_id=CLIENT, claim_ids=[], now=T0)
+    assert "denial" in refused.value.context["reason"]
 
 
 # ---------------------------------------------------------------------------

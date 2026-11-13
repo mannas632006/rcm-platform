@@ -419,3 +419,58 @@ def test_every_refusal_is_a_platform_error() -> None:
     ):
         with pytest.raises(PlatformError):
             read_acknowledgements(broken)
+
+
+# ---------------------------------------------------------------------------
+# 277 status responses (005010X212): answers, not verdicts (ADR-0033)
+# ---------------------------------------------------------------------------
+
+
+def status_response(*statuses: tuple[str, str]) -> bytes:
+    """A 277 answering a status enquiry: the same segments as a 277CA under
+    the X212 implementation guide."""
+    return ack_277(*statuses).replace(b"005010X214", b"005010X212")
+
+
+@pytest.mark.parametrize(
+    ("composite", "answer"),
+    [
+        ("F1:65", "PAID"),
+        ("F2:88", "DENIED"),
+        ("F4:65", "NO_PAYMENT"),
+        ("F0:3", "FINALIZED"),
+        ("P1:20", "PENDING"),
+        ("P3:21", "INFO_REQUESTED"),
+        ("R4:15", "INFO_REQUESTED"),
+        ("A4:35", "NOT_FOUND"),
+        ("D0:35", "NOT_FOUND"),
+        ("A7:21", "RETURNED"),
+        ("E1:0", "NO_ANSWER"),
+        ("A2:20", "ACKNOWLEDGED"),
+    ],
+)
+def test_a_status_response_is_read_as_an_answer(composite: str, answer: str) -> None:
+    (response,) = read_claim_statuses(status_response(("CLM1", composite)))
+    assert response.is_status_response is True
+    assert response.unknown_categories == ()
+    assert str(response.statuses[0].answer) == answer
+
+
+def test_a_277ca_is_not_read_as_a_status_response() -> None:
+    """The same F1 under the 277CA guide is a category a front-end verdict
+    never carries: unknown, so the loader stops on it (PD-18)."""
+    (response,) = read_claim_statuses(ack_277(("CLM1", "F1:65")))
+    assert response.is_status_response is False
+    assert response.unknown_categories == ("F1",)
+
+
+def test_a_category_outside_code_list_507_is_unknown_in_a_status_response() -> None:
+    (response,) = read_claim_statuses(status_response(("CLM1", "Q9:1")))
+    assert response.statuses[0].answer is None
+    assert response.unknown_categories == ("Q9",)
+
+
+def test_the_amount_the_payer_says_it_paid_is_read() -> None:
+    payload = status_response(("CLM1", "F1:65")).replace(b"*WQ*200.00*", b"*WQ*200.00*150.00")
+    (response,) = read_claim_statuses(payload)
+    assert response.statuses[0].payment_amount == Decimal("150.00")

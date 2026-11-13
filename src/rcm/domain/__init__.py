@@ -13,6 +13,7 @@ from rcm.domain.acknowledgement import (
     AcknowledgementOutcome,
     AcknowledgementSource,
     ClaimAcknowledgement,
+    ClaimStatusAnswer,
 )
 from rcm.domain.claim import MAX_MODIFIERS, Claim, ClaimLine
 from rcm.domain.payer import MatchCandidateStatus, Payer, PayerAlias, PayerMatchCandidate
@@ -36,6 +37,7 @@ __all__ = [
     "ClaimAcknowledgement",
     "ClaimLine",
     "ClaimPayment",
+    "ClaimStatusAnswer",
     "MatchCandidateStatus",
     "Payer",
     "PayerAlias",

@@ -13,7 +13,9 @@ M6.6, M6.9; ADR-0028).
   returned (FR-ML-04). Only the ACTIVE version's are. With none serving,
   nothing is scored and the caller is told why; that is the rules-only path.
 - **The inputs are the mart's**, the row the model's training rows came
-  from, read through the same leakage gate (PD-11).
+  from, read through the same leakage gate (PD-11). Before a claim is
+  sent the mart has no row for it, so `score_submission` computes the
+  same inputs from CORE (ADR-0032).
 - **A line missing a feature the model was never trained without is not
   scored.** It is recorded as DEGRADED with the names missing, and the
   caller gets no score for it: rules, or a person, decide that line.
@@ -41,10 +43,12 @@ from rcm.analytics.dataset import (
     RECOVERY_FEATURES,
     Feature,
     LineRow,
+    Value,
     claims_in_warehouse,
     serving_lines,
 )
 from rcm.analytics.features import Stage
+from rcm.analytics.submission import SubmissionRow, submission_lines
 from rcm.decision.ml import deployment, registry, thresholds
 from rcm.decision.ml.model import Driver, Model
 from rcm.decision.ml.registry_models import ModelVersion
@@ -70,6 +74,7 @@ NOT_DEPLOYED: Final = "no version is deployed"
 IN_SHADOW: Final = "in shadow: scores are recorded, not used"
 REVERTED: Final = "withdrawn; this work is on rules only"
 NO_FEATURE_ROW: Final = "the warehouse holds no row for this claim yet"
+NO_LINES: Final = "the claim has no submitted lines to score"
 
 ROUTE_REVIEW: Final = "REVIEW"
 ROUTE_PASS: Final = "PASS"  # noqa: S105 -- a route, not a credential
@@ -142,12 +147,24 @@ def _record(
     *,
     version: ModelVersion,
     mode: str,
-    row: LineRow[None],
+    client_id: uuid.UUID,
+    claim_id: uuid.UUID,
+    service_line_id: uuid.UUID | None,
+    claim_line_id: uuid.UUID | None,
+    values: Sequence[Value],
     score: float,
     drivers: Sequence[Driver],
     config: thresholds.Thresholds,
     now: datetime,
 ) -> Prediction:
+    # The decision is about the 835's line where there is one, and before
+    # that about the line as submitted (ADR-0032).
+    if service_line_id is not None:
+        entity_type, entity_id = "service_line", service_line_id
+    elif claim_line_id is not None:
+        entity_type, entity_id = "claim_line", claim_line_id
+    else:
+        raise ValidationFailedError(field="line", reason="a score names the line it is for")
     names = [f.name for f in loaded(version).encoding.features]
     output: dict[str, Any] = {
         "score": score,
@@ -162,12 +179,12 @@ def _record(
         output["route"] = route
     decision = record_decision(
         session,
-        entity_type="service_line",
-        entity_id=row.service_line_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
         decision_type=DecisionType.PREDICT,
         decided_by=f"model:{version.model_name}",
         logic_version=f"{version.model_name} v{version.version}",
-        input_snapshot={"features": dict(zip(names, row.values, strict=True))},
+        input_snapshot={"features": dict(zip(names, values, strict=True))},
         output=output,
         confidence=score,
     )
@@ -177,9 +194,10 @@ def _record(
         model_name=version.model_name,
         version=version.version,
         mode=mode,
-        client_id=row.client_id,
-        claim_id=row.claim_id,
-        service_line_id=row.service_line_id,
+        client_id=client_id,
+        claim_id=claim_id,
+        service_line_id=service_line_id,
+        claim_line_id=claim_line_id,
         status=str(PredictionStatus.SCORED),
         score=score,
         decision_id=decision.decision_id,
@@ -199,6 +217,7 @@ def _degraded(
     service_line_id: uuid.UUID | None,
     reason: str,
     now: datetime,
+    claim_line_id: uuid.UUID | None = None,
 ) -> None:
     session.add(
         Prediction(
@@ -209,11 +228,21 @@ def _degraded(
             client_id=client_id,
             claim_id=claim_id,
             service_line_id=service_line_id,
+            claim_line_id=claim_line_id,
             status=str(PredictionStatus.DEGRADED),
             reason=reason,
             predicted_at=now,
         )
     )
+
+
+def _serving_version(session: Session, deployed: Deployment) -> ModelVersion:
+    if deployed.status not in deployment.SERVING:
+        raise ValidationFailedError(
+            field="version",
+            reason=f"{deployed.model_name} v{deployed.version} is {deployed.status}",
+        )
+    return deployment.accepted_version(session, deployed.model_name, deployed.version)
 
 
 def score_rows(
@@ -226,13 +255,10 @@ def score_rows(
     """Score these assembled rows with one serving version, recording each.
 
     Rows already scored by this version are read back, not scored again.
+    That includes a line a submission-stage model scored before its 835
+    existed (ADR-0032): the score made then is the one decision about it.
     """
-    if deployed.status not in deployment.SERVING:
-        raise ValidationFailedError(
-            field="version",
-            reason=f"{deployed.model_name} v{deployed.version} is {deployed.status}",
-        )
-    version = deployment.accepted_version(session, deployed.model_name, deployed.version)
+    version = _serving_version(session, deployed)
     model = loaded(version)
     config = thresholds.load()
     known = {
@@ -244,10 +270,32 @@ def score_rows(
             )
         )
     }
+    scores = {
+        line: p.score for line, p in known.items() if line is not None and p.score is not None
+    }
+    earlier: dict[uuid.UUID, Prediction] = {}
+    if spec(version.model_name).stage is Stage.SUBMISSION:
+        submitted = [r.claim_line_id for r in rows if r.claim_line_id is not None]
+        earlier = {
+            p.claim_line_id: p
+            for p in session.scalars(
+                select(Prediction).where(
+                    Prediction.model_version_id == version.model_version_id,
+                    Prediction.claim_line_id.in_(submitted),
+                    Prediction.service_line_id.is_(None),
+                )
+            )
+            if p.claim_line_id is not None
+        }
     fresh: list[LineRow[None]] = []
     degraded = 0
     for row in rows:
         if row.service_line_id in known:
+            continue
+        at_submission = earlier.get(row.claim_line_id) if row.claim_line_id else None
+        if at_submission is not None:
+            if at_submission.score is not None:
+                scores[row.service_line_id] = at_submission.score
             continue
         missing = missing_features(model, row.values)
         if missing:
@@ -259,14 +307,12 @@ def score_rows(
                 client_id=row.client_id,
                 claim_id=row.claim_id,
                 service_line_id=row.service_line_id,
+                claim_line_id=row.claim_line_id,
                 reason="missing: " + ", ".join(missing),
                 now=now,
             )
         else:
             fresh.append(row)
-    scores = {
-        line: p.score for line, p in known.items() if line is not None and p.score is not None
-    }
     if fresh:
         inputs = [r.values for r in fresh]
         predicted = model.predict(inputs).tolist()
@@ -277,21 +323,104 @@ def score_rows(
                 session,
                 version=version,
                 mode=deployed.status,
-                row=row,
+                client_id=row.client_id,
+                claim_id=row.claim_id,
+                service_line_id=row.service_line_id,
+                claim_line_id=row.claim_line_id,
+                values=row.values,
                 score=float(value),
                 drivers=drivers,
                 config=config,
                 now=now,
             )
             scores[row.service_line_id] = float(value)
-    if degraded:
+    _warn_degraded(version, degraded)
+    session.flush()
+    return scores
+
+
+def _warn_degraded(version: ModelVersion, lines: int) -> None:
+    if lines:
         # Feature names are column names, not values: nothing here is PHI.
         log.warning(
             "ml.degraded",
             model=version.model_name,
             version=version.version,
-            lines=degraded,
+            lines=lines,
         )
+
+
+def _score_submitted(
+    session: Session,
+    *,
+    deployed: Deployment,
+    rows: Sequence[SubmissionRow],
+    now: datetime,
+) -> dict[uuid.UUID, float]:
+    """Score submitted lines with one serving version, by claim line.
+
+    A line this version has already scored -- at an earlier scrub, or from
+    the warehouse once its 835 had arrived -- is read back, not scored again.
+    """
+    version = _serving_version(session, deployed)
+    model = loaded(version)
+    config = thresholds.load()
+    scores: dict[uuid.UUID, float] = {}
+    seen: set[uuid.UUID] = set()
+    for p in session.scalars(
+        select(Prediction).where(
+            Prediction.model_version_id == version.model_version_id,
+            Prediction.claim_line_id.in_([r.claim_line_id for r in rows]),
+        )
+    ):
+        if p.claim_line_id is None:
+            continue
+        seen.add(p.claim_line_id)
+        if p.score is not None:
+            scores[p.claim_line_id] = p.score
+    fresh: list[SubmissionRow] = []
+    degraded = 0
+    for row in rows:
+        if row.claim_line_id in seen:
+            continue
+        missing = missing_features(model, row.values)
+        if missing:
+            degraded += 1
+            _degraded(
+                session,
+                version=version,
+                mode=deployed.status,
+                client_id=row.client_id,
+                claim_id=row.claim_id,
+                service_line_id=None,
+                claim_line_id=row.claim_line_id,
+                reason="missing: " + ", ".join(missing),
+                now=now,
+            )
+        else:
+            fresh.append(row)
+    if fresh:
+        inputs = [r.values for r in fresh]
+        predicted = model.predict(inputs).tolist()
+        for row, value, drivers in zip(
+            fresh, predicted, model.drivers(inputs, top=TOP_DRIVERS), strict=True
+        ):
+            _record(
+                session,
+                version=version,
+                mode=deployed.status,
+                client_id=row.client_id,
+                claim_id=row.claim_id,
+                service_line_id=None,
+                claim_line_id=row.claim_line_id,
+                values=row.values,
+                score=float(value),
+                drivers=drivers,
+                config=config,
+                now=now,
+            )
+            scores[row.claim_line_id] = float(value)
+    _warn_degraded(version, degraded)
     session.flush()
     return scores
 
@@ -312,6 +441,7 @@ def _no_row(
                 Prediction.model_version_id == version.model_version_id,
                 Prediction.claim_id.in_(claim_ids),
                 Prediction.service_line_id.is_(None),
+                Prediction.claim_line_id.is_(None),
             )
         )
     )
@@ -376,5 +506,53 @@ def score(
         scores=active or {},
         claim_of={r.service_line_id: r.claim_id for r in rows},
         charge_of={r.service_line_id: float(r.values[charge] or 0.0) for r in rows},
+        unavailable=None if active is not None else IN_SHADOW,
+    )
+
+
+def score_submission(
+    session: Session,
+    model_name: str,
+    *,
+    client_id: uuid.UUID,
+    claim_ids: Sequence[uuid.UUID],
+    now: datetime,
+) -> Served:
+    """Every serving version scores these claims' lines as submitted, before
+    any 835 exists; the ACTIVE one's scores come back, by claim line.
+
+    For a model that decides at submission (ML-1). The inputs are computed
+    from CORE as the warehouse will compute them (`rcm.analytics.submission`),
+    so a claim is scored the moment it is scrubbed, not after the next
+    warehouse build (ADR-0032).
+    """
+    what = spec(model_name)
+    if what.stage is not Stage.SUBMISSION:
+        raise ValidationFailedError(
+            field="model", reason=f"{model_name} decides at {what.stage.lower()}, not submission"
+        )
+    states = deployment.states(session, model_name)
+    serving = [d for d in states.values() if d.status in deployment.SERVING]
+    if not serving:
+        last = deployment.latest(session, model_name)
+        withdrawn = last is not None and last.status == str(Status.REVERTED)
+        return Served(unavailable=REVERTED if withdrawn else NOT_DEPLOYED)
+    if not claim_ids:
+        return Served()
+    # Query-layer scoping (PD-20): only this client's claims are read.
+    rows = submission_lines(
+        session, client_id=client_id, claim_ids=claim_ids, features=what.features
+    )
+    active: dict[uuid.UUID, float] | None = None
+    for deployed in serving:
+        scores = _score_submitted(session, deployed=deployed, rows=rows, now=now)
+        if deployed.status == str(Status.ACTIVE):
+            active = scores
+    session.flush()
+    charge = [f.name for f in what.features].index("line_charge")
+    return Served(
+        scores=active or {},
+        claim_of={r.claim_line_id: r.claim_id for r in rows},
+        charge_of={r.claim_line_id: float(r.values[charge] or 0.0) for r in rows},
         unavailable=None if active is not None else IN_SHADOW,
     )

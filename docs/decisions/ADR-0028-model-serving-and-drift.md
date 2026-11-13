@@ -95,7 +95,8 @@
   blocks. The scrub's decision record holds the rules' verdict, the model's
   answer and the combined verdict. Any model failure is caught at that one
   boundary and the scrub goes on with the rules alone.
-- **Today the live scrub degrades.** A claim being scrubbed before it is
+- **Superseded by ADR-0032**, which computes those features. As decided
+  here: **Today the live scrub degrades.** A claim being scrubbed before it is
   sent is not in the warehouse yet, so ML-1 records it DEGRADED and the
   rules' verdict stands. Scoring at submission needs the point-in-time
   features computed for a claim not yet in the mart. That is a separate
