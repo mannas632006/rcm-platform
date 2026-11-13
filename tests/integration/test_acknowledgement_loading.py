@@ -475,9 +475,10 @@ def test_two_verdicts_on_one_claim_from_different_sources_both_persist(
         ]
 
 
-def test_a_271_is_parsed_and_reported_but_not_stored(archive_root: Path) -> None:
-    """Eligibility belongs to M3's module. Counting it proves the file was
-    read; a table nothing reads yet is a table that rots."""
+def test_a_271_is_parsed_and_is_not_an_acknowledgement(archive_root: Path) -> None:
+    """A 271 is an eligibility answer: stored in `eligibility_response`
+    (ADR-0034, tests/integration/test_eligibility.py), never as a verdict on
+    a claim."""
     payload = _wrap(
         [
             "ST*271*0001*005010X279A1~",

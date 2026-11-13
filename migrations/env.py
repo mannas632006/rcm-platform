@@ -26,6 +26,7 @@ from rcm.domain.acknowledgement import (  # noqa: F401 - metadata
 )
 from rcm.domain.claim import Claim, ClaimLine  # noqa: F401 - registers metadata
 from rcm.domain.claim_state_log import ClaimStateTransition  # noqa: F401 - metadata
+from rcm.domain.eligibility import EligibilityResponseRecord  # noqa: F401 - metadata
 from rcm.domain.payer import (  # noqa: F401 - registers metadata
     Payer,
     PayerAlias,
